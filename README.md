@@ -1,56 +1,45 @@
-# Welcome to your Expo app 👋
+# 拾时 Mobile
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+拾时的 React Native + Expo 手机客户端。当前实现 PRD 中的 P0 核心记录闭环。
 
-## Get started
+## 当前能力
 
-1. Install dependencies
+- “记录此刻”：纯文字、自动时间、修改发生时间
+- 时间轴：按发生时间倒序和日期分组
+- 记录详情：编辑、删除和查看原始记录时间
+- “添加后续”：新增、编辑和删除带独立时间的后续
+- 日历：按日期查看当天记录
+- 搜索：同时搜索记录正文与后续
+- 草稿：新建记录时自动保存和恢复
+- SQLite：本地持久化、WAL、外键、索引和版本迁移
 
-   ```bash
-   npm install
-   ```
+## 技术栈
 
-2. Start the app
+- Expo SDK 57
+- React Native 0.86
+- TypeScript
+- Expo Router
+- Expo SQLite
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## 运行
 
 ```bash
-npm run reset-project
+npm install
+npm start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+启动后可以通过 Expo Go 扫码进行 P0 调试。开始实现应用锁、原生分享或其他自定义原生能力时，改用 Expo Development Build。
 
-### Other setup steps
+## 检查
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```bash
+npx tsc --noEmit
+npm run lint
+npx expo export --platform android
+```
 
-## Learn more
+## 数据说明
 
-To learn more about developing your project with Expo, look at the following resources:
+数据库文件名为 `shishi.db`。记录时间以 ISO 8601 UTC 字符串保存，界面按设备当前时区展示。事情发生时间和真正写入时间分别保存，不会互相覆盖。
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+当前删除采用软删除，为后续回收站和多设备删除同步预留。P0 尚未包含图片、账号、同步和应用锁。
