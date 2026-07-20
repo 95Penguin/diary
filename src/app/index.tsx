@@ -7,11 +7,12 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { BottomNavigation, type HomeView } from '@/components/bottom-navigation';
 import { EmptyState } from '@/components/empty-state';
 import { EntryCard } from '@/components/entry-card';
-import { listEntries } from '@/database/journal-repository';
+import { cleanupExpiredTrash, listEntries } from '@/database/journal-repository';
 import type { Entry } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { dateKey, groupLabel, weekdayLabel } from '@/utils/date';
 import { lunarDayLabel } from '@/utils/lunar';
+import { deleteJournalImage } from '@/utils/image-storage';
 
 export default function HomeScreen() {
   const db = useSQLiteContext();
@@ -22,7 +23,11 @@ export default function HomeScreen() {
   const [selectedDate, setSelectedDate] = useState(todayKey);
 
   const load = useCallback(async () => {
-    try { setEntries(await listEntries(db)); } finally { setLoading(false); }
+    try {
+      const expiredImages = await cleanupExpiredTrash(db);
+      expiredImages.forEach(deleteJournalImage);
+      setEntries(await listEntries(db));
+    } finally { setLoading(false); }
   }, [db]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
@@ -31,7 +36,10 @@ export default function HomeScreen() {
     <SafeAreaView edges={['top']} style={styles.safe}>
       <View style={styles.header}>
         <View><Text style={styles.brand}>拾时</Text><Text style={styles.subtitle}>{view === 'timeline' ? '我的日迹' : '日历回看'}</Text></View>
-        <Pressable accessibilityLabel="搜索" onPress={() => router.push('/search')} style={styles.searchButton}><Text style={styles.searchIcon}>⌕</Text></Pressable>
+        <View style={styles.headerActions}>
+          <Pressable accessibilityLabel="搜索" onPress={() => router.push('/search')} style={styles.searchButton}><Text style={styles.searchIcon}>⌕</Text></Pressable>
+          <Pressable accessibilityLabel="我的" onPress={() => router.push('/settings')} style={styles.profileButton}><Text style={styles.profileText}>时</Text></Pressable>
+        </View>
       </View>
 
       <View style={styles.content}>
@@ -49,24 +57,41 @@ export default function HomeScreen() {
 }
 
 function Timeline({ entries }: { entries: Entry[] }) {
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const availableTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    entries.forEach((entry) => entry.tags.forEach((tag) => counts.set(tag, (counts.get(tag) ?? 0) + 1)));
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN')).map(([tag]) => tag);
+  }, [entries]);
+  const visibleEntries = useMemo(
+    () => activeTag ? entries.filter((entry) => entry.tags.includes(activeTag)) : entries,
+    [activeTag, entries],
+  );
   const groups = useMemo(() => {
     const result: { label: string; weekday: string; entries: Entry[] }[] = [];
-    for (const entry of entries) {
+    for (const entry of visibleEntries) {
       const label = groupLabel(entry.occurredAt);
       const previous = result.at(-1);
       if (previous?.label === label) previous.entries.push(entry);
       else result.push({ label, weekday: weekdayLabel(entry.occurredAt), entries: [entry] });
     }
     return result;
-  }, [entries]);
+  }, [visibleEntries]);
 
   if (!entries.length) return <EmptyState title="从此刻开始" description="写下第一条记录，把日子慢慢收好。" />;
-  return <ScrollView contentContainerStyle={styles.timeline} showsVerticalScrollIndicator={false}>
-    {groups.map((group) => <View key={group.label}>
-      <View style={styles.dayHeader}><Text style={styles.dayTitle}>{group.label}</Text><Text style={styles.weekday}>{group.weekday}</Text></View>
-      {group.entries.map((entry) => <EntryCard key={entry.id} entry={entry} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} />)}
-    </View>)}
-  </ScrollView>;
+  return <View style={styles.timelineContainer}>
+    {availableTags.length ? <ScrollView horizontal style={styles.tagFilterScroll} contentContainerStyle={styles.tagFilters} showsHorizontalScrollIndicator={false}>
+      <Pressable onPress={() => setActiveTag(null)} style={[styles.filterChip, !activeTag && styles.filterChipActive]}><Text style={[styles.filterText, !activeTag && styles.filterTextActive]}>全部</Text></Pressable>
+      {availableTags.map((tag) => <Pressable key={tag} onPress={() => setActiveTag(tag)} style={[styles.filterChip, activeTag === tag && styles.filterChipActive]}><Text style={[styles.filterText, activeTag === tag && styles.filterTextActive]}>#{tag}</Text></Pressable>)}
+    </ScrollView> : null}
+    <ScrollView contentContainerStyle={styles.timeline} showsVerticalScrollIndicator={false}>
+      {groups.map((group) => <View key={group.label}>
+        <View style={styles.dayHeader}><Text style={styles.dayTitle}>{group.label}</Text><Text style={styles.weekday}>{group.weekday}</Text></View>
+        {group.entries.map((entry) => <EntryCard key={entry.id} entry={entry} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} />)}
+      </View>)}
+      {!visibleEntries.length ? <EmptyState title="没有相关记录" description={`还没有添加 #${activeTag} 的记录。`} /> : null}
+    </ScrollView>
+  </View>;
 }
 
 function CalendarView({ entries, selected, onSelect }: { entries: Entry[]; selected: string; onSelect: (date: string) => void }) {
@@ -88,6 +113,7 @@ function CalendarView({ entries, selected, onSelect }: { entries: Entry[]; selec
     return map;
   }, [entries]);
   const selectedEntries = entries.filter((entry) => dateKey(entry.occurredAt) === selected);
+  const awayFromToday = monthOffset !== 0 || selected !== dateKey(now.toISOString());
 
   function keyForDay(day: number) {
     return `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -98,7 +124,7 @@ function CalendarView({ entries, selected, onSelect }: { entries: Entry[]; selec
   return <ScrollView contentContainerStyle={styles.calendar} showsVerticalScrollIndicator={false}>
     <View style={styles.monthHeader}>
       <Pressable accessibilityLabel="上个月" onPress={() => setMonthOffset((value) => value - 1)} style={styles.monthButton}><View style={[styles.monthArrow, styles.monthArrowLeft]} /></Pressable>
-      <Text style={styles.monthTitle}>{year} 年 {monthIndex + 1} 月</Text>
+      <View style={styles.monthCenter}><Text style={styles.monthTitle}>{year} 年 {monthIndex + 1} 月</Text>{awayFromToday ? <Pressable onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); }} style={styles.todayButton}><Text style={styles.todayText}>今天</Text></Pressable> : null}</View>
       <Pressable accessibilityLabel="下个月" onPress={() => setMonthOffset((value) => value + 1)} style={styles.monthButton}><View style={[styles.monthArrow, styles.monthArrowRight]} /></Pressable>
     </View>
     <View style={styles.calendarBoard} onLayout={(event) => setCalendarWidth(event.nativeEvent.layout.width)}>
@@ -115,7 +141,7 @@ function CalendarView({ entries, selected, onSelect }: { entries: Entry[]; selec
         })}</View>
       </> : null}
     </View>
-    <View style={styles.selectedHeader}><View><Text style={styles.selectedTitle}>{selected.replace(/-/g, ' / ')}</Text><Text style={styles.selectedCount}>{selectedEntries.length} 条记录</Text></View></View>
+    <View style={styles.selectedHeader}><Text style={styles.selectedCount}>{selectedEntries.length} 条记录</Text></View>
     {selectedEntries.length ? selectedEntries.map((entry) => <EntryCard key={entry.id} entry={entry} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} />) : <EmptyState title="这一天还没有记录" description="可以修改日期，补记发生过的事情。" />}
   </ScrollView>;
 }
@@ -125,27 +151,34 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, paddingTop: spacing.xs, paddingBottom: spacing.xs },
   brand: { color: colors.text, fontFamily: fonts.serif, fontSize: 24, lineHeight: 32, fontWeight: '600', includeFontPadding: false },
   subtitle: { color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 10, lineHeight: 14, letterSpacing: 1, includeFontPadding: false },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   searchButton: { width: 36, height: 36, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceMuted },
   searchIcon: { color: colors.text, fontSize: 24, lineHeight: 36, marginTop: -3, includeFontPadding: false },
+  profileButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary },
+  profileText: { color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' },
   content: { flex: 1 }, loader: { marginTop: 80 },
-  timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
+  timelineContainer: { flex: 1 }, timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
+  tagFilterScroll: { flexGrow: 0, height: 38 }, tagFilters: { alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.xl },
+  filterChip: { paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterChipActive: { backgroundColor: colors.primary },
+  filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
   dayHeader: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm, paddingTop: spacing.sm, paddingBottom: spacing.sm, backgroundColor: colors.background },
   dayTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 19, lineHeight: 28, fontWeight: '600', includeFontPadding: false },
   weekday: { color: colors.textFaint, fontFamily: fonts.sans, fontSize: 11, lineHeight: 18, includeFontPadding: false },
-  calendar: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
-  monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: spacing.xs },
-  monthButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.surfaceMuted },
+  calendar: { paddingHorizontal: spacing.md, paddingBottom: spacing.xxxl },
+  monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  monthButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.surfaceMuted },
   monthArrow: { width: 9, height: 9, borderLeftWidth: 2, borderBottomWidth: 2, borderColor: colors.text },
   monthArrowLeft: { transform: [{ rotate: '45deg' }] },
   monthArrowRight: { transform: [{ rotate: '225deg' }] },
-  monthTitle: { fontFamily: fonts.serif, fontSize: 18, lineHeight: 28, fontWeight: '600', includeFontPadding: false },
+  monthCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, monthTitle: { fontFamily: fonts.serif, fontSize: 18, lineHeight: 28, fontWeight: '600', includeFontPadding: false },
+  todayButton: { paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, todayText: { color: colors.primary, fontSize: 9, fontWeight: '700' },
   calendarBoard: { width: '100%', alignItems: 'center' },
-  weekRow: { flexDirection: 'row', marginTop: spacing.sm }, weekLabel: { color: colors.textFaint, fontFamily: fonts.sans, textAlign: 'center', fontSize: 11 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.xs },
+  weekRow: { flexDirection: 'row', marginTop: spacing.xs }, weekLabel: { color: colors.textFaint, fontFamily: fonts.sans, textAlign: 'center', fontSize: 11 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap' },
   dayCell: { alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill },
   dayCellActive: { backgroundColor: colors.primary }, dayNumber: { color: colors.text, fontFamily: fonts.sans, fontSize: 13, lineHeight: 17 }, dayNumberActive: { color: '#FFFFFF' },
   lunarDay: { color: colors.textFaint, fontFamily: fonts.sans, fontSize: 8, lineHeight: 11 }, lunarDayActive: { color: '#E8F0EB' },
   dayDot: { position: 'absolute', bottom: 2, width: 4, height: 4, borderRadius: 2, backgroundColor: colors.primary }, dayDotActive: { backgroundColor: '#FFFFFF' },
-  selectedHeader: { marginTop: spacing.sm, paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  selectedTitle: { fontFamily: fonts.serif, fontSize: 18, lineHeight: 28, fontWeight: '600', includeFontPadding: false }, selectedCount: { color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 11, lineHeight: 18, marginTop: 3, includeFontPadding: false },
+  selectedHeader: { marginTop: spacing.xs, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  selectedCount: { color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 10, lineHeight: 16, includeFontPadding: false },
 });

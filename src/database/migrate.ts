@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 
 export async function migrateDatabase(db: SQLiteDatabase) {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
@@ -41,6 +41,18 @@ export async function migrateDatabase(db: SQLiteDatabase) {
         ON entry_images(entry_id, sort_order ASC);
     `);
     currentVersion = 2;
+  }
+
+  if (currentVersion === 2) {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS entry_tags (
+        entry_id TEXT NOT NULL, label TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (entry_id, label),
+        FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_entry_tags_label ON entry_tags(label, entry_id);
+    `);
+    currentVersion = 3;
   }
 
   if (currentVersion < DATABASE_VERSION) throw new Error(`不支持的数据库版本：${currentVersion}`);

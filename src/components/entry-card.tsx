@@ -17,11 +17,8 @@ export function EntryCard({ entry, onPress }: { entry: Entry; onPress: () => voi
         </View>
         {latest ? (
           <View style={styles.followUp}>
-            <View style={styles.followUpHeader}>
-              <Text style={styles.followUpLabel}>↳ 后续</Text>
-              <Text style={styles.followUpCount}>{entry.followUps.length > 1 ? `${entry.followUps.length} 条` : formatShortDateTime(latest.createdAt)}</Text>
-            </View>
-            <Text numberOfLines={2} style={styles.followUpText}>{latest.content}</Text>
+            <Text numberOfLines={1} style={styles.followUpText}>↳ {latest.content}</Text>
+            <Text style={styles.followUpCount}>{entry.followUps.length > 1 ? `共 ${entry.followUps.length} 条` : formatShortDateTime(latest.createdAt)}</Text>
           </View>
         ) : null}
       </View>
@@ -39,9 +36,7 @@ const styles = StyleSheet.create({
   time: { color: colors.primary, fontSize: 11, fontWeight: '700', marginBottom: spacing.xs },
   summary: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm }, body: { flex: 1, color: colors.text, fontFamily: fonts.serif, fontSize: 15, lineHeight: 23, includeFontPadding: false },
   thumbnail: { width: 68, height: 68, borderRadius: radii.sm, backgroundColor: colors.surfaceMuted },
-  followUp: { marginTop: spacing.sm, padding: spacing.sm, borderRadius: radii.md, backgroundColor: colors.surfaceMuted },
-  followUpHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: spacing.xs },
-  followUpLabel: { color: colors.primary, fontSize: 11, fontWeight: '700' },
+  followUp: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: 6, paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: radii.sm, backgroundColor: colors.surfaceMuted },
   followUpCount: { color: colors.textFaint, fontSize: 10 },
-  followUpText: { color: colors.textSecondary, fontSize: 12, lineHeight: 18 },
+  followUpText: { flex: 1, color: colors.textSecondary, fontSize: 11, lineHeight: 16 },
 });
