@@ -9,6 +9,7 @@ import { Component, type ErrorInfo, type ReactNode, Suspense, useEffect } from '
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { migrateDatabase } from '@/database/migrate';
+import { AppPreferencesProvider } from '@/preferences/app-preferences';
 import { colors } from '@/theme/tokens';
 
 void SplashScreen.preventAutoHideAsync();
@@ -29,20 +30,30 @@ export default function RootLayout() {
     <DatabaseErrorBoundary>
       <Suspense fallback={<LoadingFallback />}>
         <SQLiteProvider databaseName="shishi.db" onInit={migrateDatabase} useSuspense>
+          <AppPreferencesProvider><AppStack /></AppPreferencesProvider>
+        </SQLiteProvider>
+      </Suspense>
+    </DatabaseErrorBoundary>
+  );
+}
+
+function AppStack() {
+  return <>
           <StatusBar style="dark" />
           <Stack screenOptions={{ headerShown: false, contentStyle: styles.content }}>
             <Stack.Screen name="index" />
             <Stack.Screen name="compose" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
             <Stack.Screen name="entry/[id]" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="history/[id]" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="memories" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="search" options={{ animation: 'fade_from_bottom' }} />
+            <Stack.Screen name="favorites" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="drafts" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="trash" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="backup" options={{ animation: 'slide_from_right' }} />
           </Stack>
-        </SQLiteProvider>
-      </Suspense>
-    </DatabaseErrorBoundary>
-  );
+        </>;
 }
 
 class DatabaseErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {

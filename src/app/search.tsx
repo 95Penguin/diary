@@ -9,6 +9,7 @@ import { searchEntries } from '@/database/journal-repository';
 import type { SearchResult } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatShortDateTime } from '@/utils/date';
+import { useAppPreferences } from '@/preferences/app-preferences';
 
 type TimeFilter = 'all' | 'today' | '7d' | '30d';
 const FILTERS: { value: TimeFilter; label: string }[] = [
@@ -17,6 +18,7 @@ const FILTERS: { value: TimeFilter; label: string }[] = [
 
 export default function SearchScreen() {
   const db = useSQLiteContext();
+  const { readingTheme } = useAppPreferences();
   const [query, setQuery] = useState('');
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -33,11 +35,11 @@ export default function SearchScreen() {
     return () => clearTimeout(timer);
   }, [query, search, timeFilter]);
 
-  return <SafeAreaView edges={['top']} style={styles.safe}>
-    <View style={styles.header}><Pressable onPress={() => router.back()} hitSlop={12}><Text style={styles.back}>‹</Text></Pressable><Text style={styles.title}>搜索</Text><View style={styles.headerSpace} /></View>
-    <View style={styles.searchBox}><Text style={styles.icon}>⌕</Text><TextInput autoFocus value={query} onChangeText={setQuery} placeholder="搜索记录、后续与标签" placeholderTextColor={colors.textFaint} returnKeyType="search" style={styles.input} />{query ? <Pressable onPress={() => setQuery('')}><Text style={styles.clear}>×</Text></Pressable> : null}</View>
+  return <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
+    <View style={styles.header}><Pressable onPress={() => router.back()} hitSlop={12}><Text style={styles.back}>‹</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>搜索</Text><View style={styles.headerSpace} /></View>
+    <View style={[styles.searchBox, { backgroundColor: readingTheme.surface }]}><Text style={[styles.icon, { color: readingTheme.secondary }]}>⌕</Text><TextInput autoFocus value={query} onChangeText={setQuery} placeholder="搜索记录、后续与标签" placeholderTextColor={readingTheme.secondary} returnKeyType="search" style={[styles.input, { color: readingTheme.text }]} />{query ? <Pressable onPress={() => setQuery('')}><Text style={[styles.clear, { color: readingTheme.secondary }]}>×</Text></Pressable> : null}</View>
     <ScrollView horizontal style={styles.filterScroll} contentContainerStyle={styles.filters} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-      {FILTERS.map((filter) => <Pressable key={filter.value} onPress={() => setTimeFilter(filter.value)} style={[styles.filter, timeFilter === filter.value && styles.filterActive]}><Text style={[styles.filterText, timeFilter === filter.value && styles.filterTextActive]}>{filter.label}</Text></Pressable>)}
+      {FILTERS.map((filter) => <Pressable key={filter.value} onPress={() => setTimeFilter(filter.value)} style={[styles.filter, { backgroundColor: readingTheme.surface }, timeFilter === filter.value && styles.filterActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, timeFilter === filter.value && styles.filterTextActive]}>{filter.label}</Text></Pressable>)}
     </ScrollView>
     {loading ? <ActivityIndicator style={styles.loader} color={colors.primary} /> : !query.trim() ? <EmptyState title="找回一段记忆" description="输入正文、后续或标签中出现过的词。" /> : results.length ? (
       <ScrollView contentContainerStyle={styles.results} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -49,12 +51,13 @@ export default function SearchScreen() {
 }
 
 function SearchResultCard({ result, query }: { result: SearchResult; query: string }) {
+  const { readingTheme, readingFontFamily, fontScale } = useAppPreferences();
   const { entry, sources } = result;
   const labels = sources.map((source) => source === 'content' ? '正文' : source === 'followUp' ? '后续' : '标签');
-  return <Pressable onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
-    <View style={styles.cardHeader}><Text style={styles.date}>{formatShortDateTime(entry.occurredAt)}</Text><Text style={styles.matchSource}>命中{labels.join('、')}</Text></View>
-    <Text numberOfLines={3} style={styles.content}><HighlightedText text={entry.content} query={sources.includes('content') ? query : ''} /></Text>
-    {result.matchingFollowUp ? <View style={styles.matchRow}><Text style={styles.matchLabel}>后续</Text><Text numberOfLines={2} style={styles.matchText}><HighlightedText text={result.matchingFollowUp} query={query} /></Text></View> : null}
+  return <Pressable onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} style={({ pressed }) => [styles.card, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+    <View style={styles.cardHeader}><Text style={styles.date}>{formatShortDateTime(entry.occurredAt)}</Text><Text style={[styles.matchSource, { color: readingTheme.secondary }]}>命中{labels.join('、')}</Text></View>
+    <Text numberOfLines={3} style={[styles.content, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 21 * fontScale }]}><HighlightedText text={entry.content} query={sources.includes('content') ? query : ''} /></Text>
+    {result.matchingFollowUp ? <View style={[styles.matchRow, { borderTopColor: readingTheme.border }]}><Text style={styles.matchLabel}>后续</Text><Text numberOfLines={2} style={[styles.matchText, { color: readingTheme.secondary }]}><HighlightedText text={result.matchingFollowUp} query={query} /></Text></View> : null}
     {result.matchingTag ? <View style={styles.tag}><Text style={styles.tagText}>#<HighlightedText text={result.matchingTag} query={query} /></Text></View> : null}
   </Pressable>;
 }

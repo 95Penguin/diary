@@ -51,6 +51,12 @@
         }
       ],
       "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "允许拾时在你主动选择时读取当前位置，用于记录这一刻发生的地点。"
+        }
+      ],
       "expo-sharing"
     ],
     "experiments": {

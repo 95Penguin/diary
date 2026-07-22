@@ -10,13 +10,17 @@ import { createJournalExport, getJournalStats, getLastExportAt, importJournalBac
 import type { JournalBackup, JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { exportBackupFile } from '@/utils/backup-export';
+import { embedBackupImages, materializeBackupImages } from '@/utils/backup-images';
 import { parseJournalBackup } from '@/utils/backup-import';
 import { formatShortDateTime } from '@/utils/date';
+import { deleteJournalImage } from '@/utils/image-storage';
+import { useAppPreferences } from '@/preferences/app-preferences';
 
 const EMPTY_STATS: JournalStats = { entries: 0, followUps: 0, images: 0, deleted: 0 };
 
 export default function BackupScreen() {
   const db = useSQLiteContext();
+  const { readingTheme } = useAppPreferences();
   const [stats, setStats] = useState(EMPTY_STATS);
   const [lastExportAt, setLastExportAt] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -36,13 +40,14 @@ export default function BackupScreen() {
     setExporting(true);
     setMessage('');
     try {
-      const backup = await createJournalExport(db);
+      const backup = await embedBackupImages(await createJournalExport(db));
+      const missingImages = backup.images.filter((image) => !image.dataBase64).length;
       const localDate = new Date().toLocaleDateString('sv-SE');
       await exportBackupFile(JSON.stringify(backup, null, 2), `拾时备份-${localDate}.json`);
       const now = new Date().toISOString();
       await saveLastExportAt(db, now);
       setLastExportAt(now);
-      setMessage('备份文件已生成');
+      setMessage(missingImages ? `备份已生成，${missingImages} 张本地图片未找到` : '完整备份文件已生成');
     } catch {
       setMessage('导出失败，请稍后重试');
     } finally {
@@ -66,14 +71,18 @@ export default function BackupScreen() {
   async function restoreBackup() {
     if (!pendingBackup || importing) return;
     setImporting(true);
+    let createdImageUris: string[] = [];
     try {
-      const result = await importJournalBackup(db, pendingBackup);
+      const materialized = await materializeBackupImages(pendingBackup);
+      createdImageUris = materialized.createdUris;
+      const result = await importJournalBackup(db, materialized.backup);
       setPendingBackup(null);
       await load();
       const created = result.createdEntries + result.createdFollowUps;
       const updated = result.updatedEntries + result.updatedFollowUps;
       setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条`);
     } catch {
+      createdImageUris.forEach(deleteJournalImage);
       setPendingBackup(null);
       setMessage('恢复失败，原有记录没有被清空');
     } finally {
@@ -81,22 +90,22 @@ export default function BackupScreen() {
     }
   }
 
-  return <SafeAreaView style={styles.safe}>
-    <View style={styles.header}>
+  return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
+    <View style={[styles.header, { borderBottomColor: readingTheme.border }]}>
       <Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable>
-      <Text style={styles.title}>备份与导出</Text><View style={styles.headerSpace} />
+      <Text style={[styles.title, { color: readingTheme.text }]}>备份与导出</Text><View style={styles.headerSpace} />
     </View>
     <View style={styles.content}>
-      <View style={styles.summary}>
+      <View style={[styles.summary, { backgroundColor: readingTheme.surface }]}>
         <Text style={styles.summaryTitle}>我的日迹</Text>
-        <Text style={styles.summaryCount}>{stats.entries} 条记录 · {stats.followUps} 条后续 · {stats.images} 张图片</Text>
-        {lastExportAt ? <Text style={styles.lastExport}>上次导出：{formatShortDateTime(lastExportAt)}</Text> : <Text style={styles.lastExport}>还没有导出过备份</Text>}
+        <Text style={[styles.summaryCount, { color: readingTheme.text }]}>{stats.entries} 条记录 · {stats.followUps} 条后续 · {stats.images} 张图片</Text>
+        {lastExportAt ? <Text style={[styles.lastExport, { color: readingTheme.secondary }]}>上次导出：{formatShortDateTime(lastExportAt)}</Text> : <Text style={[styles.lastExport, { color: readingTheme.secondary }]}>还没有导出过备份</Text>}
       </View>
 
-      <View style={styles.explanation}>
-        <Text style={styles.explanationTitle}>JSON 数据备份</Text>
-        <Text style={styles.explanationText}>包含记录正文、时间、后续、标签和图片路径信息，可用普通文本工具打开。</Text>
-        <View style={styles.notice}><Text style={styles.noticeText}>当前版本不包含图片文件本身，请不要把它作为照片的唯一备份。</Text></View>
+      <View style={[styles.explanation, { backgroundColor: readingTheme.surface }]}>
+        <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>JSON 数据备份</Text>
+        <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>包含记录正文、时间、后续、标签、编辑历史和图片内容，可用于换机或重装后恢复。</Text>
+        <View style={[styles.notice, { backgroundColor: readingTheme.background }]}><Text style={[styles.noticeText, { color: readingTheme.secondary }]}>图片会写入备份文件，照片较多时导出和恢复可能需要一些时间。</Text></View>
       </View>
 
       <Pressable disabled={exporting} onPress={() => void exportJson()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
@@ -108,11 +117,11 @@ export default function BackupScreen() {
     </View>
     <Modal visible={Boolean(pendingBackup)} transparent animationType="fade" onRequestClose={() => setPendingBackup(null)}>
       <Pressable onPress={() => setPendingBackup(null)} style={styles.overlay}>
-        <Pressable onPress={(event) => event.stopPropagation()} style={styles.confirmCard}>
-          <Text style={styles.confirmTitle}>合并这份备份？</Text>
+        <Pressable onPress={(event) => event.stopPropagation()} style={[styles.confirmCard, { backgroundColor: readingTheme.background }]}>
+          <Text style={[styles.confirmTitle, { color: readingTheme.text }]}>合并这份备份？</Text>
           {pendingBackup ? <Text style={styles.confirmSummary}>{pendingBackup.entries.length} 条记录 · {pendingBackup.followUps.length} 条后续 · {pendingBackup.tags.length} 个标签</Text> : null}
-          <Text style={styles.confirmHint}>不会清空现有内容；同一记录将保留更新时间较新的版本。</Text>
-          <View style={styles.confirmActions}><Pressable onPress={() => setPendingBackup(null)} style={styles.confirmButton}><Text style={styles.cancelText}>取消</Text></Pressable><Pressable disabled={importing} onPress={() => void restoreBackup()} style={[styles.confirmButton, styles.restoreButton]}>{importing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.restoreText}>开始恢复</Text>}</Pressable></View>
+          <Text style={[styles.confirmHint, { color: readingTheme.secondary }]}>不会清空现有内容；同一记录将保留更新时间较新的版本。</Text>
+          <View style={styles.confirmActions}><Pressable onPress={() => setPendingBackup(null)} style={[styles.confirmButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={importing} onPress={() => void restoreBackup()} style={[styles.confirmButton, styles.restoreButton]}>{importing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.restoreText}>开始恢复</Text>}</Pressable></View>
         </Pressable>
       </Pressable>
     </Modal>
