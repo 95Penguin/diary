@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { Image } from 'expo-image';
@@ -38,9 +38,9 @@ export default function HomeScreen() {
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
-  function openEntryActions(entry: Entry) {
+  const openEntryActions = useCallback((entry: Entry) => {
     setActionEntry(entry);
-  }
+  }, []);
 
   async function deleteSelectedEntry() {
     if (!actionEntry) return;
@@ -64,9 +64,10 @@ export default function HomeScreen() {
       </View>
 
       <View style={styles.content}>
-        {loading ? <ActivityIndicator style={styles.loader} color={colors.primary} /> : view === 'timeline' ? (
-          <Timeline entries={entries} onLongPress={openEntryActions} />
-        ) : <CalendarView entries={entries} selected={selectedDate} onSelect={setSelectedDate} onLongPress={openEntryActions} />}
+        {loading ? <ActivityIndicator style={styles.loader} color={colors.primary} /> : <>
+          <View accessibilityElementsHidden={view !== 'timeline'} importantForAccessibility={view === 'timeline' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'timeline' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'timeline' && styles.hiddenPane]}><Timeline entries={entries} onLongPress={openEntryActions} /></View>
+          <View accessibilityElementsHidden={view !== 'calendar'} importantForAccessibility={view === 'calendar' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'calendar' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'calendar' && styles.hiddenPane]}><CalendarView entries={entries} selected={selectedDate} onSelect={setSelectedDate} onLongPress={openEntryActions} /></View>
+        </>}
       </View>
 
       <BottomNavigation view={view} onChange={setView} onCompose={() => {
@@ -135,7 +136,7 @@ function Timeline({ entries, onLongPress }: { entries: Entry[]; onLongPress: (en
 
   return <View style={styles.timelineContainer}>
     <View style={styles.timelineTools}><ScrollView horizontal style={styles.filterBarScroll} contentContainerStyle={styles.filterBar} showsHorizontalScrollIndicator={false}>
-        <Pressable accessibilityLabel="选择筛选方式" onPress={() => setFilterPickerVisible(true)} style={[styles.filterMenuButton, { backgroundColor: readingTheme.surface }, filterKind !== 'none' && styles.filterMenuButtonActive]}><Text style={[styles.filterMenuText, { color: readingTheme.secondary }, filterKind !== 'none' && styles.filterMenuTextActive]}>{filterLabels[filterKind]}</Text><View style={[styles.filterChevron, { borderColor: filterKind !== 'none' ? colors.primary : readingTheme.secondary }]} /></Pressable>
+        <Pressable accessibilityLabel="选择筛选方式" onPress={() => setFilterPickerVisible(true)} style={[styles.filterMenuButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.filterMenuText, { color: filterKind !== 'none' ? colors.primary : readingTheme.secondary }]}>{filterLabels[filterKind]}</Text><View style={[styles.filterChevron, { borderColor: filterKind !== 'none' ? colors.primary : readingTheme.secondary }]} /></Pressable>
         {filterKind !== 'none' ? <><Pressable onPress={() => setFilterValue(null)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, !filterValue && styles.filterChipActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, !filterValue && styles.filterTextActive]}>全部</Text></Pressable>{valueOptions.map((option) => <Pressable key={option.value} onPress={() => setFilterValue(option.value)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, filterValue === option.value && styles.filterChipActive]}><Text numberOfLines={1} style={[styles.filterText, { color: readingTheme.secondary }, filterValue === option.value && styles.filterTextActive]}>{option.label}</Text></Pressable>)}<Pressable accessibilityLabel="清除筛选" hitSlop={8} onPress={() => { setFilterKind('none'); setFilterValue(null); }}><Text style={[styles.clearFilter, { color: readingTheme.secondary }]}>清除</Text></Pressable></> : null}
       </ScrollView><Pressable accessibilityLabel="打开拾起一刻" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></Pressable></View>
     <ScrollView contentContainerStyle={styles.timeline} showsVerticalScrollIndicator={false}>
@@ -157,31 +158,34 @@ function Timeline({ entries, onLongPress }: { entries: Entry[]; onLongPress: (en
   </View>;
 }
 
-function CalendarView({ entries, selected, onSelect, onLongPress }: { entries: Entry[]; selected: string; onSelect: (date: string) => void; onLongPress: (entry: Entry) => void }) {
+function CalendarViewComponent({ entries, selected, onSelect, onLongPress }: { entries: Entry[]; selected: string; onSelect: (date: string) => void; onLongPress: (entry: Entry) => void }) {
   const { readingTheme } = useAppPreferences();
-  const now = new Date();
+  const now = useMemo(() => new Date(), []);
   const [monthOffset, setMonthOffset] = useState(0);
   const [calendarWidth, setCalendarWidth] = useState(0);
-  const month = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+  const month = useMemo(() => new Date(now.getFullYear(), now.getMonth() + monthOffset, 1), [monthOffset, now]);
   const year = month.getFullYear(); const monthIndex = month.getMonth();
-  const firstWeekday = (month.getDay() + 6) % 7;
-  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
-  const cellCount = Math.ceil((firstWeekday + daysInMonth) / 7) * 7;
-  const cells = Array.from({ length: cellCount }, (_, index) => {
-    const day = index - firstWeekday + 1;
-    return day >= 1 && day <= daysInMonth ? day : null;
-  });
-  const counts = useMemo(() => {
-    const map = new Map<string, number>();
-    entries.forEach((entry) => map.set(dateKey(entry.occurredAt), (map.get(dateKey(entry.occurredAt)) ?? 0) + 1));
+  const cells = useMemo(() => {
+    const firstWeekday = (month.getDay() + 6) % 7;
+    const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+    const cellCount = Math.ceil((firstWeekday + daysInMonth) / 7) * 7;
+    return Array.from({ length: cellCount }, (_, index) => {
+      const day = index - firstWeekday + 1;
+      if (day < 1 || day > daysInMonth) return null;
+      const key = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      return { day, key, lunar: lunarDayLabel(year, monthIndex + 1, day) };
+    });
+  }, [month, monthIndex, year]);
+  const entriesByDate = useMemo(() => {
+    const map = new Map<string, Entry[]>();
+    entries.forEach((entry) => {
+      const key = dateKey(entry.occurredAt);
+      map.set(key, [...(map.get(key) ?? []), entry]);
+    });
     return map;
   }, [entries]);
-  const selectedEntries = entries.filter((entry) => dateKey(entry.occurredAt) === selected);
+  const selectedEntries = entriesByDate.get(selected) ?? [];
   const awayFromToday = monthOffset !== 0 || selected !== dateKey(now.toISOString());
-
-  function keyForDay(day: number) {
-    return `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  }
 
   function changeMonth(delta: number) {
     const nextOffset = monthOffset + delta;
@@ -201,11 +205,11 @@ function CalendarView({ entries, selected, onSelect, onLongPress }: { entries: E
     <View style={styles.calendarBoard} onLayout={(event) => setCalendarWidth(event.nativeEvent.layout.width)}>
       {cellSize > 0 ? <>
         <View style={[styles.weekRow, { width: cellSize * 7 }]}>{['一','二','三','四','五','六','日'].map((item) => <Text allowFontScaling={false} key={item} style={[styles.weekLabel, { width: cellSize, color: readingTheme.secondary }]}>{item}</Text>)}</View>
-        <View style={[styles.grid, { width: cellSize * 7 }]}>{cells.map((day, index) => {
-          if (!day) return <View key={`empty-${index}`} style={[styles.dayCell, { width: cellSize, height: cellSize }]} />;
-          const key = keyForDay(day); const count = counts.get(key) ?? 0; const active = selected === key;
-          return <Pressable key={key} onPress={() => onSelect(key)} style={[styles.dayCell, { width: cellSize, height: cellSize }]}>
-            <View style={[styles.dayCellInner, active && styles.dayCellActive, active && { width: 40, height: 40, borderRadius: 999, overflow: 'hidden' }]}><Text allowFontScaling={false} style={[styles.dayNumber, { color: readingTheme.text }, active && styles.dayNumberActive]}>{day}</Text><Text allowFontScaling={false} style={[styles.lunarDay, { color: readingTheme.secondary }, active && styles.lunarDayActive]}>{lunarDayLabel(year, monthIndex + 1, day)}</Text>{count > 0 ? <View style={[styles.dayDot, active && styles.dayDotActive]} /> : null}</View>
+        <View style={[styles.grid, { width: cellSize * 7 }]}>{cells.map((cell, index) => {
+          if (!cell) return <View key={`empty-${index}`} style={[styles.dayCell, { width: cellSize, height: cellSize }]} />;
+          const count = entriesByDate.get(cell.key)?.length ?? 0; const active = selected === cell.key;
+          return <Pressable key={cell.key} onPress={() => onSelect(cell.key)} style={[styles.dayCell, { width: cellSize, height: cellSize }]}>
+            <View style={[styles.dayCellInner, active ? { backgroundColor: colors.primary, borderRadius: 20, overflow: 'hidden' } : null]}><Text allowFontScaling={false} style={[styles.dayNumber, { color: readingTheme.text }, active && styles.dayNumberActive]}>{cell.day}</Text><Text allowFontScaling={false} style={[styles.lunarDay, { color: readingTheme.secondary }, active && styles.lunarDayActive]}>{cell.lunar}</Text>{count > 0 ? <View style={[styles.dayDot, active && styles.dayDotActive]} /> : null}</View>
           </Pressable>;
         })}</View>
       </> : null}
@@ -214,6 +218,8 @@ function CalendarView({ entries, selected, onSelect, onLongPress }: { entries: E
     {selectedEntries.length ? selectedEntries.map((entry) => <EntryCard key={entry.id} entry={entry} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} onLongPress={() => onLongPress(entry)} />) : <EmptyState title="这一天还没有记录" description="可以修改日期，补记发生过的事情。" />}
   </ScrollView>;
 }
+
+const CalendarView = memo(CalendarViewComponent);
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
@@ -226,9 +232,9 @@ const styles = StyleSheet.create({
   profileButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary },
   profileImage: { width: 36, height: 36, borderRadius: 18 },
   profileText: { color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' },
-  content: { flex: 1 }, loader: { marginTop: 80 },
+  content: { flex: 1 }, viewPane: { ...StyleSheet.absoluteFill }, hiddenPane: { opacity: 0 }, loader: { marginTop: 80 },
   timelineContainer: { flex: 1 }, timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
-  timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.xl, paddingRight: spacing.xl, gap: spacing.sm }, filterBarScroll: { flex: 1, flexGrow: 1 }, filterBar: { alignItems: 'center', gap: spacing.sm }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuButtonActive: { backgroundColor: colors.primarySoft }, filterMenuText: { color: colors.textSecondary, fontSize: 10, lineHeight: 14, fontWeight: '600' }, filterMenuTextActive: { color: colors.primary }, filterChevron: { width: 6, height: 6, borderRightWidth: 1.5, borderBottomWidth: 1.5, transform: [{ rotate: '45deg' }, { translateY: -1 }] }, clearFilter: { paddingHorizontal: spacing.xs, color: colors.textFaint, fontSize: 10 },
+  timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.xl, paddingRight: spacing.xl, gap: spacing.sm }, filterBarScroll: { flex: 1, flexGrow: 1 }, filterBar: { alignItems: 'center', gap: spacing.sm }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.textSecondary, fontSize: 10, lineHeight: 14, fontWeight: '600' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, transform: [{ rotate: '45deg' }] }, clearFilter: { paddingHorizontal: spacing.xs, color: colors.textFaint, fontSize: 10 },
   filterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterChipActive: { backgroundColor: colors.primary },
   filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
   filterOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, filterPicker: { width: '100%', maxWidth: 320, padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.background }, filterPickerTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, filterKinds: { marginTop: spacing.lg }, filterKind: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, filterKindPressed: { backgroundColor: colors.surfaceMuted }, filterKindTitle: { color: colors.text, fontSize: 12, fontWeight: '600' }, filterKindDescription: { marginTop: 2, color: colors.textFaint, fontSize: 9 }, filterKindArrow: { color: colors.primary, fontSize: 22 }, filterPickerCancel: { alignItems: 'center', paddingTop: spacing.lg }, filterPickerCancelText: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
@@ -246,8 +252,8 @@ const styles = StyleSheet.create({
   calendarBoard: { width: '100%', alignItems: 'center' },
   weekRow: { flexDirection: 'row', marginTop: spacing.xs }, weekLabel: { color: colors.textFaint, fontFamily: fonts.sans, textAlign: 'center', fontSize: 11 },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
-  dayCell: { alignItems: 'center', justifyContent: 'center' }, dayCellInner: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20 },
-  dayCellActive: { backgroundColor: colors.primary }, dayNumber: { color: colors.text, fontFamily: fonts.sans, fontSize: 13, lineHeight: 17 }, dayNumberActive: { color: '#FFFFFF' },
+  dayCell: { alignItems: 'center', justifyContent: 'center' }, dayCellInner: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, overflow: 'hidden' },
+  dayNumber: { color: colors.text, fontFamily: fonts.sans, fontSize: 13, lineHeight: 17 }, dayNumberActive: { color: '#FFFFFF' },
   lunarDay: { color: colors.textFaint, fontFamily: fonts.sans, fontSize: 8, lineHeight: 11 }, lunarDayActive: { color: '#E8F0EB' },
   dayDot: { position: 'absolute', bottom: 1, alignSelf: 'center', width: 4, height: 4, borderRadius: 2, backgroundColor: colors.primary }, dayDotActive: { backgroundColor: '#FFFFFF' },
   selectedHeader: { marginTop: spacing.xs, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },

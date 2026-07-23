@@ -11,7 +11,7 @@ export function AppDialog({ visible, title, message, actions, onClose }: { visib
     <Pressable accessibilityLabel="关闭弹窗" onPress={onClose} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.card, { backgroundColor: readingTheme.background }]}>
       <Text style={[styles.title, { color: readingTheme.text }]}>{title}</Text>
       {message ? <Text style={[styles.message, { color: readingTheme.secondary }]}>{message}</Text> : null}
-      <View style={styles.actions}>{actions.map((action) => <Pressable key={action.label} onPress={() => void action.onPress()} style={({ pressed }) => [styles.button, { backgroundColor: action.tone === 'primary' ? colors.primarySoft : readingTheme.surface }, pressed && styles.pressed]}><Text style={[styles.buttonText, { color: action.tone === 'danger' ? colors.danger : action.tone === 'primary' ? colors.primary : readingTheme.secondary }]}>{action.label}</Text></Pressable>)}</View>
+      <View style={styles.actions}>{actions.map((action) => <Pressable key={action.label} onPress={() => void action.onPress()} style={({ pressed }) => [styles.button, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><Text style={[styles.buttonText, { color: action.tone === 'danger' ? colors.danger : action.tone === 'primary' ? colors.primary : readingTheme.secondary }]}>{action.label}</Text></Pressable>)}</View>
     </Pressable></Pressable>
   </Modal>;
 }

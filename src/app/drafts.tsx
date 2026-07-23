@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -11,6 +11,7 @@ import { formatShortDateTime } from '@/utils/date';
 import { deleteJournalImage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
+import { MediaThumbnail } from '@/components/media-view';
 
 export default function DraftsScreen() {
   const db = useSQLiteContext();
@@ -29,7 +30,7 @@ export default function DraftsScreen() {
     {drafts.length ? <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
       <Text style={styles.count}>{drafts.length} 份草稿 · 按最近编辑排序</Text>
       {drafts.map((draft) => <Pressable accessibilityRole="button" accessibilityLabel={`继续编辑草稿：${draft.content || '图片草稿'}`} key={draft.id} onPress={() => router.push({ pathname: '/compose', params: { draft: draft.id } })} style={({ pressed }) => [styles.card, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        {draft.images[0] ? <Image source={{ uri: draft.images[0].uri }} resizeMode="cover" style={styles.thumbnail} /> : null}
+        {draft.images[0] ? <MediaThumbnail media={{ uri: draft.images[0].uri, mediaType: draft.images[0].mediaType ?? 'image', pairedVideoUri: draft.images[0].pairedVideoUri ?? null, duration: draft.images[0].duration ?? null }} style={styles.thumbnail} /> : null}
         <View style={styles.cardBody}><Text numberOfLines={3} style={[styles.content, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 21 * fontScale }]}>{draft.content.trim() || '图片草稿'}</Text><View style={styles.meta}><Text style={[styles.updated, { color: readingTheme.secondary }]}>编辑于 {formatShortDateTime(draft.updatedAt)}</Text><View style={styles.details}>{draft.mood ? <Text style={[styles.detail, { color: readingTheme.secondary }]}>{draft.mood}</Text> : null}{draft.weather ? <Text style={[styles.detail, { color: readingTheme.secondary }]}>{draft.weather}</Text> : null}{draft.locationName ? <Text numberOfLines={1} style={[styles.detail, { color: readingTheme.secondary }]}>⌖ {draft.locationName}</Text> : null}{draft.images.length ? <Text style={[styles.detail, { color: readingTheme.secondary }]}>{draft.images.length} 张图片</Text> : null}</View></View></View>
         <Pressable accessibilityLabel="删除草稿" hitSlop={10} onPress={(event) => { event.stopPropagation(); confirmDelete(draft); }} style={styles.delete}><Text style={styles.deleteText}>删除</Text></Pressable>
       </Pressable>)}

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,8 +13,11 @@ import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 import { normalizeTag } from '@/utils/tags';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
+import { MediaThumbnail } from '@/components/media-view';
+import type { JournalMediaType } from '@/domain/journal';
+import { getPickerMediaType } from '@/utils/picker-media';
 
-type SelectedImage = { id?: string; uri: string; width: number; height: number; fileName?: string | null; draftOwned?: boolean };
+type SelectedImage = { id?: string; uri: string; width: number; height: number; fileName?: string | null; draftOwned?: boolean; mediaType?: JournalMediaType; pairedVideoUri?: string | null; pairedVideoFileName?: string | null; duration?: number | null };
 const MOODS = ['开心', '平静', '期待', '难过', '疲惫', '生气'] as const;
 const MOOD_ICONS: Record<string, string> = { 开心: '😊', 平静: '😌', 期待: '✨', 难过: '😔', 疲惫: '😴', 生气: '😤' };
 const WEATHERS = ['晴', '多云', '阴', '雨', '雷雨', '雪', '雾'] as const;
@@ -111,7 +113,7 @@ export default function ComposeScreen() {
       if (hasDraft) {
         const nextId = activeDraftId ?? createDraftId();
         if (!activeDraftId) setActiveDraftId(nextId);
-        void saveDraft(db, { id: nextId, content, occurredAt, updatedAt: new Date().toISOString(), tags, mood, weather, images: images.map(({ uri, width, height }) => ({ uri, width, height })), locationName: locationName.trim() || null, latitude, longitude })
+        void saveDraft(db, { id: nextId, content, occurredAt, updatedAt: new Date().toISOString(), tags, mood, weather, images: images.map(({ uri, width, height, mediaType, pairedVideoUri, duration }) => ({ uri, width, height, mediaType, pairedVideoUri, duration })), locationName: locationName.trim() || null, latitude, longitude })
           .catch(() => showToast('草稿自动保存失败'));
       } else if (activeDraftId) {
         void deleteDraft(db, activeDraftId).then((uris) => uris.forEach(deleteJournalImage)).catch(() => showToast('草稿清理失败'));
@@ -147,7 +149,14 @@ export default function ComposeScreen() {
   async function addImages(assets: ImagePicker.ImagePickerAsset[]) {
     try {
       const persisted = await Promise.all(assets.slice(0, 9 - images.length).map(async (asset) => ({
-        id: 'draft-image', uri: await persistJournalImage(asset.uri, asset.fileName), width: asset.width, height: asset.height, draftOwned: true,
+        id: 'draft-image',
+        uri: await persistJournalImage(asset.uri, asset.fileName),
+        width: asset.width,
+        height: asset.height,
+        draftOwned: true,
+        mediaType: getPickerMediaType(asset),
+        pairedVideoUri: asset.pairedVideoAsset ? await persistJournalImage(asset.pairedVideoAsset.uri, asset.pairedVideoAsset.fileName) : null,
+        duration: asset.duration ?? null,
       })));
       setImages((current) => [...current, ...persisted.slice(0, 9 - current.length)]);
     } catch { Alert.alert('图片添加失败', '图片没有保存，请稍后重试。'); }
@@ -156,15 +165,15 @@ export default function ComposeScreen() {
   async function chooseFromLibrary() {
     const remaining = 9 - images.length;
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'], allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.85,
+      mediaTypes: ['images', 'videos', 'livePhotos'], allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.85,
     });
     if (!result.canceled) await addImages(result.assets);
   }
 
-  async function takePhoto() {
+  async function openCamera() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) { Alert.alert('无法使用相机', '请在系统设置中允许拾时使用相机。'); return; }
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.85 });
+    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images', 'videos'], videoMaxDuration: 60, quality: 0.85 });
     if (!result.canceled) await addImages(result.assets);
   }
 
@@ -261,39 +270,39 @@ export default function ComposeScreen() {
 
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         {editingTime ? <View style={styles.timeEditor}>
-          <TextInput autoFocus value={timeValue} onChangeText={setTimeValue} placeholder="YYYY-MM-DD HH:mm" style={styles.timeInput} />
+          <TextInput autoFocus value={timeValue} onChangeText={setTimeValue} placeholder="YYYY-MM-DD HH:mm" placeholderTextColor={readingTheme.secondary} style={[styles.timeInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} />
           <Pressable onPress={applyTime}><Text style={styles.apply}>确定</Text></Pressable>
-        </View> : <Pressable onPress={() => setEditingTime(true)} style={styles.timeChip}><Text style={styles.timeChipText}>发生于　{formatShortDateTime(occurredAt)}　›</Text></Pressable>}
-        <TextInput ref={inputRef} multiline maxLength={10000} value={content} onChangeText={setContent} placeholder="写下现在发生的事……" placeholderTextColor={readingTheme.secondary} textAlignVertical="top" style={[styles.editor, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 18 * fontScale, lineHeight: 30 * fontScale }]} />
+        </View> : <Pressable onPress={() => setEditingTime(true)} style={[styles.timeChip, { backgroundColor: readingTheme.surface }]}><Text style={styles.timeChipText}>发生于　{formatShortDateTime(occurredAt)}　›</Text></Pressable>}
+        <TextInput ref={inputRef} multiline maxLength={10000} value={content} onChangeText={setContent} placeholder="写下现在发生的事……" placeholderTextColor={readingTheme.secondary} textAlignVertical="top" style={[styles.editor, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale }]} />
         <View style={styles.imageRow}>
           {images.map((image, index) => <View key={`${image.uri}-${index}`} style={styles.imageItem}>
-            <Image source={image.uri} contentFit="cover" style={styles.imagePreview} />
-            <Pressable accessibilityLabel="移除图片" onPress={() => { if (image.draftOwned) deleteJournalImage(image.uri); setImages((current) => current.filter((_, itemIndex) => itemIndex !== index)); }} style={styles.removeImage}><Text style={styles.removeImageText}>×</Text></Pressable>
+            <MediaThumbnail media={{ uri: image.uri, mediaType: image.mediaType ?? 'image', pairedVideoUri: image.pairedVideoUri ?? null, duration: image.duration ?? null }} style={styles.imagePreview} />
+            <Pressable accessibilityLabel="移除媒体" onPress={() => { if (image.draftOwned) { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); } setImages((current) => current.filter((_, itemIndex) => itemIndex !== index)); }} style={styles.removeImage}><Text style={styles.removeImageText}>×</Text></Pressable>
           </View>)}
-          {images.length < 9 ? <Pressable accessibilityLabel="添加图片" onPress={openImageMenu} style={styles.addImage}><Text style={styles.addImageIcon}>＋</Text><Text style={styles.addImageText}>图片</Text></Pressable> : null}
+          {images.length < 9 ? <Pressable accessibilityLabel="添加媒体" onPress={openImageMenu} style={[styles.addImage, { borderColor: readingTheme.border }]}><Text style={styles.addImageIcon}>＋</Text><Text style={[styles.addImageText, { color: readingTheme.secondary }]}>媒体</Text></Pressable> : null}
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.metaToolbarScroll} contentContainerStyle={styles.metaToolbar}>
-          <Pressable onPress={() => setActiveMeta((value) => value === 'mood' ? null : 'mood')} style={[styles.metaButton, activeMeta === 'mood' && styles.metaButtonActive]}><Text style={[styles.metaButtonText, activeMeta === 'mood' && styles.metaButtonTextActive]}>{mood ? `${MOOD_ICONS[mood]} ${mood}` : '＋ 心情'}</Text></Pressable>
-          <Pressable onPress={() => setActiveMeta((value) => value === 'weather' ? null : 'weather')} style={[styles.metaButton, activeMeta === 'weather' && styles.metaButtonActive]}><Text style={[styles.metaButtonText, activeMeta === 'weather' && styles.metaButtonTextActive]}>{weather ? `${WEATHER_ICONS[weather]} ${weather}` : '＋ 天气'}</Text></Pressable>
-          <Pressable onPress={() => setActiveMeta((value) => value === 'location' ? null : 'location')} style={[styles.metaButton, activeMeta === 'location' && styles.metaButtonActive]}><Text numberOfLines={1} style={[styles.metaButtonText, styles.locationMetaText, activeMeta === 'location' && styles.metaButtonTextActive]}>{locationName ? `⌖ ${locationName}` : '＋ 地点'}</Text></Pressable>
-          <Pressable onPress={() => setActiveMeta((value) => value === 'tags' ? null : 'tags')} style={[styles.metaButton, activeMeta === 'tags' && styles.metaButtonActive]}><Text style={[styles.metaButtonText, activeMeta === 'tags' && styles.metaButtonTextActive]}>{tags.length ? `# ${tags.length} 个标签` : '＋ 标签'}</Text></Pressable>
+          <Pressable onPress={() => setActiveMeta((value) => value === 'mood' ? null : 'mood')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.metaButtonText, activeMeta === 'mood' && styles.metaButtonTextActive]}>{mood ? `${MOOD_ICONS[mood]} ${mood}` : '＋ 心情'}</Text></Pressable>
+          <Pressable onPress={() => setActiveMeta((value) => value === 'weather' ? null : 'weather')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.metaButtonText, activeMeta === 'weather' && styles.metaButtonTextActive]}>{weather ? `${WEATHER_ICONS[weather]} ${weather}` : '＋ 天气'}</Text></Pressable>
+          <Pressable onPress={() => setActiveMeta((value) => value === 'location' ? null : 'location')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={[styles.metaButtonText, styles.locationMetaText, activeMeta === 'location' && styles.metaButtonTextActive]}>{locationName ? `⌖ ${locationName}` : '＋ 地点'}</Text></Pressable>
+          <Pressable onPress={() => setActiveMeta((value) => value === 'tags' ? null : 'tags')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.metaButtonText, activeMeta === 'tags' && styles.metaButtonTextActive]}>{tags.length ? `# ${tags.length} 个标签` : '＋ 标签'}</Text></Pressable>
         </ScrollView>
-        {activeMeta === 'mood' ? <View style={styles.metaEditor}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moods}>
-          {MOODS.map((item) => <Pressable accessibilityLabel={`心情：${item}`} key={item} onPress={() => setMood((current) => current === item ? null : item)} style={[styles.moodChip, mood === item && styles.moodChipActive]}><Text style={[styles.moodText, mood === item && styles.moodTextActive]}>{MOOD_ICONS[item]} {item}</Text></Pressable>)}
+        {activeMeta === 'mood' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moods}>
+          {MOODS.map((item) => <Pressable accessibilityLabel={`心情：${item}`} key={item} onPress={() => setMood((current) => current === item ? null : item)} style={[styles.moodChip, { backgroundColor: readingTheme.surface }, mood === item && styles.moodChipActive]}><Text style={[styles.moodText, { color: readingTheme.secondary }, mood === item && styles.moodTextActive]}>{MOOD_ICONS[item]} {item}</Text></Pressable>)}
         </ScrollView></View> : null}
-        {activeMeta === 'weather' ? <View style={styles.metaEditor}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moods}>
-          {WEATHERS.map((item) => <Pressable accessibilityLabel={`天气：${item}`} key={item} onPress={() => setWeather((current) => current === item ? null : item)} style={[styles.moodChip, weather === item && styles.moodChipActive]}><Text style={[styles.moodText, weather === item && styles.moodTextActive]}>{WEATHER_ICONS[item]} {item}</Text></Pressable>)}
+        {activeMeta === 'weather' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moods}>
+          {WEATHERS.map((item) => <Pressable accessibilityLabel={`天气：${item}`} key={item} onPress={() => setWeather((current) => current === item ? null : item)} style={[styles.moodChip, { backgroundColor: readingTheme.surface }, weather === item && styles.moodChipActive]}><Text style={[styles.moodText, { color: readingTheme.secondary }, weather === item && styles.moodTextActive]}>{WEATHER_ICONS[item]} {item}</Text></Pressable>)}
         </ScrollView></View> : null}
-        {activeMeta === 'location' ? <View style={styles.metaEditor}><View style={styles.locationRow}><TextInput maxLength={100} value={locationName} onChangeText={(value) => { setLocationName(value); setLatitude(null); setLongitude(null); }} placeholder="手动填写地点（可选）" placeholderTextColor={colors.textFaint} style={styles.locationInput} /><Pressable accessibilityLabel="使用当前位置" disabled={locating} onPress={() => void fillCurrentLocation()} style={styles.locationButton}><Text style={styles.locationButtonText}>{locating ? '定位中…' : '⌖ 当前位置'}</Text></Pressable></View></View> : null}
-        {activeMeta === 'tags' ? <View style={[styles.metaEditor, styles.tagEditor]}>
-          {tags.map((tag) => <Pressable accessibilityLabel={`移除标签 ${tag}`} key={tag} onPress={() => setTags((current) => current.filter((item) => item !== tag))} style={styles.tagChip}><Text style={styles.tagChipText}>#{tag}　×</Text></Pressable>)}
-          {tags.length < 5 ? <TextInput value={tagValue} onChangeText={changeTagValue} onSubmitEditing={() => addTag()} returnKeyType="done" placeholder="＋ 输入标签" placeholderTextColor={colors.textFaint} style={styles.tagInput} /> : null}
+        {activeMeta === 'location' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><View style={styles.locationRow}><TextInput maxLength={100} value={locationName} onChangeText={(value) => { setLocationName(value); setLatitude(null); setLongitude(null); }} placeholder="手动填写地点（可选）" placeholderTextColor={readingTheme.secondary} style={[styles.locationInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><Pressable accessibilityLabel="使用当前位置" disabled={locating} onPress={() => void fillCurrentLocation()} style={[styles.locationButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.locationButtonText}>{locating ? '定位中…' : '⌖ 当前位置'}</Text></Pressable></View></View> : null}
+        {activeMeta === 'tags' ? <View style={[styles.metaEditor, styles.tagEditor, { backgroundColor: readingTheme.background }]}>
+          {tags.map((tag) => <Pressable accessibilityLabel={`移除标签 ${tag}`} key={tag} onPress={() => setTags((current) => current.filter((item) => item !== tag))} style={[styles.tagChip, { backgroundColor: readingTheme.surface }]}><Text style={styles.tagChipText}>#{tag}　×</Text></Pressable>)}
+          {tags.length < 5 ? <TextInput value={tagValue} onChangeText={changeTagValue} onSubmitEditing={() => addTag()} returnKeyType="done" placeholder="＋ 输入标签" placeholderTextColor={readingTheme.secondary} style={[styles.tagInput, { color: readingTheme.text }]} /> : null}
         </View> : null}
         <View style={styles.editorMeta}><Text style={styles.draft}>{!isEditing && activeDraftId ? '已自动保存到草稿箱' : '不需要标题，写下一句话也可以'}</Text><Text style={styles.counter}>{content.length}/10000</Text></View>
       </ScrollView>
     </KeyboardAvoidingView>
-    <AppDialog visible={imageMenuVisible} title="添加图片" onClose={() => setImageMenuVisible(false)} actions={[{ label: '相册', tone: 'primary', onPress: () => { setImageMenuVisible(false); void chooseFromLibrary(); } }, { label: '拍照', onPress: () => { setImageMenuVisible(false); void takePhoto(); } }]} />
-    <AppDialog visible={exitConfirmationVisible} title="退出编辑？" message="尚未保存的修改会丢失。" onClose={() => setExitConfirmationVisible(false)} actions={[{ label: '继续编辑', onPress: () => setExitConfirmationVisible(false) }, { label: '退出', tone: 'danger', onPress: () => { setExitConfirmationVisible(false); images.filter((image) => image.draftOwned).forEach((image) => deleteJournalImage(image.uri)); leaveComposer(); } }]} />
+    <AppDialog visible={imageMenuVisible} title="添加媒体" message="拍照会打开系统相机，可在相机中切换照片或视频模式。" onClose={() => setImageMenuVisible(false)} actions={[{ label: '相册', tone: 'primary', onPress: () => { setImageMenuVisible(false); void chooseFromLibrary(); } }, { label: '拍照', onPress: () => { setImageMenuVisible(false); void openCamera(); } }]} />
+    <AppDialog visible={exitConfirmationVisible} title="退出编辑？" message="尚未保存的修改会丢失。" onClose={() => setExitConfirmationVisible(false)} actions={[{ label: '继续编辑', onPress: () => setExitConfirmationVisible(false) }, { label: '退出', tone: 'danger', onPress: () => { setExitConfirmationVisible(false); images.filter((image) => image.draftOwned).forEach((image) => { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); }); leaveComposer(); } }]} />
   </SafeAreaView>;
 }
 

@@ -1,10 +1,10 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import type { Entry } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatShortDateTime, formatTime } from '@/utils/date';
 import { useAppPreferences } from '@/preferences/app-preferences';
+import { MediaThumbnail } from '@/components/media-view';
 
 export function EntryCard({ entry, onPress, onLongPress }: { entry: Entry; onPress: () => void; onLongPress?: () => void }) {
   const { fontScale, readingFontFamily, readingTheme } = useAppPreferences();
@@ -15,7 +15,7 @@ export function EntryCard({ entry, onPress, onLongPress }: { entry: Entry; onPre
       <View style={[styles.content, { borderBottomColor: readingTheme.border }]}> 
         <View style={styles.meta}><Text style={styles.time}>{formatTime(entry.occurredAt)}</Text><View style={styles.badges}>{entry.mood || entry.weather ? <Text style={[styles.mood, { color: readingTheme.secondary }]}>{[entry.mood, entry.weather].filter(Boolean).join(' · ')}</Text> : null}{entry.favoritedAt ? <SymbolView name={{ ios: 'bookmark.fill', android: 'bookmark', web: 'bookmark' }} size={14} tintColor={colors.primary} /> : null}</View></View>
         <View style={styles.summary}>
-          {entry.images[0] ? <Image source={entry.images[0].uri} contentFit="cover" style={styles.thumbnail} /> : null}
+          {entry.images[0] ? <MediaThumbnail media={entry.images[0]} style={styles.thumbnail} /> : null}
           <Text numberOfLines={entry.images.length ? 3 : 5} style={[styles.body, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 23 * fontScale }]}>{entry.content}</Text>
         </View>
         {entry.locationName ? <Text numberOfLines={1} style={[styles.location, { color: readingTheme.secondary }]}>⌖ {entry.locationName}</Text> : null}

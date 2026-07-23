@@ -23,7 +23,7 @@ export function EntryActionModal({ visible, onClose, onEdit, onDelete, onHistory
             <Pressable onPress={() => setConfirmingDelete(false)} style={({ pressed }) => [styles.button, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable>
             <Pressable onPress={() => void remove()} style={({ pressed }) => [styles.button, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><Text style={styles.dangerText}>删除</Text></Pressable>
           </> : <>
-            <Pressable onPress={edit} style={({ pressed }) => [styles.button, styles.primary, pressed && styles.pressed]}><Text style={styles.primaryText}>编辑</Text></Pressable>
+            <Pressable onPress={edit} style={({ pressed }) => [styles.button, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><Text style={styles.primaryText}>编辑</Text></Pressable>
             <Pressable onPress={() => setConfirmingDelete(true)} style={({ pressed }) => [styles.button, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><Text style={styles.dangerText}>删除</Text></Pressable>
           </>}
         </View>
@@ -39,6 +39,6 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontFamily: fonts.serif, fontSize: 18, lineHeight: 26, fontWeight: '600', textAlign: 'center', includeFontPadding: false },
   message: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 11, textAlign: 'center' },
   historyButton: { height: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, historyText: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' }, historyArrow: { color: colors.primary, fontSize: 20 },
-  buttons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xl }, button: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, primary: { backgroundColor: colors.primarySoft }, danger: { backgroundColor: '#F8E9E7' }, pressed: { opacity: 0.58 },
+  buttons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xl }, button: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, pressed: { opacity: 0.58 },
   primaryText: { color: colors.primary, fontSize: 13, fontWeight: '700' }, dangerText: { color: colors.danger, fontSize: 13, fontWeight: '700' }, cancel: { alignItems: 'center', justifyContent: 'center', marginTop: spacing.lg }, cancelText: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
 });

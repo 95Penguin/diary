@@ -45,9 +45,9 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "允许拾时访问照片，以便把图片添加到记录中。",
+          "photosPermission": "允许拾时访问照片和视频，以便把媒体添加到记录中。",
           "cameraPermission": "允许拾时使用相机，以便拍摄并记录此刻。",
-          "microphonePermission": false
+          "microphonePermission": "允许拾时在拍摄视频时录制声音。"
         }
       ],
       "expo-sqlite",

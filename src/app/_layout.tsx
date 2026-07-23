@@ -7,6 +7,7 @@ import { SQLiteProvider } from 'expo-sqlite';
 import { StatusBar } from 'expo-status-bar';
 import { Component, type ErrorInfo, type ReactNode, Suspense, useEffect } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { migrateDatabase } from '@/database/migrate';
 import { AppPreferencesProvider } from '@/preferences/app-preferences';
@@ -27,13 +28,15 @@ export default function RootLayout() {
   if (!fontsLoaded && !fontError) return null;
 
   return (
-    <DatabaseErrorBoundary>
-      <Suspense fallback={<LoadingFallback />}>
-        <SQLiteProvider databaseName="shishi.db" onInit={migrateDatabase} useSuspense>
-          <AppPreferencesProvider><AppStack /></AppPreferencesProvider>
-        </SQLiteProvider>
-      </Suspense>
-    </DatabaseErrorBoundary>
+    <GestureHandlerRootView style={styles.root}>
+      <DatabaseErrorBoundary>
+        <Suspense fallback={<LoadingFallback />}>
+          <SQLiteProvider databaseName="shishi.db" onInit={migrateDatabase} useSuspense>
+            <AppPreferencesProvider><AppStack /></AppPreferencesProvider>
+          </SQLiteProvider>
+        </Suspense>
+      </DatabaseErrorBoundary>
+    </GestureHandlerRootView>
   );
 }
 
@@ -85,6 +88,7 @@ export function LoadingFallback() {
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   content: { backgroundColor: colors.background },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
   errorPage: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, backgroundColor: colors.background },
