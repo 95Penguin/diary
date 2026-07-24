@@ -3,7 +3,7 @@ import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, En
 
 type EntryRow = { id: string; content: string; occurred_at: string; created_at: string; updated_at: string; mood: string | null; weather: string | null; favorited_at: string | null; location_name: string | null; latitude: number | null; longitude: number | null };
 type FollowUpRow = { id: string; entry_id: string; content: string; created_at: string; updated_at: string };
-type ImageRow = { id: string; entry_id: string; uri: string; width: number; height: number; sort_order: number; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null };
+type ImageRow = { id: string; entry_id: string; uri: string; width: number; height: number; sort_order: number; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null };
 type TagRow = { entry_id: string; label: string };
 type DeletedEntryRow = EntryRow & { deleted_at: string };
 
@@ -20,15 +20,15 @@ async function attachFollowUps(db: SQLiteDatabase, rows: EntryRow[]): Promise<En
      WHERE deleted_at IS NULL AND entry_id IN (${placeholders}) ORDER BY created_at ASC`,
     rows.map((row) => row.id),
   );
-  const followUpImageRows = followUpRows.length ? await db.getAllAsync<{ id: string; follow_up_id: string; uri: string; width: number; height: number; sort_order: number; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null }>(
-    `SELECT id, follow_up_id, uri, width, height, sort_order, media_type, paired_video_uri, duration FROM follow_up_images
+  const followUpImageRows = followUpRows.length ? await db.getAllAsync<{ id: string; follow_up_id: string; uri: string; width: number; height: number; sort_order: number; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null }>(
+    `SELECT id, follow_up_id, uri, width, height, sort_order, media_type, paired_video_uri, duration, thumbnail_uri FROM follow_up_images
      WHERE follow_up_id IN (${followUpRows.map(() => '?').join(', ')}) ORDER BY sort_order ASC`,
     followUpRows.map((row) => row.id),
   ) : [];
   const imagesByFollowUp = new Map<string, FollowUpImage[]>();
   for (const image of followUpImageRows) {
     const items = imagesByFollowUp.get(image.follow_up_id) ?? [];
-    items.push({ id: image.id, followUpId: image.follow_up_id, uri: image.uri, width: image.width, height: image.height, sortOrder: image.sort_order, mediaType: image.media_type, pairedVideoUri: image.paired_video_uri, duration: image.duration });
+    items.push({ id: image.id, followUpId: image.follow_up_id, uri: image.uri, width: image.width, height: image.height, sortOrder: image.sort_order, mediaType: image.media_type, pairedVideoUri: image.paired_video_uri, duration: image.duration, thumbnailUri: image.thumbnail_uri });
     imagesByFollowUp.set(image.follow_up_id, items);
   }
   const byEntry = new Map<string, FollowUp[]>();
@@ -38,14 +38,14 @@ async function attachFollowUps(db: SQLiteDatabase, rows: EntryRow[]): Promise<En
     byEntry.set(row.entry_id, items);
   }
   const imageRows = await db.getAllAsync<ImageRow>(
-    `SELECT id, entry_id, uri, width, height, sort_order, media_type, paired_video_uri, duration FROM entry_images
+    `SELECT id, entry_id, uri, width, height, sort_order, media_type, paired_video_uri, duration, thumbnail_uri FROM entry_images
      WHERE entry_id IN (${placeholders}) ORDER BY sort_order ASC`,
     rows.map((row) => row.id),
   );
   const imagesByEntry = new Map<string, EntryImage[]>();
   for (const row of imageRows) {
     const items = imagesByEntry.get(row.entry_id) ?? [];
-    items.push({ id: row.id, entryId: row.entry_id, uri: row.uri, width: row.width, height: row.height, sortOrder: row.sort_order, mediaType: row.media_type, pairedVideoUri: row.paired_video_uri, duration: row.duration });
+    items.push({ id: row.id, entryId: row.entry_id, uri: row.uri, width: row.width, height: row.height, sortOrder: row.sort_order, mediaType: row.media_type, pairedVideoUri: row.paired_video_uri, duration: row.duration, thumbnailUri: row.thumbnail_uri });
     imagesByEntry.set(row.entry_id, items);
   }
   const tagRows = await db.getAllAsync<TagRow>(
@@ -138,7 +138,7 @@ export async function createEntry(db: SQLiteDatabase, input: EntryInput): Promis
   return id;
 }
 
-type EntryAssetInput = { uri: string; width: number; height: number; mediaType?: JournalMediaType; pairedVideoUri?: string | null; duration?: number | null };
+type EntryAssetInput = { uri: string; width: number; height: number; mediaType?: JournalMediaType; pairedVideoUri?: string | null; duration?: number | null; thumbnailUri?: string | null };
 
 export async function createEntryWithDetails(
   db: SQLiteDatabase,
@@ -154,8 +154,8 @@ export async function createEntryWithDetails(
       input.locationName?.trim() || null, input.latitude ?? null, input.longitude ?? null,
     );
     for (const [index, image] of images.entries()) await txn.runAsync(
-      'INSERT INTO entry_images (id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      createId(), id, image.uri, image.width, image.height, index, now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null,
+      'INSERT INTO entry_images (id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      createId(), id, image.uri, image.width, image.height, index, now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null, image.thumbnailUri ?? null,
     );
     for (const [index, label] of tags.entries()) await txn.runAsync(
       'INSERT INTO entry_tags (entry_id, label, sort_order) VALUES (?, ?, ?)', id, label, index,
@@ -186,10 +186,11 @@ export async function updateEntryWithDetails(
 ): Promise<string[]> {
   const existing = await db.getAllAsync<{ uri: string }>(
     `SELECT uri FROM entry_images WHERE entry_id = ?
-     UNION ALL SELECT paired_video_uri AS uri FROM entry_images WHERE entry_id = ? AND paired_video_uri IS NOT NULL`,
-    id, id,
+     UNION ALL SELECT paired_video_uri AS uri FROM entry_images WHERE entry_id = ? AND paired_video_uri IS NOT NULL
+     UNION ALL SELECT thumbnail_uri AS uri FROM entry_images WHERE entry_id = ? AND thumbnail_uri IS NOT NULL`,
+    id, id, id,
   );
-  const keptUris = new Set(images.flatMap((image) => [image.uri, image.pairedVideoUri].filter((uri): uri is string => Boolean(uri))));
+  const keptUris = new Set(images.flatMap((image) => [image.uri, image.pairedVideoUri, image.thumbnailUri].filter((uri): uri is string => Boolean(uri))));
   await snapshotEntry(db, id);
   await db.withExclusiveTransactionAsync(async (txn) => {
     const now = new Date().toISOString();
@@ -200,8 +201,8 @@ export async function updateEntryWithDetails(
     );
     await txn.runAsync('DELETE FROM entry_images WHERE entry_id = ?', id);
     for (const [index, image] of images.entries()) await txn.runAsync(
-      'INSERT INTO entry_images (id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      createId(), id, image.uri, image.width, image.height, index, now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null,
+      'INSERT INTO entry_images (id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      createId(), id, image.uri, image.width, image.height, index, now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null, image.thumbnailUri ?? null,
     );
     await txn.runAsync('DELETE FROM entry_tags WHERE entry_id = ?', id);
     for (const [index, label] of tags.entries()) await txn.runAsync(
@@ -319,11 +320,14 @@ export async function permanentlyDeleteEntry(db: SQLiteDatabase, id: string) {
   const images = await db.getAllAsync<{ uri: string }>(
     `SELECT uri FROM entry_images WHERE entry_id = ?
      UNION ALL SELECT paired_video_uri AS uri FROM entry_images WHERE entry_id = ? AND paired_video_uri IS NOT NULL
+     UNION ALL SELECT thumbnail_uri AS uri FROM entry_images WHERE entry_id = ? AND thumbnail_uri IS NOT NULL
      UNION ALL
      SELECT i.uri FROM follow_up_images i JOIN follow_ups f ON f.id = i.follow_up_id WHERE f.entry_id = ?
      UNION ALL
-     SELECT i.paired_video_uri AS uri FROM follow_up_images i JOIN follow_ups f ON f.id = i.follow_up_id WHERE f.entry_id = ? AND i.paired_video_uri IS NOT NULL`,
-    id, id, id, id,
+     SELECT i.paired_video_uri AS uri FROM follow_up_images i JOIN follow_ups f ON f.id = i.follow_up_id WHERE f.entry_id = ? AND i.paired_video_uri IS NOT NULL
+     UNION ALL
+     SELECT i.thumbnail_uri AS uri FROM follow_up_images i JOIN follow_ups f ON f.id = i.follow_up_id WHERE f.entry_id = ? AND i.thumbnail_uri IS NOT NULL`,
+    id, id, id, id, id, id,
   );
   await db.runAsync('DELETE FROM entries WHERE id = ? AND deleted_at IS NOT NULL', id);
   return images.map((image) => image.uri);
@@ -338,6 +342,9 @@ export async function cleanupExpiredTrash(db: SQLiteDatabase, retentionDays = 30
      SELECT i.paired_video_uri AS uri FROM entry_images i JOIN entries e ON e.id = i.entry_id
      WHERE e.deleted_at IS NOT NULL AND e.deleted_at < ? AND i.paired_video_uri IS NOT NULL
      UNION ALL
+     SELECT i.thumbnail_uri AS uri FROM entry_images i JOIN entries e ON e.id = i.entry_id
+     WHERE e.deleted_at IS NOT NULL AND e.deleted_at < ? AND i.thumbnail_uri IS NOT NULL
+     UNION ALL
      SELECT i.uri FROM follow_up_images i
      JOIN follow_ups f ON f.id = i.follow_up_id
      JOIN entries e ON e.id = f.entry_id
@@ -346,8 +353,13 @@ export async function cleanupExpiredTrash(db: SQLiteDatabase, retentionDays = 30
      SELECT i.paired_video_uri AS uri FROM follow_up_images i
      JOIN follow_ups f ON f.id = i.follow_up_id
      JOIN entries e ON e.id = f.entry_id
-     WHERE e.deleted_at IS NOT NULL AND e.deleted_at < ? AND i.paired_video_uri IS NOT NULL`,
-    cutoff, cutoff, cutoff, cutoff,
+     WHERE e.deleted_at IS NOT NULL AND e.deleted_at < ? AND i.paired_video_uri IS NOT NULL
+     UNION ALL
+     SELECT i.thumbnail_uri AS uri FROM follow_up_images i
+     JOIN follow_ups f ON f.id = i.follow_up_id
+     JOIN entries e ON e.id = f.entry_id
+     WHERE e.deleted_at IS NOT NULL AND e.deleted_at < ? AND i.thumbnail_uri IS NOT NULL`,
+    cutoff, cutoff, cutoff, cutoff, cutoff, cutoff,
   );
   await db.runAsync('DELETE FROM entries WHERE deleted_at IS NOT NULL AND deleted_at < ?', cutoff);
   return images.map((image) => image.uri);
@@ -376,11 +388,11 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
     id: string; entry_id: string; content: string; created_at: string; updated_at: string; deleted_at: string | null;
   }>('SELECT id, entry_id, content, created_at, updated_at, deleted_at FROM follow_ups ORDER BY created_at ASC');
   const images = await db.getAllAsync<{
-    id: string; entry_id: string; uri: string; width: number; height: number; sort_order: number; created_at: string; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null;
-  }>('SELECT id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration FROM entry_images ORDER BY entry_id, sort_order ASC');
+    id: string; entry_id: string; uri: string; width: number; height: number; sort_order: number; created_at: string; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null;
+  }>('SELECT id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri FROM entry_images ORDER BY entry_id, sort_order ASC');
   const followUpImages = await db.getAllAsync<{
-    id: string; follow_up_id: string; uri: string; width: number; height: number; sort_order: number; created_at: string; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null;
-  }>('SELECT id, follow_up_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration FROM follow_up_images ORDER BY follow_up_id, sort_order ASC');
+    id: string; follow_up_id: string; uri: string; width: number; height: number; sort_order: number; created_at: string; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null;
+  }>('SELECT id, follow_up_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri FROM follow_up_images ORDER BY follow_up_id, sort_order ASC');
   const tags = await db.getAllAsync<{ entry_id: string; label: string; sort_order: number }>(
     'SELECT entry_id, label, sort_order FROM entry_tags ORDER BY entry_id, sort_order ASC',
   );
@@ -391,7 +403,7 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
   const suppressed = await db.getAllAsync<{ entry_id: string }>('SELECT entry_id FROM memory_suppressed_entries');
   return {
     format: 'shishi-journal',
-    version: 8,
+    version: 9,
     exportedAt: new Date().toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     entries: entries.map((entry) => ({
@@ -406,12 +418,12 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
     images: images.map((image) => ({
       id: image.id, entryId: image.entry_id, localUri: image.uri, width: image.width, height: image.height,
       sortOrder: image.sort_order, createdAt: image.created_at, mediaType: image.media_type,
-      pairedVideoLocalUri: image.paired_video_uri, duration: image.duration,
+      pairedVideoLocalUri: image.paired_video_uri, duration: image.duration, thumbnailLocalUri: image.thumbnail_uri,
     })),
     followUpImages: followUpImages.map((image) => ({
       id: image.id, followUpId: image.follow_up_id, localUri: image.uri, width: image.width, height: image.height,
       sortOrder: image.sort_order, createdAt: image.created_at, mediaType: image.media_type,
-      pairedVideoLocalUri: image.paired_video_uri, duration: image.duration,
+      pairedVideoLocalUri: image.paired_video_uri, duration: image.duration, thumbnailLocalUri: image.thumbnail_uri,
     })),
     tags: tags.map((tag) => ({ entryId: tag.entry_id, label: tag.label, sortOrder: tag.sort_order })),
     versions: versions.map((version) => ({ id: version.id, entryId: version.entry_id, content: version.content,
@@ -498,18 +510,18 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
       const parent = await txn.getFirstAsync<{ id: string }>('SELECT id FROM entries WHERE id = ?', image.entryId);
       if (!parent || !image.localUri) continue;
       await txn.runAsync(
-        `INSERT INTO entry_images (id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET uri = excluded.uri, width = excluded.width, height = excluded.height, sort_order = excluded.sort_order, media_type = excluded.media_type, paired_video_uri = excluded.paired_video_uri, duration = excluded.duration`,
-        image.id, image.entryId, image.localUri, image.width, image.height, image.sortOrder, image.createdAt, image.mediaType ?? 'image', image.pairedVideoLocalUri ?? null, image.duration ?? null,
+        `INSERT INTO entry_images (id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET uri = excluded.uri, width = excluded.width, height = excluded.height, sort_order = excluded.sort_order, media_type = excluded.media_type, paired_video_uri = excluded.paired_video_uri, duration = excluded.duration, thumbnail_uri = excluded.thumbnail_uri`,
+        image.id, image.entryId, image.localUri, image.width, image.height, image.sortOrder, image.createdAt, image.mediaType ?? 'image', image.pairedVideoLocalUri ?? null, image.duration ?? null, image.thumbnailLocalUri ?? null,
       );
     }
     if (backup.version >= 7) for (const image of backup.followUpImages ?? []) {
       const parent = await txn.getFirstAsync<{ id: string }>('SELECT id FROM follow_ups WHERE id = ?', image.followUpId);
       if (!parent || !image.localUri) continue;
       await txn.runAsync(
-        `INSERT INTO follow_up_images (id, follow_up_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET uri = excluded.uri, width = excluded.width, height = excluded.height, sort_order = excluded.sort_order, media_type = excluded.media_type, paired_video_uri = excluded.paired_video_uri, duration = excluded.duration`,
-        image.id, image.followUpId, image.localUri, image.width, image.height, image.sortOrder, image.createdAt, image.mediaType ?? 'image', image.pairedVideoLocalUri ?? null, image.duration ?? null,
+        `INSERT INTO follow_up_images (id, follow_up_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET uri = excluded.uri, width = excluded.width, height = excluded.height, sort_order = excluded.sort_order, media_type = excluded.media_type, paired_video_uri = excluded.paired_video_uri, duration = excluded.duration, thumbnail_uri = excluded.thumbnail_uri`,
+        image.id, image.followUpId, image.localUri, image.width, image.height, image.sortOrder, image.createdAt, image.mediaType ?? 'image', image.pairedVideoLocalUri ?? null, image.duration ?? null, image.thumbnailLocalUri ?? null,
       );
     }
     for (const version of backup.versions ?? []) {
@@ -554,8 +566,8 @@ export async function createFollowUpWithImages(
       id, entryId, content.trim(), now, now,
     );
     for (const [index, image] of images.entries()) await txn.runAsync(
-      'INSERT INTO follow_up_images (id, follow_up_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      createId(), id, image.uri, image.width, image.height, index, now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null,
+      'INSERT INTO follow_up_images (id, follow_up_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      createId(), id, image.uri, image.width, image.height, index, now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null, image.thumbnailUri ?? null,
     );
   });
   return id;
@@ -571,8 +583,9 @@ export async function updateFollowUp(db: SQLiteDatabase, id: string, content: st
 export async function deleteFollowUp(db: SQLiteDatabase, id: string) {
   const images = await db.getAllAsync<{ uri: string }>(
     `SELECT uri FROM follow_up_images WHERE follow_up_id = ?
-     UNION ALL SELECT paired_video_uri AS uri FROM follow_up_images WHERE follow_up_id = ? AND paired_video_uri IS NOT NULL`,
-    id, id,
+     UNION ALL SELECT paired_video_uri AS uri FROM follow_up_images WHERE follow_up_id = ? AND paired_video_uri IS NOT NULL
+     UNION ALL SELECT thumbnail_uri AS uri FROM follow_up_images WHERE follow_up_id = ? AND thumbnail_uri IS NOT NULL`,
+    id, id, id,
   );
   const now = new Date().toISOString();
   await db.runAsync('UPDATE follow_ups SET deleted_at = ?, updated_at = ? WHERE id = ?', now, now, id);
@@ -586,17 +599,18 @@ export async function replaceEntryImages(
 ) {
   const existing = await db.getAllAsync<{ uri: string }>(
     `SELECT uri FROM entry_images WHERE entry_id = ?
-     UNION ALL SELECT paired_video_uri AS uri FROM entry_images WHERE entry_id = ? AND paired_video_uri IS NOT NULL`,
-    entryId, entryId,
+     UNION ALL SELECT paired_video_uri AS uri FROM entry_images WHERE entry_id = ? AND paired_video_uri IS NOT NULL
+     UNION ALL SELECT thumbnail_uri AS uri FROM entry_images WHERE entry_id = ? AND thumbnail_uri IS NOT NULL`,
+    entryId, entryId, entryId,
   );
-  const keptUris = new Set(images.flatMap((image) => [image.uri, image.pairedVideoUri].filter((uri): uri is string => Boolean(uri))));
+  const keptUris = new Set(images.flatMap((image) => [image.uri, image.pairedVideoUri, image.thumbnailUri].filter((uri): uri is string => Boolean(uri))));
   await db.withExclusiveTransactionAsync(async (txn) => {
     await txn.runAsync('DELETE FROM entry_images WHERE entry_id = ?', entryId);
     const now = new Date().toISOString();
     for (const [index, image] of images.entries()) {
       await txn.runAsync(
-        'INSERT INTO entry_images (id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        createId(), entryId, image.uri, image.width, image.height, index, now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null,
+        'INSERT INTO entry_images (id, entry_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        createId(), entryId, image.uri, image.width, image.height, index, now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null, image.thumbnailUri ?? null,
       );
     }
   });
@@ -671,5 +685,38 @@ export async function saveDraft(db: SQLiteDatabase, draft: Omit<Draft, 'createdA
 export async function deleteDraft(db: SQLiteDatabase, id: string, keepImages = false) {
   const draft = await getDraft(db, id);
   await db.runAsync('DELETE FROM drafts WHERE id = ?', id);
-  return keepImages ? [] : draft?.images.flatMap((image) => [image.uri, image.pairedVideoUri].filter((uri): uri is string => Boolean(uri))) ?? [];
+  return keepImages ? [] : draft?.images.flatMap((image) => [image.uri, image.pairedVideoUri, image.thumbnailUri].filter((uri): uri is string => Boolean(uri))) ?? [];
+}
+
+export async function listReferencedMediaUris(db: SQLiteDatabase): Promise<string[]> {
+  const referenced = new Set<string>();
+  const rows = await db.getAllAsync<{ uri: string | null }>(
+    `SELECT uri FROM entry_images
+     UNION SELECT paired_video_uri AS uri FROM entry_images
+     UNION SELECT thumbnail_uri AS uri FROM entry_images
+     UNION SELECT uri FROM follow_up_images
+     UNION SELECT paired_video_uri AS uri FROM follow_up_images
+     UNION SELECT thumbnail_uri AS uri FROM follow_up_images`,
+  );
+  rows.forEach(({ uri }) => { if (uri) referenced.add(uri); });
+
+  const drafts = await db.getAllAsync<{ images_json: string }>('SELECT images_json FROM drafts');
+  drafts.forEach(({ images_json }) => {
+    parseJsonArray<DraftImage>(images_json).forEach((image) => {
+      [image.uri, image.pairedVideoUri, image.thumbnailUri].forEach((uri) => {
+        if (uri) referenced.add(uri);
+      });
+    });
+  });
+
+  const preferences = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'app-preferences'");
+  if (preferences) {
+    try {
+      const avatarUri = (JSON.parse(preferences.value) as { avatarUri?: unknown }).avatarUri;
+      if (typeof avatarUri === 'string') referenced.add(avatarUri);
+    } catch {
+      // Invalid preferences are ignored here and repaired by the preferences provider.
+    }
+  }
+  return [...referenced];
 }

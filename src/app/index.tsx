@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,12 +10,12 @@ import { BottomNavigation, type HomeView } from '@/components/bottom-navigation'
 import { EmptyState } from '@/components/empty-state';
 import { EntryCard } from '@/components/entry-card';
 import { EntryActionModal } from '@/components/entry-action-modal';
-import { cleanupExpiredTrash, deleteEntry, listEntries } from '@/database/journal-repository';
+import { cleanupExpiredTrash, deleteEntry, listEntries, listReferencedMediaUris } from '@/database/journal-repository';
 import type { Entry } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { dateKey, groupLabel, weekdayLabel } from '@/utils/date';
 import { lunarDayLabel } from '@/utils/lunar';
-import { deleteJournalImage } from '@/utils/image-storage';
+import { cleanupUnusedJournalMedia, deleteJournalImage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
 
 export default function HomeScreen() {
@@ -33,6 +33,9 @@ export default function HomeScreen() {
       const expiredImages = await cleanupExpiredTrash(db);
       expiredImages.forEach(deleteJournalImage);
       setEntries(await listEntries(db));
+      void listReferencedMediaUris(db)
+        .then((uris) => cleanupUnusedJournalMedia(uris))
+        .catch(() => { /* Cleanup is best-effort and must not block the timeline. */ });
     } finally { setLoading(false); }
   }, [db]);
 
@@ -112,12 +115,12 @@ function Timeline({ entries, onLongPress }: { entries: Entry[]; onLongPress: (en
     [entries, filterKind, filterValue],
   );
   const groups = useMemo(() => {
-    const result: { label: string; weekday: string; entries: Entry[] }[] = [];
+    const result: { label: string; weekday: string; data: Entry[] }[] = [];
     for (const entry of visibleEntries) {
       const label = groupLabel(entry.occurredAt);
       const previous = result.at(-1);
-      if (previous?.label === label) previous.entries.push(entry);
-      else result.push({ label, weekday: weekdayLabel(entry.occurredAt), entries: [entry] });
+      if (previous?.label === label) previous.data.push(entry);
+      else result.push({ label, weekday: weekdayLabel(entry.occurredAt), data: [entry] });
     }
     return result;
   }, [visibleEntries]);
@@ -139,13 +142,21 @@ function Timeline({ entries, onLongPress }: { entries: Entry[]; onLongPress: (en
         <Pressable accessibilityLabel="选择筛选方式" onPress={() => setFilterPickerVisible(true)} style={[styles.filterMenuButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.filterMenuText, { color: filterKind !== 'none' ? colors.primary : readingTheme.secondary }]}>{filterLabels[filterKind]}</Text><View style={[styles.filterChevron, { borderColor: filterKind !== 'none' ? colors.primary : readingTheme.secondary }]} /></Pressable>
         {filterKind !== 'none' ? <><Pressable onPress={() => setFilterValue(null)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, !filterValue && styles.filterChipActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, !filterValue && styles.filterTextActive]}>全部</Text></Pressable>{valueOptions.map((option) => <Pressable key={option.value} onPress={() => setFilterValue(option.value)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, filterValue === option.value && styles.filterChipActive]}><Text numberOfLines={1} style={[styles.filterText, { color: readingTheme.secondary }, filterValue === option.value && styles.filterTextActive]}>{option.label}</Text></Pressable>)}<Pressable accessibilityLabel="清除筛选" hitSlop={8} onPress={() => { setFilterKind('none'); setFilterValue(null); }}><Text style={[styles.clearFilter, { color: readingTheme.secondary }]}>清除</Text></Pressable></> : null}
       </ScrollView><Pressable accessibilityLabel="打开拾起一刻" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></Pressable></View>
-    <ScrollView contentContainerStyle={styles.timeline} showsVerticalScrollIndicator={false}>
-      {groups.map((group) => <View key={group.label}>
-        <View style={[styles.dayHeader, { backgroundColor: readingTheme.background }]}><Text style={[styles.dayTitle, { color: readingTheme.text }]}>{group.label}</Text><Text style={[styles.weekday, { color: readingTheme.secondary }]}>{group.weekday}</Text></View>
-        {group.entries.map((entry) => <EntryCard key={entry.id} entry={entry} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} onLongPress={() => onLongPress(entry)} />)}
-      </View>)}
-      {!visibleEntries.length ? <EmptyState title="没有相关记录" description="换一个筛选条件试试。" /> : null}
-    </ScrollView>
+    <SectionList
+      sections={groups}
+      keyExtractor={(entry) => entry.id}
+      renderSectionHeader={({ section }) => <View style={[styles.dayHeader, { backgroundColor: readingTheme.background }]}><Text style={[styles.dayTitle, { color: readingTheme.text }]}>{section.label}</Text><Text style={[styles.weekday, { color: readingTheme.secondary }]}>{section.weekday}</Text></View>}
+      renderItem={({ item }) => <EntryCard entry={item} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: item.id } })} onLongPress={() => onLongPress(item)} />}
+      ListEmptyComponent={<EmptyState title="没有相关记录" description="换一个筛选条件试试。" />}
+      contentContainerStyle={styles.timeline}
+      showsVerticalScrollIndicator={false}
+      stickySectionHeadersEnabled={false}
+      initialNumToRender={8}
+      maxToRenderPerBatch={6}
+      updateCellsBatchingPeriod={50}
+      windowSize={7}
+      removeClippedSubviews={Platform.OS === 'android'}
+    />
     <Modal visible={filterPickerVisible} transparent animationType="fade" onRequestClose={() => setFilterPickerVisible(false)}>
       <Pressable onPress={() => setFilterPickerVisible(false)} style={styles.filterOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.filterPicker, { backgroundColor: readingTheme.background }]}>
         <Text style={[styles.filterPickerTitle, { color: readingTheme.text }]}>选择筛选方式</Text>
@@ -196,8 +207,7 @@ function CalendarViewComponent({ entries, selected, onSelect, onLongPress }: { e
 
   const cellSize = Math.floor(calendarWidth / 7);
 
-  return <ScrollView contentContainerStyle={styles.calendar} showsVerticalScrollIndicator={false}>
-    <View style={styles.monthHeader}>
+  const calendarHeader = <><View style={styles.monthHeader}>
       <Pressable accessibilityLabel="上个月" onPress={() => changeMonth(-1)} style={[styles.monthButton, { backgroundColor: readingTheme.surface }]}><View style={[styles.monthArrow, styles.monthArrowLeft, { borderColor: readingTheme.text }]} /></Pressable>
       <View style={styles.monthCenter}><Text style={[styles.monthTitle, { color: readingTheme.text }]}>{year} 年 {monthIndex + 1} 月</Text>{awayFromToday ? <Pressable onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); }} style={[styles.todayButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.todayText}>今天</Text></Pressable> : null}</View>
       <Pressable accessibilityLabel="下个月" onPress={() => changeMonth(1)} style={[styles.monthButton, { backgroundColor: readingTheme.surface }]}><View style={[styles.monthArrow, styles.monthArrowRight, { borderColor: readingTheme.text }]} /></Pressable>
@@ -214,9 +224,21 @@ function CalendarViewComponent({ entries, selected, onSelect, onLongPress }: { e
         })}</View>
       </> : null}
     </View>
-    <View style={[styles.selectedHeader, { borderTopColor: readingTheme.border }]}><Text style={[styles.selectedCount, { color: readingTheme.secondary }]}>{selectedEntries.length} 条记录</Text></View>
-    {selectedEntries.length ? selectedEntries.map((entry) => <EntryCard key={entry.id} entry={entry} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} onLongPress={() => onLongPress(entry)} />) : <EmptyState title="这一天还没有记录" description="可以修改日期，补记发生过的事情。" />}
-  </ScrollView>;
+    <View style={[styles.selectedHeader, { borderTopColor: readingTheme.border }]}><Text style={[styles.selectedCount, { color: readingTheme.secondary }]}>{selectedEntries.length} 条记录</Text></View></>;
+
+  return <FlatList
+    data={selectedEntries}
+    keyExtractor={(entry) => entry.id}
+    renderItem={({ item }) => <EntryCard entry={item} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: item.id } })} onLongPress={() => onLongPress(item)} />}
+    ListHeaderComponent={calendarHeader}
+    ListEmptyComponent={<EmptyState title="这一天还没有记录" description="可以修改日期，补记发生过的事情。" />}
+    contentContainerStyle={styles.calendar}
+    showsVerticalScrollIndicator={false}
+    initialNumToRender={5}
+    maxToRenderPerBatch={4}
+    windowSize={5}
+    removeClippedSubviews={Platform.OS === 'android'}
+  />;
 }
 
 const CalendarView = memo(CalendarViewComponent);

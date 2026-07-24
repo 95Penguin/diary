@@ -1,11 +1,12 @@
 import { useCallback, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import PagerView from 'react-native-pager-view';
 
 import { createFollowUpWithImages, deleteEntry, deleteFollowUp, getEntry, getFollowUpOrder, saveFollowUpOrder, setEntryFavorite, updateFollowUp } from '@/database/journal-repository';
 import { EntryActionModal } from '@/components/entry-action-modal';
@@ -17,18 +18,19 @@ import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
 import { MediaThumbnail, MediaViewer, type JournalMedia } from '@/components/media-view';
 import { getPickerMediaType } from '@/utils/picker-media';
+import { createPersistentVideoThumbnail } from '@/utils/video-thumbnail-cache';
 
 type PendingMedia = JournalMedia & { width: number; height: number; fileName?: string | null; pairedVideoFileName?: string | null };
 
 export default function EntryDetailScreen() {
   const db = useSQLiteContext();
   const { fontScale, readingFontFamily, readingTheme } = useAppPreferences();
-  const { width: viewportWidth } = useWindowDimensions();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
   const [followUp, setFollowUp] = useState('');
   const [followUpImages, setFollowUpImages] = useState<PendingMedia[]>([]);
+  const [sortingFollowUpImage, setSortingFollowUpImage] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
   const [editingFollowUp, setEditingFollowUp] = useState<FollowUp | null>(null);
   const [followUpAction, setFollowUpAction] = useState<FollowUp | null>(null);
@@ -78,7 +80,9 @@ export default function EntryDetailScreen() {
           pairedVideoUri = await persistJournalImage(image.pairedVideoUri, image.pairedVideoFileName);
           persisted.push(pairedVideoUri);
         }
-        savedMedia.push({ ...image, uri, pairedVideoUri });
+        const thumbnailUri = image.mediaType === 'video' ? await createPersistentVideoThumbnail(uri) : null;
+        if (thumbnailUri) persisted.push(thumbnailUri);
+        savedMedia.push({ ...image, uri, pairedVideoUri, thumbnailUri });
       }
       await createFollowUpWithImages(db, entry.id, followUp, savedMedia);
       setFollowUp(''); setFollowUpImages([]); await load();
@@ -96,18 +100,31 @@ export default function EntryDetailScreen() {
       ...assets.slice(0, remaining).map((asset) => ({
         uri: asset.uri, width: asset.width, height: asset.height, fileName: asset.fileName,
         mediaType: getPickerMediaType(asset),
-        pairedVideoUri: asset.pairedVideoAsset?.uri ?? null,
-        pairedVideoFileName: asset.pairedVideoAsset?.fileName,
+        pairedVideoUri: null,
+        pairedVideoFileName: null,
         duration: asset.duration ?? null,
+        thumbnailUri: null,
       })),
     ]);
+  }
+
+  function moveFollowUpImage(from: number, direction: -1 | 1) {
+    const to = from + direction;
+    if (to < 0 || to >= followUpImages.length) return;
+    setFollowUpImages((current) => {
+      const next = [...current];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+    setSortingFollowUpImage(to);
   }
 
   async function pickFollowUpImages() {
     const remaining = 5 - followUpImages.length;
     if (remaining <= 0) return;
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos', 'livePhotos'],
+      mediaTypes: ['images', 'videos'],
       allowsMultipleSelection: true,
       selectionLimit: remaining,
       quality: 0.9,
@@ -208,8 +225,15 @@ export default function EntryDetailScreen() {
         </View>) : <Text style={[styles.empty, { color: readingTheme.secondary }]}>后来发生了什么？可以随时回来补充。</Text>}
       </ScrollView>
       <View style={[styles.inputArea, { backgroundColor: readingTheme.background, borderTopColor: readingTheme.border }]}>
-        {followUpImages.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pendingImages}>{followUpImages.map((image, index) => <View key={`${image.uri}-${index}`}><MediaThumbnail media={image} style={styles.pendingImage} /><Pressable accessibilityLabel="移除后续媒体" onPress={() => setFollowUpImages((current) => current.filter((_, itemIndex) => itemIndex !== index))} style={styles.pendingRemove}><Text style={styles.pendingRemoveText}>×</Text></Pressable></View>)}</ScrollView> : null}
-        <View style={styles.inputBar}><Pressable accessibilityLabel="添加后续媒体" disabled={followUpImages.length >= 5 || sending} onPress={() => setMediaMenuVisible(true)} style={styles.imagePickerButton}><Text style={styles.imagePickerText}>＋媒体</Text></Pressable><TextInput maxLength={2000} value={followUp} onChangeText={setFollowUp} onSubmitEditing={() => void addFollowUp()} returnKeyType="send" placeholder="写一条后续……" placeholderTextColor={readingTheme.secondary} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text, fontFamily: readingFontFamily }]} /><Pressable disabled={(!followUp.trim() && !followUpImages.length) || sending} onPress={() => void addFollowUp()}><Text style={[styles.send, ((!followUp.trim() && !followUpImages.length) || sending) && styles.disabled]}>{sending ? '发送中' : '发送'}</Text></Pressable></View>
+        {followUpImages.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pendingImages}>{followUpImages.map((image, index) => <View key={image.uri}>
+          <Pressable accessibilityHint="长按后可调整顺序" accessibilityLabel={`第 ${index + 1} 个后续媒体`} delayLongPress={250} onLongPress={() => setSortingFollowUpImage(index)} onPress={() => sortingFollowUpImage !== null && setSortingFollowUpImage(index)} style={sortingFollowUpImage === index && styles.pendingSorting}><MediaThumbnail media={image} style={styles.pendingImage} /></Pressable>
+          {sortingFollowUpImage === index ? <View style={styles.pendingSortControls}>
+            <Pressable accessibilityLabel="向前移动" disabled={index === 0} onPress={() => moveFollowUpImage(index, -1)} style={[styles.pendingSortButton, index === 0 && styles.sortDisabled]}><Text style={styles.pendingSortText}>‹</Text></Pressable>
+            <Pressable accessibilityLabel="向后移动" disabled={index === followUpImages.length - 1} onPress={() => moveFollowUpImage(index, 1)} style={[styles.pendingSortButton, index === followUpImages.length - 1 && styles.sortDisabled]}><Text style={styles.pendingSortText}>›</Text></Pressable>
+          </View> : null}
+          <Pressable accessibilityLabel="移除后续媒体" onPress={() => { setSortingFollowUpImage(null); setFollowUpImages((current) => current.filter((_, itemIndex) => itemIndex !== index)); }} style={styles.pendingRemove}><Text style={styles.pendingRemoveText}>×</Text></Pressable>
+        </View>)}</ScrollView> : null}
+        <View style={styles.inputBar}><TextInput maxLength={2000} value={followUp} onChangeText={setFollowUp} onSubmitEditing={() => void addFollowUp()} returnKeyType="send" placeholder="写一条后续……" placeholderTextColor={readingTheme.secondary} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text, fontFamily: readingFontFamily }]} /><Pressable accessibilityLabel="添加后续图片或视频" disabled={followUpImages.length >= 5 || sending} hitSlop={6} onPress={() => setMediaMenuVisible(true)} style={[styles.imagePickerButton, { backgroundColor: readingTheme.surface, borderColor: readingTheme.border }]}><Text style={styles.imagePickerText}>＋</Text></Pressable><Pressable disabled={(!followUp.trim() && !followUpImages.length) || sending} onPress={() => void addFollowUp()}><Text style={[styles.send, ((!followUp.trim() && !followUpImages.length) || sending) && styles.disabled]}>{sending ? '发送中' : '发送'}</Text></Pressable></View>
       </View>
       <Modal visible={Boolean(editingFollowUp)} transparent animationType="fade" onRequestClose={() => setEditingFollowUp(null)}>
         <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -222,26 +246,23 @@ export default function EntryDetailScreen() {
       </Modal>
       <Modal visible={previewIndex !== null} transparent animationType="fade" onRequestClose={() => setPreviewIndex(null)}>
         <GestureHandlerRootView style={styles.previewOverlay}>
-          {previewIndex !== null ? <ScrollView
-            bounces={false}
-            contentOffset={{ x: previewIndex * viewportWidth, y: 0 }}
-            decelerationRate="fast"
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
+          {previewIndex !== null ? <PagerView
+            initialPage={previewIndex}
+            offscreenPageLimit={1}
+            overdrag={false}
             style={styles.previewScroller}
-            onMomentumScrollEnd={(event) => setPreviewIndex(Math.round(event.nativeEvent.contentOffset.x / viewportWidth))}
+            onPageSelected={(event) => setPreviewIndex(event.nativeEvent.position)}
           >
-            {previewImages.map((media, index) => <View accessibilityLabel={`媒体 ${index + 1}，共 ${previewImages.length} 个`} key={`${index}-${media.uri}`} style={[styles.previewPage, { width: viewportWidth }]}>
+            {previewImages.map((media, index) => <View accessibilityLabel={`媒体 ${index + 1}，共 ${previewImages.length} 个`} collapsable={false} key={`${index}-${media.uri}`} style={styles.previewPage}>
               <MediaViewer media={media} />
             </View>)}
-          </ScrollView> : null}
+          </PagerView> : null}
           {previewIndex !== null && previewImages.length > 1 ? <Text style={styles.previewCount}>{previewIndex + 1} / {previewImages.length}</Text> : null}
           <Pressable accessibilityLabel="关闭图片" onPress={() => setPreviewIndex(null)} hitSlop={12} style={styles.previewCloseButton}><Text style={styles.previewClose}>×</Text></Pressable>
         </GestureHandlerRootView>
       </Modal>
       <EntryActionModal visible={entryMenuVisible} onClose={() => setEntryMenuVisible(false)} onEdit={editEntry} onDelete={deleteCurrentEntry} onHistory={() => { setEntryMenuVisible(false); router.push({ pathname: '/history/[id]', params: { id: entry.id } }); }} />
-      <AppDialog visible={mediaMenuVisible} title="添加媒体" message="最多添加 5 个；拍照会打开系统相机，可切换照片或视频模式。" onClose={() => setMediaMenuVisible(false)} actions={[{ label: '相册', tone: 'primary', onPress: () => { setMediaMenuVisible(false); void pickFollowUpImages(); } }, { label: '拍照', onPress: () => { setMediaMenuVisible(false); void captureFollowUpMedia(); } }]} />
+      <AppDialog visible={mediaMenuVisible} title="添加图片或视频" message="最多添加 5 个；拍照会打开系统相机，可切换照片或视频模式。" onClose={() => setMediaMenuVisible(false)} actions={[{ label: '相册', tone: 'primary', onPress: () => { setMediaMenuVisible(false); void pickFollowUpImages(); } }, { label: '拍照', onPress: () => { setMediaMenuVisible(false); void captureFollowUpMedia(); } }]} />
       <AppDialog visible={Boolean(followUpAction)} title={confirmingFollowUpDelete ? '删除这条后续？' : '后续操作'} message={confirmingFollowUpDelete ? '删除后将无法恢复。' : undefined} onClose={() => { setFollowUpAction(null); setConfirmingFollowUpDelete(false); }} actions={confirmingFollowUpDelete ? [{ label: '取消', onPress: () => setConfirmingFollowUpDelete(false) }, { label: '删除', tone: 'danger', onPress: async () => { if (!followUpAction) return; try { const images = await deleteFollowUp(db, followUpAction.id); images.forEach(deleteJournalImage); setFollowUpAction(null); setConfirmingFollowUpDelete(false); await load(); } catch { Alert.alert('删除失败', '这条后续暂时无法删除，请稍后重试。'); } } }] : [{ label: '编辑', tone: 'primary', onPress: () => { if (!followUpAction) return; setEditingFollowUp(followUpAction); setEditValue(followUpAction.content); setFollowUpAction(null); } }, { label: '删除', tone: 'danger', onPress: () => setConfirmingFollowUpDelete(true) }]} />
     </KeyboardAvoidingView>
   </SafeAreaView>;
@@ -260,7 +281,7 @@ const styles = StyleSheet.create({
   followUpItem: { flexDirection: 'row', minHeight: 44 }, rail: { width: 20, alignItems: 'center' }, dot: { width: 8, height: 8, marginTop: 4, borderRadius: 4, borderWidth: 2, borderColor: colors.primary, backgroundColor: colors.background }, line: { width: 1, flex: 1, marginVertical: 3, backgroundColor: colors.border },
   followUpBody: { flex: 1, paddingBottom: spacing.sm }, followUpMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, followUpTime: { color: colors.textFaint, fontSize: 10 }, followUpMenu: { minWidth: 28, color: colors.textSecondary, textAlign: 'right', letterSpacing: 1 }, followUpText: { marginTop: 1, color: colors.text, fontSize: 13, lineHeight: 20 }, followUpImageRow: { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.sm }, followUpImage: { width: 72, height: 72, borderRadius: radii.sm },
   empty: { color: colors.textFaint, textAlign: 'center', paddingVertical: spacing.xl, fontSize: 11 },
-  inputArea: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, inputBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, imagePickerButton: { minWidth: 34, height: 40, alignItems: 'center', justifyContent: 'center' }, imagePickerText: { color: colors.primary, fontSize: 11, fontWeight: '700' }, pendingImages: { flexDirection: 'row', gap: spacing.sm, paddingBottom: spacing.sm }, pendingImage: { width: 50, height: 50, borderRadius: radii.sm }, pendingRemove: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: colors.overlay }, pendingRemoveText: { color: '#FFFFFF', fontSize: 14, lineHeight: 16 },
+  inputArea: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, inputBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, imagePickerButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: 16 }, imagePickerText: { color: colors.primary, fontSize: 18, lineHeight: 20, fontWeight: '400' }, pendingImages: { flexDirection: 'row', gap: spacing.sm, paddingTop: 5, paddingBottom: spacing.sm }, pendingImage: { width: 50, height: 50, borderRadius: radii.sm }, pendingSorting: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm }, pendingSortControls: { position: 'absolute', left: 3, right: 3, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' }, pendingSortButton: { width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: colors.overlay }, pendingSortText: { color: '#FFFFFF', fontSize: 18, lineHeight: 19, fontWeight: '600' }, sortDisabled: { opacity: 0.3 }, pendingRemove: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: colors.overlay }, pendingRemoveText: { color: '#FFFFFF', fontSize: 14, lineHeight: 16 },
   input: { flex: 1, height: 40, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 13 }, send: { color: colors.primary, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.3 },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center' }, loadingText: { color: colors.textFaint, fontSize: 12 }, missingTitle: { fontFamily: fonts.serif, fontSize: 18 }, backLink: { marginTop: spacing.lg, color: colors.primary },
   modalKeyboard: { flex: 1 }, modalOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, modalCard: { width: '100%', padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.surface }, modalTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' },

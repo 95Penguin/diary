@@ -13,10 +13,18 @@ import { exportBackupFile } from '@/utils/backup-export';
 import { embedBackupImages, materializeBackupImages } from '@/utils/backup-images';
 import { parseJournalBackup } from '@/utils/backup-import';
 import { formatShortDateTime } from '@/utils/date';
-import { deleteJournalImage } from '@/utils/image-storage';
+import { deleteJournalImage, getJournalMediaStorageUsage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
 
 const EMPTY_STATS: JournalStats = { entries: 0, followUps: 0, images: 0, deleted: 0 };
+type OperationProgress = { label: string; value: number } | null;
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
 
 export default function BackupScreen() {
   const db = useSQLiteContext();
@@ -27,11 +35,14 @@ export default function BackupScreen() {
   const [importing, setImporting] = useState(false);
   const [pendingBackup, setPendingBackup] = useState<JournalBackup | null>(null);
   const [message, setMessage] = useState('');
+  const [mediaBytes, setMediaBytes] = useState(0);
+  const [operationProgress, setOperationProgress] = useState<OperationProgress>(null);
 
   const load = useCallback(async () => {
-    const [nextStats, exportedAt] = await Promise.all([getJournalStats(db), getLastExportAt(db)]);
+    const [nextStats, exportedAt, storage] = await Promise.all([getJournalStats(db), getLastExportAt(db), getJournalMediaStorageUsage()]);
     setStats(nextStats);
     setLastExportAt(exportedAt);
+    setMediaBytes(storage.bytes);
   }, [db]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
@@ -39,19 +50,30 @@ export default function BackupScreen() {
     if (exporting) return;
     setExporting(true);
     setMessage('');
+    setOperationProgress({ label: '正在准备记录', value: 0.03 });
     try {
-      const backup = await embedBackupImages(await createJournalExport(db));
-      const missingImages = backup.images.filter((image) => !image.dataBase64).length;
+      const source = await createJournalExport(db);
+      const backup = await embedBackupImages(source, (completed, total) => {
+        setOperationProgress({
+          label: total ? `正在读取媒体 ${completed}/${total}` : '正在整理数据',
+          value: 0.08 + 0.74 * (total ? completed / total : 1),
+        });
+      });
+      const missingMedia = [...backup.images, ...(backup.followUpImages ?? [])].filter((image) => !image.dataBase64).length;
       const localDate = new Date().toLocaleDateString('sv-SE');
-      await exportBackupFile(JSON.stringify(backup, null, 2), `拾时备份-${localDate}.json`);
+      setOperationProgress({ label: '正在生成备份文件', value: 0.88 });
+      const json = JSON.stringify(backup);
+      await exportBackupFile(json, `拾时备份-${localDate}.json`);
       const now = new Date().toISOString();
       await saveLastExportAt(db, now);
       setLastExportAt(now);
-      setMessage(missingImages ? `备份已生成，${missingImages} 张本地图片未找到` : '完整备份文件已生成');
+      setOperationProgress({ label: '备份已完成', value: 1 });
+      setMessage(missingMedia ? `备份已生成（约 ${formatBytes(json.length)}），${missingMedia} 个本地媒体文件未找到` : `完整备份已生成（约 ${formatBytes(json.length)}）`);
     } catch {
       setMessage('导出失败，请稍后重试');
     } finally {
       setExporting(false);
+      setOperationProgress(null);
     }
   }
 
@@ -71,15 +93,23 @@ export default function BackupScreen() {
   async function restoreBackup() {
     if (!pendingBackup || importing) return;
     setImporting(true);
+    setOperationProgress({ label: '正在准备恢复', value: 0.03 });
     let createdImageUris: string[] = [];
     try {
-      const materialized = await materializeBackupImages(pendingBackup);
+      const materialized = await materializeBackupImages(pendingBackup, (completed, total) => {
+        setOperationProgress({
+          label: total ? `正在恢复媒体 ${completed}/${total}` : '正在恢复数据',
+          value: 0.06 + 0.76 * (total ? completed / total : 1),
+        });
+      });
       createdImageUris = materialized.createdUris;
+      setOperationProgress({ label: '正在合并记录', value: 0.88 });
       const result = await importJournalBackup(db, materialized.backup);
       setPendingBackup(null);
       await load();
       const created = result.createdEntries + result.createdFollowUps;
       const updated = result.updatedEntries + result.updatedFollowUps;
+      setOperationProgress({ label: '恢复已完成', value: 1 });
       setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条`);
     } catch {
       createdImageUris.forEach(deleteJournalImage);
@@ -87,6 +117,7 @@ export default function BackupScreen() {
       setMessage('恢复失败，原有记录没有被清空');
     } finally {
       setImporting(false);
+      setOperationProgress(null);
     }
   }
 
@@ -98,20 +129,25 @@ export default function BackupScreen() {
     <View style={styles.content}>
       <View style={[styles.summary, { backgroundColor: readingTheme.surface }]}>
         <Text style={styles.summaryTitle}>我的日迹</Text>
-        <Text style={[styles.summaryCount, { color: readingTheme.text }]}>{stats.entries} 条记录 · {stats.followUps} 条后续 · {stats.images} 张图片</Text>
+        <Text style={[styles.summaryCount, { color: readingTheme.text }]}>{stats.entries} 条记录 · {stats.followUps} 条后续 · {stats.images} 个媒体</Text>
+        <Text style={[styles.lastExport, { color: readingTheme.secondary }]}>本地媒体占用：{formatBytes(mediaBytes)}</Text>
         {lastExportAt ? <Text style={[styles.lastExport, { color: readingTheme.secondary }]}>上次导出：{formatShortDateTime(lastExportAt)}</Text> : <Text style={[styles.lastExport, { color: readingTheme.secondary }]}>还没有导出过备份</Text>}
       </View>
 
       <View style={[styles.explanation, { backgroundColor: readingTheme.surface }]}>
         <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>JSON 数据备份</Text>
-        <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>包含记录正文、时间、后续、标签、编辑历史和图片内容，可用于换机或重装后恢复。</Text>
-        <View style={[styles.notice, { backgroundColor: readingTheme.background }]}><Text style={[styles.noticeText, { color: readingTheme.secondary }]}>图片会写入备份文件，照片较多时导出和恢复可能需要一些时间。</Text></View>
+        <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>包含记录正文、时间、后续、标签、编辑历史、图片、视频和视频封面，可用于换机或重装后恢复。</Text>
+        <View style={[styles.notice, { backgroundColor: readingTheme.background }]}><Text style={[styles.noticeText, { color: readingTheme.secondary }]}>媒体文件会写入备份，视频较多时文件会明显变大，导出和恢复也需要更长时间。</Text></View>
       </View>
 
       <Pressable disabled={exporting} onPress={() => void exportJson()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
         {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>导出 JSON 文件</Text>}
       </Pressable>
       <Pressable disabled={importing} onPress={() => void chooseBackup()} style={({ pressed }) => [styles.importButton, pressed && styles.pressed]}><Text style={styles.importText}>从 JSON 恢复</Text></Pressable>
+      {operationProgress ? <View style={styles.progressArea}>
+        <View style={[styles.progressTrack, { backgroundColor: readingTheme.surface }]}><View style={[styles.progressFill, { width: `${Math.round(operationProgress.value * 100)}%` }]} /></View>
+        <Text style={[styles.progressLabel, { color: readingTheme.secondary }]}>{operationProgress.label}</Text>
+      </View> : null}
       {message ? <Text style={[styles.message, message.includes('失败') && styles.error]}>{message}</Text> : null}
       <Text style={styles.hint}>手机端会打开系统分享面板，可保存到文件、网盘或发送给自己；Web 端会直接下载。</Text>
     </View>
@@ -141,6 +177,7 @@ const styles = StyleSheet.create({
   exportButton: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, pressed: { opacity: 0.62 }, exportText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   importButton: { height: 42, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, importText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
   message: { marginTop: spacing.md, color: colors.primary, fontSize: 11, textAlign: 'center' }, error: { color: colors.danger },
+  progressArea: { marginTop: spacing.md }, progressTrack: { height: 5, overflow: 'hidden', borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, progressFill: { height: '100%', borderRadius: radii.pill, backgroundColor: colors.primary }, progressLabel: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 9, textAlign: 'center' },
   hint: { marginTop: spacing.lg, paddingHorizontal: spacing.md, color: colors.textFaint, fontSize: 10, lineHeight: 17, textAlign: 'center' },
   overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, confirmCard: { width: '100%', maxWidth: 320, padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.background },
   confirmTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, confirmSummary: { marginTop: spacing.md, color: colors.primary, fontSize: 11, fontWeight: '600', textAlign: 'center' }, confirmHint: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 10, lineHeight: 16, textAlign: 'center' },

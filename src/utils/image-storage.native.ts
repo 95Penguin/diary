@@ -1,6 +1,7 @@
 import { Directory, EncodingType, File, Paths } from 'expo-file-system';
 
 const imageDirectory = new Directory(Paths.document, 'journal-images');
+let lastCleanupAt = 0;
 
 export async function persistJournalImage(sourceUri: string, suggestedName?: string | null) {
   imageDirectory.create({ idempotent: true, intermediates: true });
@@ -27,4 +28,51 @@ export function deleteJournalImage(uri: string) {
   } catch {
     // A missing file is already in the desired state.
   }
+}
+
+export async function getJournalMediaStorageUsage() {
+  if (!imageDirectory.exists) return { files: 0, bytes: 0 };
+  let files = 0;
+  let bytes = 0;
+  for (const item of imageDirectory.list()) {
+    if (!(item instanceof File)) continue;
+    files += 1;
+    bytes += item.size ?? 0;
+  }
+  return { files, bytes };
+}
+
+export async function cleanupUnusedJournalMedia(referencedUris: string[], gracePeriodMs = 6 * 60 * 60 * 1000) {
+  const now = Date.now();
+  if (now - lastCleanupAt < 60 * 60 * 1000) {
+    const usage = await getJournalMediaStorageUsage();
+    return { ...usage, deletedFiles: 0, freedBytes: 0 };
+  }
+  lastCleanupAt = now;
+  if (!imageDirectory.exists) return { files: 0, bytes: 0, deletedFiles: 0, freedBytes: 0 };
+
+  const referenced = new Set(referencedUris);
+  let files = 0;
+  let bytes = 0;
+  let deletedFiles = 0;
+  let freedBytes = 0;
+  for (const item of imageDirectory.list()) {
+    if (!(item instanceof File)) continue;
+    const size = item.size ?? 0;
+    const modifiedAt = item.modificationTime ?? now;
+    if (!referenced.has(item.uri) && now - modifiedAt >= gracePeriodMs) {
+      try {
+        item.delete();
+        deletedFiles += 1;
+        freedBytes += size;
+      } catch {
+        files += 1;
+        bytes += size;
+      }
+      continue;
+    }
+    files += 1;
+    bytes += size;
+  }
+  return { files, bytes, deletedFiles, freedBytes };
 }

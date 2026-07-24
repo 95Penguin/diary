@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-const DATABASE_VERSION = 11;
+const DATABASE_VERSION = 12;
 
 export async function migrateDatabase(db: SQLiteDatabase) {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
@@ -149,6 +149,14 @@ export async function migrateDatabase(db: SQLiteDatabase) {
       ALTER TABLE follow_up_images ADD COLUMN duration INTEGER;
     `);
     currentVersion = 11;
+  }
+
+  if (currentVersion === 11) {
+    await db.execAsync(`
+      ALTER TABLE entry_images ADD COLUMN thumbnail_uri TEXT;
+      ALTER TABLE follow_up_images ADD COLUMN thumbnail_uri TEXT;
+    `);
+    currentVersion = 12;
   }
 
   if (currentVersion < DATABASE_VERSION) throw new Error(`不支持的数据库版本：${currentVersion}`);

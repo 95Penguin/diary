@@ -1,30 +1,19 @@
 import { Image } from 'expo-image';
-import { LivePhotoView } from 'expo-live-photo';
-import { useVideoPlayer, VideoView, type VideoThumbnail as ExpoVideoThumbnail } from 'expo-video';
-import { useEffect, useState } from 'react';
-import { Platform, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { EntryImage, FollowUpImage } from '@/domain/journal';
 import { ZoomableImage } from '@/components/zoomable-image';
 
-export type JournalMedia = Pick<EntryImage | FollowUpImage, 'uri' | 'mediaType' | 'pairedVideoUri' | 'duration'>;
+export type JournalMedia = Pick<EntryImage | FollowUpImage, 'uri' | 'mediaType' | 'pairedVideoUri' | 'duration' | 'thumbnailUri'>;
 
 export function MediaThumbnail({ media, style }: { media: JournalMedia; style?: StyleProp<ViewStyle> }) {
   if (isVideo(media)) return <VideoThumbnail media={media} style={style} />;
-  return <View style={[styles.mediaThumb, style]}><Image source={media.uri} contentFit="cover" style={StyleSheet.absoluteFill} />{media.mediaType === 'livePhoto' ? <Text style={styles.liveBadge}>LIVE</Text> : null}</View>;
+  return <View style={[styles.mediaThumb, style]}><Image source={media.uri} cachePolicy="memory-disk" contentFit="cover" style={StyleSheet.absoluteFill} /></View>;
 }
 
 export function MediaViewer({ media }: { media: JournalMedia }) {
   if (isVideo(media)) return <VideoPlayer uri={media.uri} />;
-  if (media.mediaType === 'livePhoto' && media.pairedVideoUri && Platform.OS === 'ios' && LivePhotoView.isAvailable()) {
-    return <View style={styles.full}>
-      <LivePhotoView source={{ photoUri: media.uri, pairedVideoUri: media.pairedVideoUri }} contentFit="contain" style={styles.full} />
-      <View pointerEvents="none" style={styles.liveHint}><Text style={styles.liveHintText}>长按播放实况</Text></View>
-    </View>;
-  }
-  // Android does not implement Apple's Live Photo container. When a valid
-  // paired motion clip exists, playing that clip is the closest useful fallback.
-  if (media.mediaType === 'livePhoto' && media.pairedVideoUri) return <VideoPlayer uri={media.pairedVideoUri} />;
   return <ZoomableImage key={media.uri} uri={media.uri} />;
 }
 
@@ -35,22 +24,17 @@ function isVideo(media: JournalMedia) {
 }
 
 function VideoThumbnail({ media, style }: { media: JournalMedia; style?: StyleProp<ViewStyle> }) {
-  const player = useVideoPlayer(media.uri);
-  const [thumbnail, setThumbnail] = useState<ExpoVideoThumbnail | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    void player.generateThumbnailsAsync(0.05, { maxWidth: 480, maxHeight: 480 })
-      .then(([result]) => { if (active && result) setThumbnail(result); })
-      .catch(() => undefined);
-    return () => { active = false; };
-  }, [player]);
-
   return <View style={[styles.videoThumb, style]}>
-    {thumbnail ? <Image source={thumbnail} contentFit="cover" style={StyleSheet.absoluteFill} /> : null}
-    <View style={styles.playCircle}><Text style={styles.play}>▶</Text></View>
-    {media.duration ? <Text style={styles.duration}>{formatDuration(media.duration)}</Text> : null}
+    {media.thumbnailUri ? <Image source={media.thumbnailUri} cachePolicy="memory-disk" contentFit="cover" style={StyleSheet.absoluteFill} /> : null}
+    <VideoBadge duration={media.duration} />
   </View>;
+}
+
+function VideoBadge({ duration }: { duration: number | null }) {
+  return <>
+    <View style={styles.playCircle}><Text style={styles.play}>▶</Text></View>
+    {duration ? <Text style={styles.duration}>{formatDuration(duration)}</Text> : null}
+  </>;
 }
 
 function VideoPlayer({ uri }: { uri: string }) {
@@ -72,7 +56,4 @@ const styles = StyleSheet.create({
   playCircle: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#00000080' },
   play: { marginLeft: 2, color: '#FFFFFF', fontSize: 16 },
   duration: { position: 'absolute', right: 5, bottom: 4, overflow: 'hidden', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, backgroundColor: '#00000099', color: '#FFFFFF', fontSize: 9 },
-  liveBadge: { position: 'absolute', left: 5, top: 5, overflow: 'hidden', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5, backgroundColor: '#00000099', color: '#FFFFFF', fontSize: 7, fontWeight: '700' },
-  liveHint: { position: 'absolute', left: 0, right: 0, bottom: 42, alignItems: 'center' },
-  liveHintText: { overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: '#00000080', color: '#FFFFFF', fontSize: 11 },
 });

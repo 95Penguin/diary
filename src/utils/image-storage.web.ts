@@ -10,3 +10,11 @@ export async function persistJournalImageBase64(dataBase64: string, extension = 
 export function deleteJournalImage(_uri: string) {
   // Browser object URLs are managed by the picker/browser lifecycle.
 }
+
+export async function getJournalMediaStorageUsage() {
+  return { files: 0, bytes: 0 };
+}
+
+export async function cleanupUnusedJournalMedia(_referencedUris: string[]) {
+  return { files: 0, bytes: 0, deletedFiles: 0, freedBytes: 0 };
+}

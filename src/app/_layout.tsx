@@ -12,6 +12,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { migrateDatabase } from '@/database/migrate';
 import { AppPreferencesProvider } from '@/preferences/app-preferences';
 import { colors } from '@/theme/tokens';
+import { backfillVideoThumbnails } from '@/utils/video-thumbnail-cache';
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -31,13 +32,18 @@ export default function RootLayout() {
     <GestureHandlerRootView style={styles.root}>
       <DatabaseErrorBoundary>
         <Suspense fallback={<LoadingFallback />}>
-          <SQLiteProvider databaseName="shishi.db" onInit={migrateDatabase} useSuspense>
+          <SQLiteProvider databaseName="shishi.db" onInit={initializeDatabase} useSuspense>
             <AppPreferencesProvider><AppStack /></AppPreferencesProvider>
           </SQLiteProvider>
         </Suspense>
       </DatabaseErrorBoundary>
     </GestureHandlerRootView>
   );
+}
+
+async function initializeDatabase(db: Parameters<typeof migrateDatabase>[0]) {
+  await migrateDatabase(db);
+  void backfillVideoThumbnails(db).catch((error) => console.warn('Video thumbnail backfill failed', error));
 }
 
 function AppStack() {
