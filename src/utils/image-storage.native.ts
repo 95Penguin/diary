@@ -1,5 +1,7 @@
 import { Directory, EncodingType, File, Paths } from 'expo-file-system';
 
+import { shouldDeleteUnusedMedia } from '@/utils/media-cleanup-policy';
+
 const imageDirectory = new Directory(Paths.document, 'journal-images');
 let lastCleanupAt = 0;
 
@@ -17,6 +19,15 @@ export async function persistJournalImageBase64(dataBase64: string, extension = 
   const destination = new File(imageDirectory, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${safeExtension}`);
   destination.create({ intermediates: true });
   destination.write(dataBase64, { encoding: EncodingType.Base64 });
+  return destination.uri;
+}
+
+export async function persistJournalImageBytes(data: Uint8Array, extension = '.jpg') {
+  imageDirectory.create({ idempotent: true, intermediates: true });
+  const safeExtension = /^\.[a-zA-Z0-9]+$/.test(extension) ? extension : '.jpg';
+  const destination = new File(imageDirectory, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}${safeExtension}`);
+  destination.create({ intermediates: true });
+  destination.write(data);
   return destination.uri;
 }
 
@@ -59,8 +70,12 @@ export async function cleanupUnusedJournalMedia(referencedUris: string[], graceP
   for (const item of imageDirectory.list()) {
     if (!(item instanceof File)) continue;
     const size = item.size ?? 0;
-    const modifiedAt = item.modificationTime ?? now;
-    if (!referenced.has(item.uri) && now - modifiedAt >= gracePeriodMs) {
+    if (shouldDeleteUnusedMedia(
+      { uri: item.uri, modificationTime: item.modificationTime },
+      referenced,
+      now,
+      gracePeriodMs,
+    )) {
       try {
         item.delete();
         deletedFiles += 1;

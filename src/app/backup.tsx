@@ -9,9 +9,10 @@ import { File } from 'expo-file-system';
 import { createJournalExport, getJournalStats, getLastExportAt, importJournalBackup, saveLastExportAt } from '@/database/journal-repository';
 import type { JournalBackup, JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
-import { exportBackupFile } from '@/utils/backup-export';
-import { embedBackupImages, materializeBackupImages } from '@/utils/backup-images';
+import { exportBackupBytes } from '@/utils/backup-export';
+import { materializeBackupImages } from '@/utils/backup-images';
 import { parseJournalBackup } from '@/utils/backup-import';
+import { createZipBackup, inspectZipBackup, materializeZipBackup } from '@/utils/backup-zip';
 import { formatShortDateTime } from '@/utils/date';
 import { deleteJournalImage, getJournalMediaStorageUsage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
@@ -34,6 +35,7 @@ export default function BackupScreen() {
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [pendingBackup, setPendingBackup] = useState<JournalBackup | null>(null);
+  const [pendingZipUri, setPendingZipUri] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [mediaBytes, setMediaBytes] = useState(0);
   const [operationProgress, setOperationProgress] = useState<OperationProgress>(null);
@@ -46,29 +48,27 @@ export default function BackupScreen() {
   }, [db]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
-  async function exportJson() {
+  async function exportZip() {
     if (exporting) return;
     setExporting(true);
     setMessage('');
     setOperationProgress({ label: '正在准备记录', value: 0.03 });
     try {
       const source = await createJournalExport(db);
-      const backup = await embedBackupImages(source, (completed, total) => {
+      const archive = await createZipBackup(source, (completed, total) => {
         setOperationProgress({
           label: total ? `正在读取媒体 ${completed}/${total}` : '正在整理数据',
           value: 0.08 + 0.74 * (total ? completed / total : 1),
         });
       });
-      const missingMedia = [...backup.images, ...(backup.followUpImages ?? [])].filter((image) => !image.dataBase64).length;
       const localDate = new Date().toLocaleDateString('sv-SE');
-      setOperationProgress({ label: '正在生成备份文件', value: 0.88 });
-      const json = JSON.stringify(backup);
-      await exportBackupFile(json, `拾时备份-${localDate}.json`);
+      setOperationProgress({ label: '正在生成 ZIP 文件', value: 0.88 });
+      await exportBackupBytes(archive.bytes, `拾时备份-${localDate}.zip`);
       const now = new Date().toISOString();
       await saveLastExportAt(db, now);
       setLastExportAt(now);
       setOperationProgress({ label: '备份已完成', value: 1 });
-      setMessage(missingMedia ? `备份已生成（约 ${formatBytes(json.length)}），${missingMedia} 个本地媒体文件未找到` : `完整备份已生成（约 ${formatBytes(json.length)}）`);
+      setMessage(archive.missingMedia ? `ZIP 备份已生成（${formatBytes(archive.bytes.length)}），${archive.missingMedia} 个本地媒体文件未找到` : `完整 ZIP 备份已生成（${formatBytes(archive.bytes.length)}）`);
     } catch {
       setMessage('导出失败，请稍后重试');
     } finally {
@@ -80,10 +80,18 @@ export default function BackupScreen() {
   async function chooseBackup() {
     setMessage('');
     try {
-      const picked = await DocumentPicker.getDocumentAsync({ type: ['application/json', 'text/json'], copyToCacheDirectory: true });
+      const picked = await DocumentPicker.getDocumentAsync({ type: ['application/zip', 'application/x-zip-compressed', 'application/json', 'text/json'], copyToCacheDirectory: true });
       if (picked.canceled) return;
-      const contents = await new File(picked.assets[0].uri).text();
-      setPendingBackup(parseJournalBackup(contents));
+      const asset = picked.assets[0];
+      const file = new File(asset.uri);
+      const isZip = asset.name.toLowerCase().endsWith('.zip') || asset.mimeType?.includes('zip');
+      if (isZip) {
+        setPendingBackup(inspectZipBackup(await file.bytes()));
+        setPendingZipUri(asset.uri);
+      } else {
+        setPendingBackup(parseJournalBackup(await file.text()));
+        setPendingZipUri(null);
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : '';
       setMessage(reason === 'unsupported-backup' ? '暂不支持这个备份版本' : '无法读取这个备份文件');
@@ -95,26 +103,34 @@ export default function BackupScreen() {
     setImporting(true);
     setOperationProgress({ label: '正在准备恢复', value: 0.03 });
     let createdImageUris: string[] = [];
+    let imported = false;
     try {
-      const materialized = await materializeBackupImages(pendingBackup, (completed, total) => {
+      const reportProgress = (completed: number, total: number) => {
         setOperationProgress({
           label: total ? `正在恢复媒体 ${completed}/${total}` : '正在恢复数据',
           value: 0.06 + 0.76 * (total ? completed / total : 1),
         });
-      });
+      };
+      const materialized = pendingZipUri
+        ? await materializeZipBackup(await new File(pendingZipUri).bytes(), reportProgress)
+        : await materializeBackupImages(pendingBackup, reportProgress);
       createdImageUris = materialized.createdUris;
       setOperationProgress({ label: '正在合并记录', value: 0.88 });
       const result = await importJournalBackup(db, materialized.backup);
+      imported = true;
       setPendingBackup(null);
+      setPendingZipUri(null);
       await load();
       const created = result.createdEntries + result.createdFollowUps;
       const updated = result.updatedEntries + result.updatedFollowUps;
       setOperationProgress({ label: '恢复已完成', value: 1 });
       setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条`);
-    } catch {
-      createdImageUris.forEach(deleteJournalImage);
+    } catch (error) {
+      if (!imported) createdImageUris.forEach(deleteJournalImage);
       setPendingBackup(null);
-      setMessage('恢复失败，原有记录没有被清空');
+      setPendingZipUri(null);
+      const reason = error instanceof Error ? error.message : '';
+      setMessage(reason === 'missing-backup-media' ? '备份文件不完整，未恢复任何数据' : '恢复失败，原有记录没有被清空');
     } finally {
       setImporting(false);
       setOperationProgress(null);
@@ -135,15 +151,15 @@ export default function BackupScreen() {
       </View>
 
       <View style={[styles.explanation, { backgroundColor: readingTheme.surface }]}>
-        <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>JSON 数据备份</Text>
-        <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>包含记录正文、时间、后续、标签、编辑历史、图片、视频和视频封面，可用于换机或重装后恢复。</Text>
-        <View style={[styles.notice, { backgroundColor: readingTheme.background }]}><Text style={[styles.noticeText, { color: readingTheme.secondary }]}>媒体文件会写入备份，视频较多时文件会明显变大，导出和恢复也需要更长时间。</Text></View>
+        <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>ZIP 完整备份</Text>
+        <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>记录数据保存为独立 JSON，图片、视频和封面按文件存放，避免 Base64 额外增加约三分之一体积。</Text>
+        <View style={[styles.notice, { backgroundColor: readingTheme.background }]}><Text style={[styles.noticeText, { color: readingTheme.secondary }]}>仍兼容以前导出的 JSON 备份；视频较多时导出和恢复需要更长时间。</Text></View>
       </View>
 
-      <Pressable disabled={exporting} onPress={() => void exportJson()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
-        {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>导出 JSON 文件</Text>}
+      <Pressable disabled={exporting} onPress={() => void exportZip()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
+        {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>导出 ZIP 完整备份</Text>}
       </Pressable>
-      <Pressable disabled={importing} onPress={() => void chooseBackup()} style={({ pressed }) => [styles.importButton, pressed && styles.pressed]}><Text style={styles.importText}>从 JSON 恢复</Text></Pressable>
+      <Pressable disabled={importing} onPress={() => void chooseBackup()} style={({ pressed }) => [styles.importButton, pressed && styles.pressed]}><Text style={styles.importText}>从 ZIP 或 JSON 恢复</Text></Pressable>
       {operationProgress ? <View style={styles.progressArea}>
         <View style={[styles.progressTrack, { backgroundColor: readingTheme.surface }]}><View style={[styles.progressFill, { width: `${Math.round(operationProgress.value * 100)}%` }]} /></View>
         <Text style={[styles.progressLabel, { color: readingTheme.secondary }]}>{operationProgress.label}</Text>
@@ -151,13 +167,13 @@ export default function BackupScreen() {
       {message ? <Text style={[styles.message, message.includes('失败') && styles.error]}>{message}</Text> : null}
       <Text style={styles.hint}>手机端会打开系统分享面板，可保存到文件、网盘或发送给自己；Web 端会直接下载。</Text>
     </View>
-    <Modal visible={Boolean(pendingBackup)} transparent animationType="fade" onRequestClose={() => setPendingBackup(null)}>
-      <Pressable onPress={() => setPendingBackup(null)} style={styles.overlay}>
+    <Modal visible={Boolean(pendingBackup)} transparent animationType="fade" onRequestClose={() => { setPendingBackup(null); setPendingZipUri(null); }}>
+      <Pressable onPress={() => { setPendingBackup(null); setPendingZipUri(null); }} style={styles.overlay}>
         <Pressable onPress={(event) => event.stopPropagation()} style={[styles.confirmCard, { backgroundColor: readingTheme.background }]}>
           <Text style={[styles.confirmTitle, { color: readingTheme.text }]}>合并这份备份？</Text>
           {pendingBackup ? <Text style={styles.confirmSummary}>{pendingBackup.entries.length} 条记录 · {pendingBackup.followUps.length} 条后续 · {pendingBackup.tags.length} 个标签</Text> : null}
           <Text style={[styles.confirmHint, { color: readingTheme.secondary }]}>不会清空现有内容；同一记录将保留更新时间较新的版本。</Text>
-          <View style={styles.confirmActions}><Pressable onPress={() => setPendingBackup(null)} style={[styles.confirmButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={importing} onPress={() => void restoreBackup()} style={[styles.confirmButton, styles.restoreButton]}>{importing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.restoreText}>开始恢复</Text>}</Pressable></View>
+          <View style={styles.confirmActions}><Pressable onPress={() => { setPendingBackup(null); setPendingZipUri(null); }} style={[styles.confirmButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={importing} onPress={() => void restoreBackup()} style={[styles.confirmButton, styles.restoreButton]}>{importing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.restoreText}>开始恢复</Text>}</Pressable></View>
         </Pressable>
       </Pressable>
     </Modal>

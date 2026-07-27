@@ -16,8 +16,9 @@ import { formatFullDate, formatShortDateTime } from '@/utils/date';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
+import { DraggableMediaItem } from '@/components/draggable-media-item';
 import { MediaThumbnail, MediaViewer, type JournalMedia } from '@/components/media-view';
-import { getPickerMediaType } from '@/utils/picker-media';
+import { getPickerMediaType, preparePickedMedia } from '@/utils/picker-media';
 import { createPersistentVideoThumbnail } from '@/utils/video-thumbnail-cache';
 
 type PendingMedia = JournalMedia & { width: number; height: number; fileName?: string | null; pairedVideoFileName?: string | null };
@@ -30,7 +31,6 @@ export default function EntryDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [followUp, setFollowUp] = useState('');
   const [followUpImages, setFollowUpImages] = useState<PendingMedia[]>([]);
-  const [sortingFollowUpImage, setSortingFollowUpImage] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
   const [editingFollowUp, setEditingFollowUp] = useState<FollowUp | null>(null);
   const [followUpAction, setFollowUpAction] = useState<FollowUp | null>(null);
@@ -41,6 +41,7 @@ export default function EntryDetailScreen() {
   const [mediaMenuVisible, setMediaMenuVisible] = useState(false);
   const [entryMenuVisible, setEntryMenuVisible] = useState(false);
   const [followUpOrder, setFollowUpOrder] = useState<'asc' | 'desc'>('asc');
+  const [compressionStatus, setCompressionStatus] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) { setLoading(false); return; }
@@ -108,8 +109,7 @@ export default function EntryDetailScreen() {
     ]);
   }
 
-  function moveFollowUpImage(from: number, direction: -1 | 1) {
-    const to = from + direction;
+  function reorderFollowUpImage(from: number, to: number) {
     if (to < 0 || to >= followUpImages.length) return;
     setFollowUpImages((current) => {
       const next = [...current];
@@ -117,7 +117,6 @@ export default function EntryDetailScreen() {
       next.splice(to, 0, moved);
       return next;
     });
-    setSortingFollowUpImage(to);
   }
 
   async function pickFollowUpImages() {
@@ -129,7 +128,10 @@ export default function EntryDetailScreen() {
       selectionLimit: remaining,
       quality: 0.9,
     });
-    if (!result.canceled) appendFollowUpMedia(result.assets, remaining);
+    if (!result.canceled) {
+      const prepared = await preparePickedMedia(result.assets, setCompressionStatus);
+      if (prepared) appendFollowUpMedia(prepared, remaining);
+    }
   }
 
   async function captureFollowUpMedia() {
@@ -142,7 +144,10 @@ export default function EntryDetailScreen() {
       videoMaxDuration: 60,
       quality: 0.9,
     });
-    if (!result.canceled) appendFollowUpMedia(result.assets, remaining);
+    if (!result.canceled) {
+      const prepared = await preparePickedMedia(result.assets, setCompressionStatus);
+      if (prepared) appendFollowUpMedia(prepared, remaining);
+    }
   }
 
   function openImagePreview(images: JournalMedia[], index: number) {
@@ -204,7 +209,7 @@ export default function EntryDetailScreen() {
         <Text style={styles.date}>{formatFullDate(entry.occurredAt)}</Text>
         <Text style={[styles.content, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale }]}>{entry.content}</Text>
         {entry.images.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.imageStrip}>
-          {entry.images.map((image, index) => <Pressable accessibilityLabel={`查看媒体 ${index + 1}`} key={image.id} onPress={() => openImagePreview(entry.images, index)}><MediaThumbnail media={image} style={styles.detailImage} /></Pressable>)}
+          {entry.images.map((image, index) => <Pressable accessibilityLabel={`查看媒体 ${index + 1}`} key={image.id} onPress={() => openImagePreview(entry.images, index)}><MediaThumbnail media={image} allowRuntimeVideoPoster style={styles.detailImage} /></Pressable>)}
         </ScrollView> : null}
         {entry.mood || entry.weather || entry.locationName || entry.tags.length ? <View style={styles.metaSummary}>
           {entry.mood ? <Text style={[styles.metaItem, { backgroundColor: readingTheme.surface, color: readingTheme.secondary }]}>{entry.mood}</Text> : null}
@@ -220,20 +225,17 @@ export default function EntryDetailScreen() {
           <View style={styles.followUpBody}>
             <View style={styles.followUpMeta}><Text style={[styles.followUpTime, { color: readingTheme.secondary }]}>{formatShortDateTime(item.createdAt)}</Text><Pressable accessibilityLabel="后续操作" hitSlop={10} onPress={() => openFollowUpMenu(item)}><Text style={[styles.followUpMenu, { color: readingTheme.secondary }]}>•••</Text></Pressable></View>
             <Text style={[styles.followUpText, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 22 * fontScale }]}>{item.content}</Text>
-            {item.images.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.followUpImageRow}>{item.images.map((image, index) => <Pressable key={image.id} onPress={() => openImagePreview(item.images, index)}><MediaThumbnail media={image} style={styles.followUpImage} /></Pressable>)}</ScrollView> : null}
+            {item.images.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.followUpImageRow}>{item.images.map((image, index) => <Pressable key={image.id} onPress={() => openImagePreview(item.images, index)}><MediaThumbnail media={image} allowRuntimeVideoPoster style={styles.followUpImage} /></Pressable>)}</ScrollView> : null}
           </View>
         </View>) : <Text style={[styles.empty, { color: readingTheme.secondary }]}>后来发生了什么？可以随时回来补充。</Text>}
       </ScrollView>
       <View style={[styles.inputArea, { backgroundColor: readingTheme.background, borderTopColor: readingTheme.border }]}>
         {followUpImages.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pendingImages}>{followUpImages.map((image, index) => <View key={image.uri}>
-          <Pressable accessibilityHint="长按后可调整顺序" accessibilityLabel={`第 ${index + 1} 个后续媒体`} delayLongPress={250} onLongPress={() => setSortingFollowUpImage(index)} onPress={() => sortingFollowUpImage !== null && setSortingFollowUpImage(index)} style={sortingFollowUpImage === index && styles.pendingSorting}><MediaThumbnail media={image} style={styles.pendingImage} /></Pressable>
-          {sortingFollowUpImage === index ? <View style={styles.pendingSortControls}>
-            <Pressable accessibilityLabel="向前移动" disabled={index === 0} onPress={() => moveFollowUpImage(index, -1)} style={[styles.pendingSortButton, index === 0 && styles.sortDisabled]}><Text style={styles.pendingSortText}>‹</Text></Pressable>
-            <Pressable accessibilityLabel="向后移动" disabled={index === followUpImages.length - 1} onPress={() => moveFollowUpImage(index, 1)} style={[styles.pendingSortButton, index === followUpImages.length - 1 && styles.sortDisabled]}><Text style={styles.pendingSortText}>›</Text></Pressable>
-          </View> : null}
-          <Pressable accessibilityLabel="移除后续媒体" onPress={() => { setSortingFollowUpImage(null); setFollowUpImages((current) => current.filter((_, itemIndex) => itemIndex !== index)); }} style={styles.pendingRemove}><Text style={styles.pendingRemoveText}>×</Text></Pressable>
+          <DraggableMediaItem accessibilityLabel={`第 ${index + 1} 个后续媒体`} columns={followUpImages.length} count={followUpImages.length} index={index} itemStride={58} onMove={reorderFollowUpImage}><MediaThumbnail media={image} allowRuntimeVideoPoster style={styles.pendingImage} /></DraggableMediaItem>
+          <Pressable accessibilityLabel="移除后续媒体" onPress={() => setFollowUpImages((current) => current.filter((_, itemIndex) => itemIndex !== index))} style={styles.pendingRemove}><Text style={styles.pendingRemoveText}>×</Text></Pressable>
         </View>)}</ScrollView> : null}
-        <View style={styles.inputBar}><TextInput maxLength={2000} value={followUp} onChangeText={setFollowUp} onSubmitEditing={() => void addFollowUp()} returnKeyType="send" placeholder="写一条后续……" placeholderTextColor={readingTheme.secondary} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text, fontFamily: readingFontFamily }]} /><Pressable accessibilityLabel="添加后续图片或视频" disabled={followUpImages.length >= 5 || sending} hitSlop={6} onPress={() => setMediaMenuVisible(true)} style={[styles.imagePickerButton, { backgroundColor: readingTheme.surface, borderColor: readingTheme.border }]}><Text style={styles.imagePickerText}>＋</Text></Pressable><Pressable disabled={(!followUp.trim() && !followUpImages.length) || sending} onPress={() => void addFollowUp()}><Text style={[styles.send, ((!followUp.trim() && !followUpImages.length) || sending) && styles.disabled]}>{sending ? '发送中' : '发送'}</Text></Pressable></View>
+        {compressionStatus ? <Text style={[styles.compressionStatus, { color: readingTheme.secondary }]}>{compressionStatus}</Text> : null}
+        <View style={styles.inputBar}><TextInput maxLength={2000} value={followUp} onChangeText={setFollowUp} onSubmitEditing={() => void addFollowUp()} returnKeyType="send" placeholder="写一条后续……" placeholderTextColor={readingTheme.secondary} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text, fontFamily: readingFontFamily }]} /><Pressable accessibilityLabel="添加后续图片或视频" disabled={followUpImages.length >= 5 || sending || Boolean(compressionStatus)} hitSlop={6} onPress={() => setMediaMenuVisible(true)} style={[styles.imagePickerButton, { backgroundColor: readingTheme.surface, borderColor: readingTheme.border }]}><Text style={styles.imagePickerText}>＋</Text></Pressable><Pressable disabled={(!followUp.trim() && !followUpImages.length) || sending} onPress={() => void addFollowUp()}><Text style={[styles.send, ((!followUp.trim() && !followUpImages.length) || sending) && styles.disabled]}>{sending ? '发送中' : '发送'}</Text></Pressable></View>
       </View>
       <Modal visible={Boolean(editingFollowUp)} transparent animationType="fade" onRequestClose={() => setEditingFollowUp(null)}>
         <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -262,7 +264,7 @@ export default function EntryDetailScreen() {
         </GestureHandlerRootView>
       </Modal>
       <EntryActionModal visible={entryMenuVisible} onClose={() => setEntryMenuVisible(false)} onEdit={editEntry} onDelete={deleteCurrentEntry} onHistory={() => { setEntryMenuVisible(false); router.push({ pathname: '/history/[id]', params: { id: entry.id } }); }} />
-      <AppDialog visible={mediaMenuVisible} title="添加图片或视频" message="最多添加 5 个；拍照会打开系统相机，可切换照片或视频模式。" onClose={() => setMediaMenuVisible(false)} actions={[{ label: '相册', tone: 'primary', onPress: () => { setMediaMenuVisible(false); void pickFollowUpImages(); } }, { label: '拍照', onPress: () => { setMediaMenuVisible(false); void captureFollowUpMedia(); } }]} />
+      <AppDialog visible={mediaMenuVisible} title="添加图片或视频" message="最多添加 5 个；拍照会打开系统相机，可切换照片或视频模式。" onClose={() => setMediaMenuVisible(false)} actions={[{ label: '相册', onPress: () => { setMediaMenuVisible(false); void pickFollowUpImages(); } }, { label: '拍照', onPress: () => { setMediaMenuVisible(false); void captureFollowUpMedia(); } }]} />
       <AppDialog visible={Boolean(followUpAction)} title={confirmingFollowUpDelete ? '删除这条后续？' : '后续操作'} message={confirmingFollowUpDelete ? '删除后将无法恢复。' : undefined} onClose={() => { setFollowUpAction(null); setConfirmingFollowUpDelete(false); }} actions={confirmingFollowUpDelete ? [{ label: '取消', onPress: () => setConfirmingFollowUpDelete(false) }, { label: '删除', tone: 'danger', onPress: async () => { if (!followUpAction) return; try { const images = await deleteFollowUp(db, followUpAction.id); images.forEach(deleteJournalImage); setFollowUpAction(null); setConfirmingFollowUpDelete(false); await load(); } catch { Alert.alert('删除失败', '这条后续暂时无法删除，请稍后重试。'); } } }] : [{ label: '编辑', tone: 'primary', onPress: () => { if (!followUpAction) return; setEditingFollowUp(followUpAction); setEditValue(followUpAction.content); setFollowUpAction(null); } }, { label: '删除', tone: 'danger', onPress: () => setConfirmingFollowUpDelete(true) }]} />
     </KeyboardAvoidingView>
   </SafeAreaView>;
@@ -281,7 +283,7 @@ const styles = StyleSheet.create({
   followUpItem: { flexDirection: 'row', minHeight: 44 }, rail: { width: 20, alignItems: 'center' }, dot: { width: 8, height: 8, marginTop: 4, borderRadius: 4, borderWidth: 2, borderColor: colors.primary, backgroundColor: colors.background }, line: { width: 1, flex: 1, marginVertical: 3, backgroundColor: colors.border },
   followUpBody: { flex: 1, paddingBottom: spacing.sm }, followUpMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, followUpTime: { color: colors.textFaint, fontSize: 10 }, followUpMenu: { minWidth: 28, color: colors.textSecondary, textAlign: 'right', letterSpacing: 1 }, followUpText: { marginTop: 1, color: colors.text, fontSize: 13, lineHeight: 20 }, followUpImageRow: { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.sm }, followUpImage: { width: 72, height: 72, borderRadius: radii.sm },
   empty: { color: colors.textFaint, textAlign: 'center', paddingVertical: spacing.xl, fontSize: 11 },
-  inputArea: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, inputBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, imagePickerButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: 16 }, imagePickerText: { color: colors.primary, fontSize: 18, lineHeight: 20, fontWeight: '400' }, pendingImages: { flexDirection: 'row', gap: spacing.sm, paddingTop: 5, paddingBottom: spacing.sm }, pendingImage: { width: 50, height: 50, borderRadius: radii.sm }, pendingSorting: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm }, pendingSortControls: { position: 'absolute', left: 3, right: 3, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' }, pendingSortButton: { width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: colors.overlay }, pendingSortText: { color: '#FFFFFF', fontSize: 18, lineHeight: 19, fontWeight: '600' }, sortDisabled: { opacity: 0.3 }, pendingRemove: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: colors.overlay }, pendingRemoveText: { color: '#FFFFFF', fontSize: 14, lineHeight: 16 },
+  inputArea: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, compressionStatus: { marginBottom: spacing.xs, fontSize: 10, textAlign: 'right' }, inputBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, imagePickerButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: 16 }, imagePickerText: { color: colors.primary, fontSize: 18, lineHeight: 20, fontWeight: '400' }, pendingImages: { flexDirection: 'row', gap: spacing.sm, paddingTop: 5, paddingBottom: spacing.sm }, pendingImage: { width: 50, height: 50, borderRadius: radii.sm }, pendingSorting: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm }, pendingRemove: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: colors.overlay }, pendingRemoveText: { color: '#FFFFFF', fontSize: 14, lineHeight: 16 },
   input: { flex: 1, height: 40, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 13 }, send: { color: colors.primary, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.3 },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center' }, loadingText: { color: colors.textFaint, fontSize: 12 }, missingTitle: { fontFamily: fonts.serif, fontSize: 18 }, backLink: { marginTop: spacing.lg, color: colors.primary },
   modalKeyboard: { flex: 1 }, modalOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, modalCard: { width: '100%', padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.surface }, modalTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' },

@@ -1,13 +1,18 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-const DATABASE_VERSION = 12;
+const DATABASE_VERSION = 13;
 
 export async function migrateDatabase(db: SQLiteDatabase) {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   let currentVersion = result?.user_version ?? 0;
+  if (currentVersion > DATABASE_VERSION) {
+    throw new Error(`数据库来自更新版本（${currentVersion}），请升级应用后再打开`);
+  }
 
-  if (currentVersion === 0) {
+  await db.execAsync('BEGIN IMMEDIATE');
+  try {
+    if (currentVersion === 0) {
     await db.execAsync(`
       CREATE TABLE IF NOT EXISTS entries (
         id TEXT PRIMARY KEY NOT NULL, content TEXT NOT NULL, occurred_at TEXT NOT NULL,
@@ -159,6 +164,26 @@ export async function migrateDatabase(db: SQLiteDatabase) {
     currentVersion = 12;
   }
 
-  if (currentVersion < DATABASE_VERSION) throw new Error(`不支持的数据库版本：${currentVersion}`);
-  await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION}`);
+  if (currentVersion === 12) {
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_entries_timeline_page
+        ON entries(occurred_at DESC, created_at DESC, id DESC)
+        WHERE deleted_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_entries_mood
+        ON entries(mood, occurred_at DESC)
+        WHERE deleted_at IS NULL AND mood IS NOT NULL;
+    `);
+    currentVersion = 13;
+  }
+
+    if (currentVersion < DATABASE_VERSION) throw new Error(`不支持的数据库版本：${currentVersion}`);
+    await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION}; COMMIT`);
+  } catch (error) {
+    try {
+      await db.execAsync('ROLLBACK');
+    } catch {
+      // A failed statement can already have ended the transaction.
+    }
+    throw error;
+  }
 }

@@ -7,6 +7,14 @@ export async function persistJournalImageBase64(dataBase64: string, extension = 
   return `data:${mime};base64,${dataBase64}`;
 }
 
+export async function persistJournalImageBytes(data: Uint8Array, extension = '.jpg') {
+  let binary = '';
+  for (let offset = 0; offset < data.length; offset += 0x8000) {
+    binary += String.fromCharCode(...data.subarray(offset, offset + 0x8000));
+  }
+  return persistJournalImageBase64(btoa(binary), extension);
+}
+
 export function deleteJournalImage(_uri: string) {
   // Browser object URLs are managed by the picker/browser lifecycle.
 }

@@ -7,3 +7,13 @@ export async function exportBackupFile(contents: string, filename: string) {
   anchor.click();
   URL.revokeObjectURL(url);
 }
+
+export async function exportBackupBytes(contents: Uint8Array, filename: string, mimeType = 'application/zip') {
+  const blob = new Blob([contents as BlobPart], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}

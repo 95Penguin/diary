@@ -27,7 +27,8 @@ export async function createPersistentVideoThumbnail(videoUri: string): Promise<
   const player = createVideoPlayer(videoUri);
   try {
     if (!(await waitUntilReady(player))) return null;
-    for (const time of [0, 0.1, 0.5]) {
+    player.pause();
+    for (const time of [0, 0.1, 0.5, 1]) {
       try {
         const [thumbnail] = await player.generateThumbnailsAsync(time, { maxWidth: 720, maxHeight: 720 });
         if (!thumbnail) continue;

@@ -6,6 +6,11 @@ type FollowUpRow = { id: string; entry_id: string; content: string; created_at: 
 type ImageRow = { id: string; entry_id: string; uri: string; width: number; height: number; sort_order: number; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null };
 type TagRow = { entry_id: string; label: string };
 type DeletedEntryRow = EntryRow & { deleted_at: string };
+export type EntryFilterKind = 'none' | 'time' | 'location' | 'tag' | 'mood' | 'weather';
+export type EntryListFilter = { kind: EntryFilterKind; value: string | null };
+export type EntryPageCursor = { occurredAt: string; createdAt: string; id: string };
+export type EntryPage = { entries: Entry[]; nextCursor: EntryPageCursor | null };
+export type EntryFilterOptions = { locations: string[]; tags: string[]; moods: string[]; weather: string[] };
 
 function createId() { return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; }
 function mapFollowUp(row: FollowUpRow, images: FollowUpImage[] = []): FollowUp {
@@ -80,6 +85,152 @@ export async function listEntries(db: SQLiteDatabase, query = ''): Promise<Entry
   const rows = await db.getAllAsync<EntryRow>(
     `SELECT e.id, e.content, e.occurred_at, e.created_at, e.updated_at, e.mood, e.weather, e.favorited_at, e.location_name, e.latitude, e.longitude FROM entries e
      WHERE ${where} ORDER BY e.occurred_at DESC, e.created_at DESC`, params,
+  );
+  return attachFollowUps(db, rows);
+}
+
+function startOfLocalDay(date: Date) {
+  const result = new Date(date);
+  result.setHours(0, 0, 0, 0);
+  return result.toISOString();
+}
+
+function appendEntryFilter(where: string[], params: (string | number)[], filter?: EntryListFilter) {
+  if (!filter?.value || filter.kind === 'none') return;
+  if (filter.kind === 'location') {
+    where.push('e.location_name = ?');
+    params.push(filter.value);
+  } else if (filter.kind === 'tag') {
+    where.push('EXISTS (SELECT 1 FROM entry_tags t WHERE t.entry_id = e.id AND t.label = ?)');
+    params.push(filter.value);
+  } else if (filter.kind === 'mood') {
+    where.push('e.mood = ?');
+    params.push(filter.value);
+  } else if (filter.kind === 'weather') {
+    where.push('e.weather = ?');
+    params.push(filter.value);
+  } else if (filter.kind === 'time') {
+    const now = new Date();
+    let start: Date | null = null;
+    let end: Date | null = null;
+    if (filter.value === 'today') {
+      start = new Date(startOfLocalDay(now));
+      end = new Date(start);
+      end.setDate(end.getDate() + 1);
+    } else if (filter.value === '7days' || filter.value === '30days') {
+      start = new Date(startOfLocalDay(now));
+      start.setDate(start.getDate() - (filter.value === '7days' ? 6 : 29));
+    } else if (filter.value === 'year') {
+      start = new Date(now.getFullYear(), 0, 1);
+      end = new Date(now.getFullYear() + 1, 0, 1);
+    }
+    if (start) {
+      where.push('e.occurred_at >= ?');
+      params.push(start.toISOString());
+    }
+    if (end) {
+      where.push('e.occurred_at < ?');
+      params.push(end.toISOString());
+    }
+  }
+}
+
+export async function listEntryPage(
+  db: SQLiteDatabase,
+  options: { limit?: number; cursor?: EntryPageCursor | null; filter?: EntryListFilter } = {},
+): Promise<EntryPage> {
+  const limit = Math.max(1, Math.min(options.limit ?? 30, 100));
+  const where = ['e.deleted_at IS NULL'];
+  const params: (string | number)[] = [];
+  appendEntryFilter(where, params, options.filter);
+  if (options.cursor) {
+    where.push(`(
+      e.occurred_at < ? OR
+      (e.occurred_at = ? AND e.created_at < ?) OR
+      (e.occurred_at = ? AND e.created_at = ? AND e.id < ?)
+    )`);
+    params.push(
+      options.cursor.occurredAt,
+      options.cursor.occurredAt,
+      options.cursor.createdAt,
+      options.cursor.occurredAt,
+      options.cursor.createdAt,
+      options.cursor.id,
+    );
+  }
+  params.push(limit + 1);
+  const rows = await db.getAllAsync<EntryRow>(
+    `SELECT e.id, e.content, e.occurred_at, e.created_at, e.updated_at, e.mood, e.weather,
+       e.favorited_at, e.location_name, e.latitude, e.longitude
+     FROM entries e
+     WHERE ${where.join(' AND ')}
+     ORDER BY e.occurred_at DESC, e.created_at DESC, e.id DESC
+     LIMIT ?`,
+    params,
+  );
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const entries = await attachFollowUps(db, pageRows);
+  const last = pageRows.at(-1);
+  return {
+    entries,
+    nextCursor: hasMore && last
+      ? { occurredAt: last.occurred_at, createdAt: last.created_at, id: last.id }
+      : null,
+  };
+}
+
+export async function listEntryFilterOptions(db: SQLiteDatabase): Promise<EntryFilterOptions> {
+  const [locations, tags, moods, weather] = await Promise.all([
+    db.getAllAsync<{ value: string }>(`SELECT DISTINCT location_name AS value FROM entries
+      WHERE deleted_at IS NULL AND location_name IS NOT NULL AND location_name != '' ORDER BY value COLLATE NOCASE`),
+    db.getAllAsync<{ value: string }>(`SELECT t.label AS value FROM entry_tags t
+      INNER JOIN entries e ON e.id = t.entry_id WHERE e.deleted_at IS NULL
+      GROUP BY t.label ORDER BY COUNT(*) DESC, t.label COLLATE NOCASE`),
+    db.getAllAsync<{ value: string }>(`SELECT DISTINCT mood AS value FROM entries
+      WHERE deleted_at IS NULL AND mood IS NOT NULL AND mood != '' ORDER BY value COLLATE NOCASE`),
+    db.getAllAsync<{ value: string }>(`SELECT DISTINCT weather AS value FROM entries
+      WHERE deleted_at IS NULL AND weather IS NOT NULL AND weather != '' ORDER BY value COLLATE NOCASE`),
+  ]);
+  return {
+    locations: locations.map((row) => row.value),
+    tags: tags.map((row) => row.value),
+    moods: moods.map((row) => row.value),
+    weather: weather.map((row) => row.value),
+  };
+}
+
+export async function listCalendarMonthCounts(
+  db: SQLiteDatabase,
+  start: string,
+  end: string,
+): Promise<Record<string, number>> {
+  const rows = await db.getAllAsync<{ occurred_at: string }>(
+    `SELECT occurred_at FROM entries
+     WHERE deleted_at IS NULL AND occurred_at >= ? AND occurred_at < ?`,
+    start,
+    end,
+  );
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    const value = new Date(row.occurred_at);
+    const key = `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
+
+export async function listEntriesForDate(db: SQLiteDatabase, date: string): Promise<Entry[]> {
+  const start = new Date(`${date}T00:00:00`);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  const rows = await db.getAllAsync<EntryRow>(
+    `SELECT id, content, occurred_at, created_at, updated_at, mood, weather, favorited_at,
+       location_name, latitude, longitude
+     FROM entries WHERE deleted_at IS NULL AND occurred_at >= ? AND occurred_at < ?
+     ORDER BY occurred_at ASC, created_at ASC, id ASC`,
+    start.toISOString(),
+    end.toISOString(),
   );
   return attachFollowUps(db, rows);
 }
@@ -453,6 +604,18 @@ export async function getFollowUpOrder(db: SQLiteDatabase): Promise<'asc' | 'des
 export async function saveFollowUpOrder(db: SQLiteDatabase, value: 'asc' | 'desc') {
   await db.runAsync(
     `INSERT INTO kv_store (key, value) VALUES ('follow-up-order', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`, value,
+  );
+}
+
+export async function getCalendarOrder(db: SQLiteDatabase): Promise<'asc' | 'desc'> {
+  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'calendar-entry-order'");
+  return row?.value === 'desc' ? 'desc' : 'asc';
+}
+
+export async function saveCalendarOrder(db: SQLiteDatabase, value: 'asc' | 'desc') {
+  await db.runAsync(
+    `INSERT INTO kv_store (key, value) VALUES ('calendar-entry-order', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`, value,
   );
 }

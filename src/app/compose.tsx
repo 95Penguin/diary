@@ -13,9 +13,10 @@ import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 import { normalizeTag } from '@/utils/tags';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
+import { DraggableMediaItem } from '@/components/draggable-media-item';
 import { MediaThumbnail } from '@/components/media-view';
 import type { JournalMediaType } from '@/domain/journal';
-import { getPickerMediaType } from '@/utils/picker-media';
+import { getPickerMediaType, preparePickedMedia } from '@/utils/picker-media';
 import { createPersistentVideoThumbnail } from '@/utils/video-thumbnail-cache';
 
 type SelectedImage = { id?: string; uri: string; width: number; height: number; fileName?: string | null; draftOwned?: boolean; mediaType?: JournalMediaType; pairedVideoUri?: string | null; pairedVideoFileName?: string | null; duration?: number | null; thumbnailUri?: string | null };
@@ -57,7 +58,6 @@ export default function ComposeScreen() {
   const [tagValue, setTagValue] = useState('');
   const [toast, setToast] = useState('');
   const [imageMenuVisible, setImageMenuVisible] = useState(false);
-  const [sortingImageIndex, setSortingImageIndex] = useState<number | null>(null);
   const [exitConfirmationVisible, setExitConfirmationVisible] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -161,8 +161,7 @@ export default function ComposeScreen() {
     } catch { Alert.alert('图片添加失败', '图片没有保存，请稍后重试。'); }
   }
 
-  function moveImage(from: number, direction: -1 | 1) {
-    const to = from + direction;
+  function reorderImage(from: number, to: number) {
     if (to < 0 || to >= images.length) return;
     setImages((current) => {
       const next = [...current];
@@ -170,7 +169,6 @@ export default function ComposeScreen() {
       next.splice(to, 0, moved);
       return next;
     });
-    setSortingImageIndex(to);
   }
 
   async function chooseFromLibrary() {
@@ -178,14 +176,20 @@ export default function ComposeScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'], allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.85,
     });
-    if (!result.canceled) await addImages(result.assets);
+    if (!result.canceled) {
+      const prepared = await preparePickedMedia(result.assets, (message) => setToast(message ?? ''));
+      if (prepared) await addImages(prepared);
+    }
   }
 
   async function openCamera() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) { Alert.alert('无法使用相机', '请在系统设置中允许拾时使用相机。'); return; }
     const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images', 'videos'], videoMaxDuration: 60, quality: 0.85 });
-    if (!result.canceled) await addImages(result.assets);
+    if (!result.canceled) {
+      const prepared = await preparePickedMedia(result.assets, (message) => setToast(message ?? ''));
+      if (prepared) await addImages(prepared);
+    }
   }
 
   function openImageMenu() {
@@ -287,14 +291,10 @@ export default function ComposeScreen() {
         <TextInput ref={inputRef} multiline maxLength={10000} value={content} onChangeText={setContent} placeholder="写下现在发生的事……" placeholderTextColor={readingTheme.secondary} textAlignVertical="top" style={[styles.editor, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale }]} />
         <View style={styles.imageRow}>
           {images.map((image, index) => <View key={image.uri} style={styles.imageItem}>
-            <Pressable accessibilityHint="长按后可调整顺序" accessibilityLabel={`第 ${index + 1} 个媒体`} delayLongPress={250} onLongPress={() => setSortingImageIndex(index)} onPress={() => sortingImageIndex !== null && setSortingImageIndex(index)} style={sortingImageIndex === index && styles.sortingImage}>
-              <MediaThumbnail media={{ uri: image.uri, mediaType: image.mediaType ?? 'image', pairedVideoUri: image.pairedVideoUri ?? null, duration: image.duration ?? null, thumbnailUri: image.thumbnailUri ?? null }} style={styles.imagePreview} />
-            </Pressable>
-            {sortingImageIndex === index ? <View style={styles.sortControls}>
-              <Pressable accessibilityLabel="向前移动" disabled={index === 0} onPress={() => moveImage(index, -1)} style={[styles.sortButton, index === 0 && styles.sortButtonDisabled]}><Text style={styles.sortButtonText}>‹</Text></Pressable>
-              <Pressable accessibilityLabel="向后移动" disabled={index === images.length - 1} onPress={() => moveImage(index, 1)} style={[styles.sortButton, index === images.length - 1 && styles.sortButtonDisabled]}><Text style={styles.sortButtonText}>›</Text></Pressable>
-            </View> : null}
-            <Pressable accessibilityLabel="移除媒体" onPress={() => { if (image.draftOwned) { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); if (image.thumbnailUri) deleteJournalImage(image.thumbnailUri); } setSortingImageIndex(null); setImages((current) => current.filter((_, itemIndex) => itemIndex !== index)); }} style={styles.removeImage}><Text style={styles.removeImageText}>×</Text></Pressable>
+            <DraggableMediaItem accessibilityLabel={`第 ${index + 1} 个媒体`} columns={4} count={images.length} index={index} itemStride={72} onMove={reorderImage} verticalStride={72}>
+              <MediaThumbnail media={{ uri: image.uri, mediaType: image.mediaType ?? 'image', pairedVideoUri: image.pairedVideoUri ?? null, duration: image.duration ?? null, thumbnailUri: image.thumbnailUri ?? null }} allowRuntimeVideoPoster style={styles.imagePreview} />
+            </DraggableMediaItem>
+            <Pressable accessibilityLabel="移除媒体" onPress={() => { if (image.draftOwned) { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); if (image.thumbnailUri) deleteJournalImage(image.thumbnailUri); } setImages((current) => current.filter((_, itemIndex) => itemIndex !== index)); }} style={styles.removeImage}><Text style={styles.removeImageText}>×</Text></Pressable>
           </View>)}
           {images.length < 9 ? <Pressable accessibilityLabel="添加图片或视频" onPress={openImageMenu} style={[styles.addImage, { borderColor: readingTheme.border }]}><Text style={styles.addImageIcon}>＋</Text></Pressable> : null}
         </View>
@@ -318,7 +318,7 @@ export default function ComposeScreen() {
         <View style={styles.editorMeta}><Text style={styles.draft}>{!isEditing && activeDraftId ? '已自动保存到草稿箱' : '不需要标题，写下一句话也可以'}</Text><Text style={styles.counter}>{content.length}/10000</Text></View>
       </ScrollView>
     </KeyboardAvoidingView>
-    <AppDialog visible={imageMenuVisible} title="添加图片或视频" message="拍照会打开系统相机，可在相机中切换照片或视频模式。" onClose={() => setImageMenuVisible(false)} actions={[{ label: '相册', tone: 'primary', onPress: () => { setImageMenuVisible(false); void chooseFromLibrary(); } }, { label: '拍照', onPress: () => { setImageMenuVisible(false); void openCamera(); } }]} />
+    <AppDialog visible={imageMenuVisible} title="添加图片或视频" message="拍照会打开系统相机，可在相机中切换照片或视频模式。" onClose={() => setImageMenuVisible(false)} actions={[{ label: '相册', onPress: () => { setImageMenuVisible(false); void chooseFromLibrary(); } }, { label: '拍照', onPress: () => { setImageMenuVisible(false); void openCamera(); } }]} />
     <AppDialog visible={exitConfirmationVisible} title="退出编辑？" message="尚未保存的修改会丢失。" onClose={() => setExitConfirmationVisible(false)} actions={[{ label: '继续编辑', onPress: () => setExitConfirmationVisible(false) }, { label: '退出', tone: 'danger', onPress: () => { setExitConfirmationVisible(false); images.filter((image) => image.draftOwned).forEach((image) => { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); }); leaveComposer(); } }]} />
   </SafeAreaView>;
 }
@@ -341,9 +341,6 @@ const styles = StyleSheet.create({
   imageRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
   imageItem: { position: 'relative' }, imagePreview: { width: 64, height: 64, borderRadius: radii.sm, backgroundColor: 'transparent' },
   sortingImage: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm },
-  sortControls: { position: 'absolute', left: 4, right: 4, bottom: 3, flexDirection: 'row', justifyContent: 'space-between' },
-  sortButton: { width: 23, height: 23, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: colors.overlay },
-  sortButtonDisabled: { opacity: 0.3 }, sortButtonText: { color: '#FFFFFF', fontSize: 20, lineHeight: 21, fontWeight: '600' },
   removeImage: { position: 'absolute', top: -5, right: -5, width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: colors.overlay }, removeImageText: { color: '#FFFFFF', fontSize: 16, lineHeight: 18 },
   addImage: { width: 64, height: 64, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.border, borderRadius: radii.sm }, addImageIcon: { color: colors.primary, fontSize: 24, lineHeight: 28 },
   editor: { minHeight: 150, paddingTop: spacing.lg, color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 25, includeFontPadding: false }, editorMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.md }, draft: { color: colors.textFaint, fontSize: 10 }, counter: { color: colors.textFaint, fontSize: 9 },

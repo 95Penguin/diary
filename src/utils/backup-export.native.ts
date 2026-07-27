@@ -9,3 +9,12 @@ export async function exportBackupFile(contents: string, filename: string) {
   if (!await Sharing.isAvailableAsync()) throw new Error('sharing-unavailable');
   await Sharing.shareAsync(file.uri, { dialogTitle: '导出拾时记录', mimeType: 'application/json', UTI: 'public.json' });
 }
+
+export async function exportBackupBytes(contents: Uint8Array, filename: string, mimeType = 'application/zip') {
+  const file = new File(Paths.cache, filename);
+  if (file.exists) file.delete();
+  file.create();
+  file.write(contents);
+  if (!await Sharing.isAvailableAsync()) throw new Error('sharing-unavailable');
+  await Sharing.shareAsync(file.uri, { dialogTitle: '导出拾时记录', mimeType, UTI: 'public.zip-archive' });
+}
