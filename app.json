@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.anonymous.shishijournal"
+      "bundleIdentifier": "com.anonymous.shishijournal",
+      "buildNumber": "1"
     },
     "android": {
       "softwareKeyboardLayoutMode": "resize",
@@ -25,7 +26,8 @@
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"
       ],
-      "package": "com.anonymous.shishijournal"
+      "package": "com.anonymous.shishijournal",
+      "versionCode": 1
     },
     "web": {
       "output": "static",
@@ -70,6 +72,18 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {
+        "headers": {
+          "Cross-Origin-Embedder-Policy": "credentialless",
+          "Cross-Origin-Opener-Policy": "same-origin"
+        }
+      },
+      "eas": {
+        "projectId": "9d6be635-ea16-4571-abb8-dda97eb6f891"
+      }
+    },
+    "owner": "95penguin"
   }
 }

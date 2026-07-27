@@ -1,8 +1,8 @@
 import { File } from 'expo-file-system';
-import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
+import { strToU8, zipSync, type Zippable } from 'fflate';
 
 import type { JournalBackup } from '@/domain/journal';
-import { validateArchiveMediaReferences } from '@/utils/backup-archive-validation';
+import { readBackupArchive } from '@/utils/backup-archive-validation';
 import { parseJournalBackup } from '@/utils/backup-import';
 import { deleteJournalImage, persistJournalImageBytes } from '@/utils/image-storage';
 
@@ -71,12 +71,7 @@ export async function createZipBackup(backup: JournalBackup, onProgress?: ZipBac
 }
 
 function readZip(bytes: Uint8Array) {
-  const files = unzipSync(bytes);
-  const manifest = files['backup.json'];
-  if (!manifest) throw new Error('invalid-backup');
-  const backup = parseJournalBackup(strFromU8(manifest));
-  validateArchiveMediaReferences(backup, files);
-  return { files, backup };
+  return readBackupArchive(bytes, parseJournalBackup);
 }
 
 export function inspectZipBackup(bytes: Uint8Array) {

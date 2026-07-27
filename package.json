@@ -8,6 +8,7 @@
     "@expo/ui": "~57.0.7",
     "expo": "~57.0.7",
     "expo-constants": "~57.0.6",
+    "expo-dev-client": "~57.0.9",
     "expo-device": "~57.0.1",
     "expo-document-picker": "~57.0.1",
     "expo-file-system": "~57.0.1",
@@ -54,7 +55,11 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:data": "node --experimental-strip-types --test tests/*.test.mjs"
+    "test:data": "node --experimental-strip-types --test tests/*.test.mjs",
+    "version:check": "node --experimental-strip-types scripts/check-version.mjs",
+    "build:android:development": "npx eas-cli build --platform android --profile development",
+    "build:android:preview": "npx eas-cli build --platform android --profile preview",
+    "build:android:production": "npx eas-cli build --platform android --profile production"
   },
   "private": true
 }

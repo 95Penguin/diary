@@ -51,3 +51,25 @@ test('keeps files with unknown modification time', () => {
     false,
   );
 });
+
+test('a zero grace period removes an orphan immediately but never a reference', () => {
+  const referenced = new Set(['file:///kept.mp4']);
+  assert.equal(
+    shouldDeleteUnusedMedia(
+      { uri: 'file:///orphan-thumbnail.jpg', modificationTime: now },
+      referenced,
+      now,
+      0,
+    ),
+    true,
+  );
+  assert.equal(
+    shouldDeleteUnusedMedia(
+      { uri: 'file:///kept.mp4', modificationTime: now - 1 },
+      referenced,
+      now,
+      0,
+    ),
+    false,
+  );
+});

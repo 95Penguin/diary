@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { strToU8, zipSync } from 'fflate';
 
 import { parseJournalBackup } from '../src/utils/backup-import.ts';
-import { validateArchiveMediaReferences } from '../src/utils/backup-archive-validation.ts';
+import {
+  readBackupArchive,
+  validateArchiveMediaReferences,
+} from '../src/utils/backup-archive-validation.ts';
 
 function validBackup() {
   return {
@@ -93,4 +97,38 @@ test('accepts archive only when every referenced media file is present', () => {
   assert.doesNotThrow(() => validateArchiveMediaReferences(backup, files));
   delete files['media/entries/image-1/thumbnail.jpg'];
   assert.throws(() => validateArchiveMediaReferences(backup, files), /missing-backup-media/);
+});
+
+test('rejects empty media files as corrupt archive content', () => {
+  const backup = parseJournalBackup(JSON.stringify(validBackup()));
+  const files = {
+    'media/entries/image-1/primary.mp4': new Uint8Array(),
+    'media/entries/image-1/thumbnail.jpg': new Uint8Array([2]),
+    'media/follow-ups/follow-up-image-1/primary.jpg': new Uint8Array([3]),
+  };
+  assert.throws(() => validateArchiveMediaReferences(backup, files), /missing-backup-media/);
+});
+
+test('reads a complete ZIP and rejects missing, malformed or corrupt manifests', () => {
+  const backup = validBackup();
+  const complete = zipSync({
+    'backup.json': strToU8(JSON.stringify(backup)),
+    'media/entries/image-1/primary.mp4': new Uint8Array([1]),
+    'media/entries/image-1/thumbnail.jpg': new Uint8Array([2]),
+    'media/follow-ups/follow-up-image-1/primary.jpg': new Uint8Array([3]),
+  });
+  assert.equal(readBackupArchive(complete, parseJournalBackup).backup.entries[0].id, 'entry-1');
+
+  assert.throws(
+    () => readBackupArchive(new Uint8Array([1, 2, 3]), parseJournalBackup),
+    /invalid-backup/,
+  );
+  assert.throws(
+    () => readBackupArchive(zipSync({ 'note.txt': strToU8('no manifest') }), parseJournalBackup),
+    /invalid-backup/,
+  );
+  assert.throws(
+    () => readBackupArchive(zipSync({ 'backup.json': strToU8('{') }), parseJournalBackup),
+    /invalid-json/,
+  );
 });

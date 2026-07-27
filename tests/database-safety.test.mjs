@@ -11,7 +11,7 @@ import {
   permanentlyDeleteEntry,
   restoreEntry,
 } from '../src/database/journal-repository.ts';
-import { migrateDatabase } from '../src/database/migrate.ts';
+import { DATABASE_VERSION, migrateDatabase } from '../src/database/migrate.ts';
 import { createTestDatabase } from './sqlite-test-adapter.mjs';
 
 function backupFixture() {
@@ -92,18 +92,35 @@ async function setup() {
   return db;
 }
 
-test('fresh migration reaches version 13 and is idempotent', async (t) => {
+test('fresh baseline reaches the current schema and is idempotent', async (t) => {
   const db = await setup();
   t.after(() => db.close());
   await migrateDatabase(db);
   const version = await db.getFirstAsync('PRAGMA user_version');
-  assert.equal(version.user_version, 13);
+  assert.equal(version.user_version, DATABASE_VERSION);
   const entryColumns = await db.getAllAsync('PRAGMA table_info(entries)');
   assert.ok(entryColumns.some((column) => column.name === 'weather'));
   assert.ok(entryColumns.some((column) => column.name === 'location_name'));
   const imageColumns = await db.getAllAsync('PRAGMA table_info(entry_images)');
   assert.ok(imageColumns.some((column) => column.name === 'thumbnail_uri'));
   assert.ok(imageColumns.some((column) => column.name === 'media_type'));
+  const followUpImageColumns = await db.getAllAsync('PRAGMA table_info(follow_up_images)');
+  assert.ok(followUpImageColumns.some((column) => column.name === 'thumbnail_uri'));
+  const indexes = await db.getAllAsync(
+    "SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'",
+  );
+  assert.ok(indexes.some((index) => index.name === 'idx_entries_timeline_page'));
+  assert.ok(indexes.some((index) => index.name === 'idx_entries_mood'));
+});
+
+test('development-only schemas v1-v12 are rejected instead of guessed forward', async (t) => {
+  const db = createTestDatabase();
+  t.after(() => db.close());
+  for (let version = 1; version < DATABASE_VERSION; version += 1) {
+    await db.execAsync(`PRAGMA user_version = ${version}`);
+    await assert.rejects(() => migrateDatabase(db), /导出 ZIP 备份/);
+    assert.equal((await db.getFirstAsync('PRAGMA user_version')).user_version, version);
+  }
 });
 
 test('older app refuses a database created by a newer schema', async (t) => {
@@ -169,6 +186,36 @@ test('restore merge keeps newer local content and accepts a newer backup', async
   assert.equal((await getEntry(db, 'entry-1')).content, '新的正文');
 });
 
+test('restoring the same backup twice is idempotent and creates no duplicate rows', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const source = backupFixture();
+  await importJournalBackup(db, source);
+  const repeated = await importJournalBackup(db, source);
+  assert.deepEqual(repeated, {
+    createdEntries: 0,
+    updatedEntries: 0,
+    createdFollowUps: 0,
+    updatedFollowUps: 0,
+    tags: 0,
+  });
+  for (const table of [
+    'entries',
+    'follow_ups',
+    'entry_images',
+    'follow_up_images',
+    'entry_tags',
+    'entry_versions',
+    'memory_suppressed_entries',
+  ]) {
+    assert.equal(
+      (await db.getFirstAsync(`SELECT COUNT(*) AS count FROM ${table}`)).count,
+      1,
+      `${table} should contain one row`,
+    );
+  }
+});
+
 test('failed import rolls back every record in the transaction', async (t) => {
   const db = await setup();
   t.after(() => db.close());
@@ -212,6 +259,15 @@ test('permanent deletion cascades rows and returns every associated media URI', 
   assert.equal((await db.getFirstAsync('SELECT COUNT(*) AS count FROM entry_images')).count, 0);
 });
 
+test('permanent deletion refuses active entries and keeps their media references', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  assert.deepEqual(await permanentlyDeleteEntry(db, 'entry-1'), []);
+  assert.equal((await db.getFirstAsync('SELECT id FROM entries WHERE id = ?', 'entry-1')).id, 'entry-1');
+  assert.equal((await db.getFirstAsync('SELECT COUNT(*) AS count FROM entry_images')).count, 1);
+});
+
 test('expired trash cleanup keeps recent trash and removes only expired media', async (t) => {
   const db = await setup();
   t.after(() => db.close());
@@ -243,4 +299,14 @@ test('expired trash cleanup keeps recent trash and removes only expired media', 
   ]));
   assert.equal(await db.getFirstAsync('SELECT id FROM entries WHERE id = ?', 'entry-1'), undefined);
   assert.equal((await db.getFirstAsync('SELECT id FROM entries WHERE id = ?', 'entry-recent')).id, 'entry-recent');
+});
+
+test('trash cleanup rejects invalid retention values without changing data', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  await deleteEntry(db, 'entry-1');
+  await assert.rejects(() => cleanupExpiredTrash(db, -1), /retentionDays/);
+  await assert.rejects(() => cleanupExpiredTrash(db, Number.NaN), /retentionDays/);
+  assert.equal((await db.getFirstAsync('SELECT id FROM entries WHERE id = ?', 'entry-1')).id, 'entry-1');
 });

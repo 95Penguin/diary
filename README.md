@@ -2,6 +2,8 @@
 
 拾时的 React Native + Expo 手机客户端。当前实现 PRD 中的 P0 核心记录闭环。
 
+版本号、数据库基线和 EAS 构建流程见 [docs/versioning.md](docs/versioning.md)。
+
 ## 当前能力
 
 - “记录此刻”：纯文字、自动时间、修改发生时间

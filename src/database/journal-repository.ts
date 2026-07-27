@@ -468,6 +468,11 @@ export async function restoreEntry(db: SQLiteDatabase, id: string) {
 }
 
 export async function permanentlyDeleteEntry(db: SQLiteDatabase, id: string) {
+  const deleted = await db.getFirstAsync<{ id: string }>(
+    'SELECT id FROM entries WHERE id = ? AND deleted_at IS NOT NULL',
+    id,
+  );
+  if (!deleted) return [];
   const images = await db.getAllAsync<{ uri: string }>(
     `SELECT uri FROM entry_images WHERE entry_id = ?
      UNION ALL SELECT paired_video_uri AS uri FROM entry_images WHERE entry_id = ? AND paired_video_uri IS NOT NULL
@@ -485,6 +490,9 @@ export async function permanentlyDeleteEntry(db: SQLiteDatabase, id: string) {
 }
 
 export async function cleanupExpiredTrash(db: SQLiteDatabase, retentionDays = 30) {
+  if (!Number.isFinite(retentionDays) || retentionDays < 0) {
+    throw new Error('retentionDays must be a non-negative finite number');
+  }
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
   const images = await db.getAllAsync<{ uri: string }>(
     `SELECT i.uri FROM entry_images i JOIN entries e ON e.id = i.entry_id
