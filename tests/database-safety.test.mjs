@@ -111,16 +111,48 @@ test('fresh baseline reaches the current schema and is idempotent', async (t) =>
   );
   assert.ok(indexes.some((index) => index.name === 'idx_entries_timeline_page'));
   assert.ok(indexes.some((index) => index.name === 'idx_entries_mood'));
+  assert.ok(indexes.some((index) => index.name === 'idx_follow_ups_created_at'));
+  assert.ok(indexes.some((index) => index.name === 'idx_entry_tags_entry_id'));
 });
 
 test('development-only schemas v1-v12 are rejected instead of guessed forward', async (t) => {
   const db = createTestDatabase();
   t.after(() => db.close());
-  for (let version = 1; version < DATABASE_VERSION; version += 1) {
+  for (let version = 1; version < 13; version += 1) {
     await db.execAsync(`PRAGMA user_version = ${version}`);
     await assert.rejects(() => migrateDatabase(db), /导出 ZIP 备份/);
     assert.equal((await db.getFirstAsync('PRAGMA user_version')).user_version, version);
   }
+});
+
+test('production baseline v13 migrates forward without rebuilding user tables', async (t) => {
+  const db = createTestDatabase();
+  t.after(() => db.close());
+  await db.execAsync(`
+    CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL);
+    CREATE TABLE follow_ups (
+      id TEXT PRIMARY KEY NOT NULL,
+      entry_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+    CREATE TABLE entry_tags (
+      entry_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (entry_id, label)
+    );
+    INSERT INTO entries (id) VALUES ('kept');
+    PRAGMA user_version = 13;
+  `);
+  await migrateDatabase(db);
+  assert.equal((await db.getFirstAsync('PRAGMA user_version')).user_version, DATABASE_VERSION);
+  assert.equal((await db.getFirstAsync('SELECT id FROM entries')).id, 'kept');
+  const indexes = await db.getAllAsync(
+    "SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'",
+  );
+  assert.ok(indexes.some((index) => index.name === 'idx_follow_ups_created_at'));
+  assert.ok(indexes.some((index) => index.name === 'idx_entry_tags_entry_id'));
 });
 
 test('older app refuses a database created by a newer schema', async (t) => {

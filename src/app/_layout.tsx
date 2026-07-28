@@ -1,7 +1,8 @@
 import { NotoSansSC_400Regular } from '@expo-google-fonts/noto-sans-sc/400Regular';
 import { NotoSerifSC_400Regular } from '@expo-google-fonts/noto-serif-sc/400Regular';
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import { SQLiteProvider } from 'expo-sqlite';
 import { StatusBar } from 'expo-status-bar';
@@ -9,6 +10,7 @@ import { Component, type ErrorInfo, type ReactNode, Suspense, useEffect } from '
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { AppLockGate } from '@/components/app-lock-gate';
 import { migrateDatabase } from '@/database/migrate';
 import { AppPreferencesProvider } from '@/preferences/app-preferences';
 import { colors } from '@/theme/tokens';
@@ -33,7 +35,7 @@ export default function RootLayout() {
       <DatabaseErrorBoundary>
         <Suspense fallback={<LoadingFallback />}>
           <SQLiteProvider databaseName="shishi.db" onInit={initializeDatabase} useSuspense>
-            <AppPreferencesProvider><AppStack /></AppPreferencesProvider>
+            <AppPreferencesProvider><AppLockGate><AppStack /></AppLockGate></AppPreferencesProvider>
           </SQLiteProvider>
         </Suspense>
       </DatabaseErrorBoundary>
@@ -47,6 +49,22 @@ async function initializeDatabase(db: Parameters<typeof migrateDatabase>[0]) {
 }
 
 function AppStack() {
+  useEffect(() => {
+    const openBackup = (response: Notifications.NotificationResponse | null) => {
+      const route = response?.notification.request.content.data?.route;
+      if (route === '/backup') router.push('/backup');
+    };
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      openBackup(response);
+      if (response) void Notifications.clearLastNotificationResponseAsync();
+    });
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      openBackup(response);
+      void Notifications.clearLastNotificationResponseAsync();
+    });
+    return () => subscription.remove();
+  }, []);
+
   return <>
           <StatusBar style="dark" />
           <Stack screenOptions={{ headerShown: false, contentStyle: styles.content }}>
@@ -55,6 +73,7 @@ function AppStack() {
             <Stack.Screen name="entry/[id]" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="history/[id]" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="memories" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="summaries" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="search" options={{ animation: 'fade_from_bottom' }} />
             <Stack.Screen name="favorites" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="drafts" options={{ animation: 'slide_from_right' }} />

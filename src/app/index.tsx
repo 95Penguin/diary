@@ -67,11 +67,11 @@ export default function HomeScreen() {
   return (
     <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
       <View style={styles.header}>
-        <View><Text style={[styles.brand, { color: readingTheme.text }]}>拾时</Text><Text style={[styles.subtitle, { color: readingTheme.secondary }]}>{view === 'timeline' ? '我的日迹' : '日历回看'}</Text></View>
+        <View style={styles.headerIdentity}><Text style={[styles.brand, { color: readingTheme.text }]}>拾时</Text><Text numberOfLines={1} style={[styles.subtitle, { color: readingTheme.secondary }]}>{view === 'timeline' ? (preferences.signature.trim() || '我的日迹') : '日历回看'}</Text></View>
         <View style={styles.headerActions}>
           <Pressable accessibilityLabel="草稿箱" onPress={() => router.push('/drafts' as Href)} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'doc.text', android: 'draft', web: 'draft' }} size={18} tintColor={colors.primary} /></Pressable>
           <Pressable accessibilityLabel="收藏列表" onPress={() => router.push('/favorites' as Href)} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'bookmark', android: 'bookmark', web: 'bookmark' }} size={19} tintColor={colors.primary} /></Pressable>
-          <Pressable accessibilityLabel="搜索" onPress={() => router.push('/search')} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.searchIcon, { color: readingTheme.text }]}>⌕</Text></Pressable>
+          <Pressable accessibilityLabel="搜索" onPress={() => router.push('/search')} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }} size={19} tintColor={colors.primary} /></Pressable>
           <Pressable accessibilityLabel={`我的，${preferences.nickname}`} onPress={() => router.push('/settings')} style={styles.profileButton}>{preferences.avatarUri ? <Image source={preferences.avatarUri} contentFit="cover" style={styles.profileImage} /> : <Text style={styles.profileText}>{preferences.nickname.slice(0, 1)}</Text>}</Pressable>
         </View>
       </View>
@@ -323,11 +323,11 @@ const CalendarView = memo(CalendarViewComponent);
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, paddingTop: spacing.xs, paddingBottom: spacing.xs },
-  brand: { color: colors.text, fontFamily: fonts.serif, fontSize: 24, lineHeight: 32, fontWeight: '600', includeFontPadding: false },
-  subtitle: { color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 10, lineHeight: 14, letterSpacing: 1, includeFontPadding: false },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  headerIdentity: { flex: 1, minWidth: 0, marginRight: spacing.md },
+  brand: { color: colors.text, fontFamily: fonts.serif, fontSize: 24, lineHeight: 29, fontWeight: '600', includeFontPadding: false },
+  subtitle: { marginTop: 2, color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 12, lineHeight: 15, letterSpacing: 0.5, includeFontPadding: false },
+  headerActions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   searchButton: { width: 36, height: 36, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceMuted },
-  searchIcon: { color: colors.text, fontSize: 24, lineHeight: 36, marginTop: -3, includeFontPadding: false },
   profileButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary },
   profileImage: { width: 36, height: 36, borderRadius: 18 },
   profileText: { color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' },

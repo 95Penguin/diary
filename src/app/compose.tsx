@@ -59,6 +59,7 @@ export default function ComposeScreen() {
   const [toast, setToast] = useState('');
   const [imageMenuVisible, setImageMenuVisible] = useState(false);
   const [exitConfirmationVisible, setExitConfirmationVisible] = useState(false);
+  const [locationDialog, setLocationDialog] = useState<{ title: string; message: string } | null>(null);
   const inputRef = useRef<TextInput>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -129,16 +130,50 @@ export default function ComposeScreen() {
     if (locating) return;
     setLocating(true);
     try {
+      const servicesEnabled = await Location.hasServicesEnabledAsync();
+      if (!servicesEnabled) {
+        setLocationDialog({ title: '定位服务未开启', message: '请先打开手机定位服务，或直接手动填写地点。' });
+        return;
+      }
       const permission = await Location.requestForegroundPermissionsAsync();
-      if (!permission.granted) { Alert.alert('无法读取位置', '可以在系统设置中允许位置权限，或直接手动填写地点。'); return; }
-      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const { latitude: nextLatitude, longitude: nextLongitude } = position.coords;
-      const addresses = await Location.reverseGeocodeAsync({ latitude: nextLatitude, longitude: nextLongitude });
-      const address = addresses[0];
-      const parts = [address?.name, address?.district, address?.city].filter((item, index, values): item is string => Boolean(item) && values.indexOf(item) === index);
+      if (!permission.granted) {
+        setLocationDialog({ title: '无法读取位置', message: '可以在系统设置中允许位置权限，或直接手动填写地点。' });
+        return;
+      }
+      const result = await Promise.race([
+        (async () => {
+          const recentPosition = await Location.getLastKnownPositionAsync({
+            maxAge: 5 * 60 * 1000,
+            requiredAccuracy: 1000,
+          });
+          const position = recentPosition
+            ?? await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          const { latitude: nextLatitude, longitude: nextLongitude } = position.coords;
+          const addresses = await Location.reverseGeocodeAsync({
+            latitude: nextLatitude,
+            longitude: nextLongitude,
+          });
+          return { position, address: addresses[0] };
+        })(),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('location-flow-timeout')), 5_000);
+        }),
+      ]);
+      const { latitude: nextLatitude, longitude: nextLongitude } = result.position.coords;
+      const address = result.address;
+      const parts = [
+        address?.name,
+        address?.street,
+        address?.district,
+        address?.subregion,
+        address?.city,
+        address?.region,
+      ].filter((item, index, values): item is string => Boolean(item) && values.indexOf(item) === index);
       setLocationName(address?.formattedAddress || parts.join(' · ') || `${nextLatitude.toFixed(5)}, ${nextLongitude.toFixed(5)}`);
       setLatitude(nextLatitude); setLongitude(nextLongitude);
-    } catch { Alert.alert('定位失败', '暂时无法获取当前位置，可以稍后重试或手动填写。'); }
+    } catch {
+      setLocationDialog({ title: '定位超时', message: '没有及时获取到位置。可以移到开阔处重试，或直接手动填写地点。' });
+    }
     finally { setLocating(false); }
   }
 
@@ -298,28 +333,31 @@ export default function ComposeScreen() {
           </View>)}
           {images.length < 9 ? <Pressable accessibilityLabel="添加图片或视频" onPress={openImageMenu} style={[styles.addImage, { borderColor: readingTheme.border }]}><Text style={styles.addImageIcon}>＋</Text></Pressable> : null}
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.metaToolbarScroll} contentContainerStyle={styles.metaToolbar}>
-          <Pressable onPress={() => setActiveMeta((value) => value === 'mood' ? null : 'mood')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.metaButtonText, activeMeta === 'mood' && styles.metaButtonTextActive]}>{mood ? `${MOOD_ICONS[mood]} ${mood}` : '＋ 心情'}</Text></Pressable>
-          <Pressable onPress={() => setActiveMeta((value) => value === 'weather' ? null : 'weather')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.metaButtonText, activeMeta === 'weather' && styles.metaButtonTextActive]}>{weather ? `${WEATHER_ICONS[weather]} ${weather}` : '＋ 天气'}</Text></Pressable>
-          <Pressable onPress={() => setActiveMeta((value) => value === 'location' ? null : 'location')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={[styles.metaButtonText, styles.locationMetaText, activeMeta === 'location' && styles.metaButtonTextActive]}>{locationName ? `⌖ ${locationName}` : '＋ 地点'}</Text></Pressable>
-          <Pressable onPress={() => setActiveMeta((value) => value === 'tags' ? null : 'tags')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.metaButtonText, activeMeta === 'tags' && styles.metaButtonTextActive]}>{tags.length ? `# ${tags.length} 个标签` : '＋ 标签'}</Text></Pressable>
-        </ScrollView>
+        <View style={styles.metaPanel}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.metaToolbarScroll} contentContainerStyle={styles.metaToolbar}>
+            <Pressable accessibilityState={{ expanded: activeMeta === 'mood' }} onPress={() => setActiveMeta((value) => value === 'mood' ? null : 'mood')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }, activeMeta === 'mood' && styles.metaButtonActive]}><Text style={[styles.metaButtonText, activeMeta === 'mood' && styles.metaButtonTextActive]}>{mood ? `${MOOD_ICONS[mood]} ${mood}` : '＋ 心情'}</Text></Pressable>
+            <Pressable accessibilityState={{ expanded: activeMeta === 'weather' }} onPress={() => setActiveMeta((value) => value === 'weather' ? null : 'weather')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }, activeMeta === 'weather' && styles.metaButtonActive]}><Text style={[styles.metaButtonText, activeMeta === 'weather' && styles.metaButtonTextActive]}>{weather ? `${WEATHER_ICONS[weather]} ${weather}` : '＋ 天气'}</Text></Pressable>
+            <Pressable accessibilityState={{ expanded: activeMeta === 'location' }} onPress={() => setActiveMeta((value) => value === 'location' ? null : 'location')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }, activeMeta === 'location' && styles.metaButtonActive]}><Text numberOfLines={1} style={[styles.metaButtonText, styles.locationMetaText, activeMeta === 'location' && styles.metaButtonTextActive]}>{locationName ? `⌖ ${locationName}` : '＋ 地点'}</Text></Pressable>
+            <Pressable accessibilityState={{ expanded: activeMeta === 'tags' }} onPress={() => setActiveMeta((value) => value === 'tags' ? null : 'tags')} style={[styles.metaButton, { backgroundColor: readingTheme.surface }, activeMeta === 'tags' && styles.metaButtonActive]}><Text style={[styles.metaButtonText, activeMeta === 'tags' && styles.metaButtonTextActive]}>{tags.length ? `# ${tags.length} 个标签` : '＋ 标签'}</Text></Pressable>
+          </ScrollView>
         {activeMeta === 'mood' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moods}>
           {MOODS.map((item) => <Pressable accessibilityLabel={`心情：${item}`} key={item} onPress={() => setMood((current) => current === item ? null : item)} style={[styles.moodChip, { backgroundColor: readingTheme.surface }, mood === item && styles.moodChipActive]}><Text style={[styles.moodText, { color: readingTheme.secondary }, mood === item && styles.moodTextActive]}>{MOOD_ICONS[item]} {item}</Text></Pressable>)}
         </ScrollView></View> : null}
         {activeMeta === 'weather' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moods}>
           {WEATHERS.map((item) => <Pressable accessibilityLabel={`天气：${item}`} key={item} onPress={() => setWeather((current) => current === item ? null : item)} style={[styles.moodChip, { backgroundColor: readingTheme.surface }, weather === item && styles.moodChipActive]}><Text style={[styles.moodText, { color: readingTheme.secondary }, weather === item && styles.moodTextActive]}>{WEATHER_ICONS[item]} {item}</Text></Pressable>)}
         </ScrollView></View> : null}
-        {activeMeta === 'location' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><View style={styles.locationRow}><TextInput maxLength={100} value={locationName} onChangeText={(value) => { setLocationName(value); setLatitude(null); setLongitude(null); }} placeholder="手动填写地点（可选）" placeholderTextColor={readingTheme.secondary} style={[styles.locationInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><Pressable accessibilityLabel="使用当前位置" disabled={locating} onPress={() => void fillCurrentLocation()} style={[styles.locationButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.locationButtonText}>{locating ? '定位中…' : '⌖ 当前位置'}</Text></Pressable></View></View> : null}
+        {activeMeta === 'location' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><Text style={[styles.metaEditorLabel, { color: readingTheme.secondary }]}>地点名称</Text><View style={styles.locationRow}><TextInput maxLength={100} value={locationName} onChangeText={(value) => { setLocationName(value); setLatitude(null); setLongitude(null); }} placeholder="例如：操场、家、咖啡店" placeholderTextColor={readingTheme.secondary} style={[styles.locationInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><Pressable accessibilityLabel="使用当前位置" disabled={locating} onPress={() => void fillCurrentLocation()} style={[styles.locationButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.locationButtonText}>{locating ? '定位中…' : '⌖ 自动定位'}</Text></Pressable></View></View> : null}
         {activeMeta === 'tags' ? <View style={[styles.metaEditor, styles.tagEditor, { backgroundColor: readingTheme.background }]}>
           {tags.map((tag) => <Pressable accessibilityLabel={`移除标签 ${tag}`} key={tag} onPress={() => setTags((current) => current.filter((item) => item !== tag))} style={[styles.tagChip, { backgroundColor: readingTheme.surface }]}><Text style={styles.tagChipText}>#{tag}　×</Text></Pressable>)}
-          {tags.length < 5 ? <TextInput value={tagValue} onChangeText={changeTagValue} onSubmitEditing={() => addTag()} returnKeyType="done" placeholder="＋ 输入标签" placeholderTextColor={readingTheme.secondary} style={[styles.tagInput, { color: readingTheme.text }]} /> : null}
+          {tags.length < 5 ? <View style={[styles.tagInputRow, { backgroundColor: readingTheme.surface }]}><TextInput value={tagValue} onChangeText={changeTagValue} onBlur={() => addTag()} onSubmitEditing={() => addTag()} returnKeyType="done" blurOnSubmit placeholder="输入标签名称" placeholderTextColor={readingTheme.secondary} style={[styles.tagInput, { color: readingTheme.text }]} />{tagValue.trim() ? <Pressable accessibilityLabel="添加标签" hitSlop={6} onPress={() => addTag()} style={styles.tagAddButton}><Text style={styles.tagAddText}>添加</Text></Pressable> : null}</View> : null}
         </View> : null}
+        </View>
         <View style={styles.editorMeta}><Text style={styles.draft}>{!isEditing && activeDraftId ? '已自动保存到草稿箱' : '不需要标题，写下一句话也可以'}</Text><Text style={styles.counter}>{content.length}/10000</Text></View>
       </ScrollView>
     </KeyboardAvoidingView>
     <AppDialog visible={imageMenuVisible} title="添加图片或视频" message="拍照会打开系统相机，可在相机中切换照片或视频模式。" onClose={() => setImageMenuVisible(false)} actions={[{ label: '相册', onPress: () => { setImageMenuVisible(false); void chooseFromLibrary(); } }, { label: '拍照', onPress: () => { setImageMenuVisible(false); void openCamera(); } }]} />
     <AppDialog visible={exitConfirmationVisible} title="退出编辑？" message="尚未保存的修改会丢失。" onClose={() => setExitConfirmationVisible(false)} actions={[{ label: '继续编辑', onPress: () => setExitConfirmationVisible(false) }, { label: '退出', tone: 'danger', onPress: () => { setExitConfirmationVisible(false); images.filter((image) => image.draftOwned).forEach((image) => { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); }); leaveComposer(); } }]} />
+    <AppDialog visible={Boolean(locationDialog)} title={locationDialog?.title ?? ''} message={locationDialog?.message} onClose={() => setLocationDialog(null)} actions={[{ label: '知道了', tone: 'primary', onPress: () => setLocationDialog(null) }]} />
   </SafeAreaView>;
 }
 
@@ -332,12 +370,15 @@ const styles = StyleSheet.create({
   body: { flexGrow: 1, paddingHorizontal: spacing.xl, paddingTop: spacing.md },
   timeChip: { alignSelf: 'flex-start', paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.sm, backgroundColor: colors.primarySoft }, timeChipText: { color: colors.primary, fontSize: 11 },
   timeEditor: { flexDirection: 'row', alignItems: 'center', gap: spacing.md }, timeInput: { flex: 1, height: 42, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text }, apply: { color: colors.primary, fontWeight: '700' },
-  metaToolbarScroll: { flexGrow: 0, marginTop: spacing.md }, metaToolbar: { alignItems: 'center', gap: spacing.xs }, metaButton: { maxWidth: 170, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, metaButtonActive: { backgroundColor: colors.primarySoft }, metaButtonText: { color: colors.textSecondary, fontSize: 10, fontWeight: '600' }, metaButtonTextActive: { color: colors.primary }, locationMetaText: { maxWidth: 145 }, metaEditor: { marginTop: spacing.sm, padding: spacing.sm, borderRadius: radii.md, backgroundColor: colors.surface }, moods: { gap: spacing.xs },
+  metaPanel: { marginTop: spacing.md },
+  metaToolbarScroll: { flexGrow: 0 }, metaToolbar: { alignItems: 'center', gap: spacing.xs }, metaButton: { maxWidth: 170, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, metaButtonActive: { backgroundColor: colors.primarySoft }, metaButtonText: { color: colors.textSecondary, fontSize: 10, fontWeight: '600' }, metaButtonTextActive: { color: colors.primary }, locationMetaText: { maxWidth: 145 }, metaEditor: { marginTop: spacing.sm, padding: spacing.sm, borderRadius: radii.md, backgroundColor: colors.surface }, metaEditorLabel: { marginBottom: 6, fontSize: 9 }, moods: { gap: spacing.xs },
   moodChip: { paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, moodChipActive: { backgroundColor: colors.primary }, moodText: { color: colors.textSecondary, fontSize: 10 }, moodTextActive: { color: '#FFFFFF' },
   locationRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, locationInput: { flex: 1, height: 38, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 11 }, locationButton: { height: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.primarySoft }, locationButtonText: { color: colors.primary, fontSize: 10, fontWeight: '600' },
   tagEditor: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs },
   tagChip: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, tagChipText: { color: colors.primary, fontSize: 10 },
-  tagInput: { minWidth: 72, height: 28, paddingHorizontal: spacing.sm, paddingVertical: 0, color: colors.text, fontSize: 10 },
+  tagInputRow: { flex: 1, minWidth: 150, height: 36, flexDirection: 'row', alignItems: 'center', borderRadius: radii.md },
+  tagInput: { flex: 1, height: 36, paddingHorizontal: spacing.md, paddingVertical: 0, color: colors.text, fontSize: 10 },
+  tagAddButton: { height: 28, alignItems: 'center', justifyContent: 'center', marginRight: 4, paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.primary }, tagAddText: { color: '#FFFFFF', fontSize: 10, fontWeight: '700' },
   imageRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
   imageItem: { position: 'relative' }, imagePreview: { width: 64, height: 64, borderRadius: radii.sm, backgroundColor: 'transparent' },
   sortingImage: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm },

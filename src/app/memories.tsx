@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
+import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { listEntries, listSuppressedMemoryEntryIds, suppressMemoryEntry } from '@/database/journal-repository';
@@ -36,6 +37,8 @@ export default function MemoriesScreen() {
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<MemoryMode>('random');
   const [modePickerVisible, setModePickerVisible] = useState(false);
+  const modeButtonRef = useRef<View>(null);
+  const [modeAnchor, setModeAnchor] = useState<{ x: number; y: number; width: number; height: number }>({ x: spacing.xl, y: 0, width: 96, height: 32 });
   const [hideConfirmationVisible, setHideConfirmationVisible] = useState(false);
   const [tag, setTag] = useState<string | null>(null);
   const [shuffle, setShuffle] = useState(() => Math.floor(Math.random() * 1_000_000));
@@ -90,12 +93,18 @@ export default function MemoriesScreen() {
   }
 
   const modeLabel = modes.find((item) => item.value === mode)?.label ?? '随缘拾起';
+  function openModePicker() {
+    modeButtonRef.current?.measureInWindow((x, y, width, height) => {
+      setModeAnchor({ x, y, width, height });
+      setModePickerVisible(true);
+    });
+  }
 
   if (loading) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><ActivityIndicator color={colors.primary} style={styles.loader} /></SafeAreaView>;
   return <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable onPress={() => router.back()} hitSlop={12}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>拾起一刻</Text><View style={styles.headerSpace} /></View>
     <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-      <View style={styles.modeRow}><Pressable accessibilityLabel="选择拾取方式" onPress={() => setModePickerVisible(true)} style={[styles.modeButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.modeButtonText}>{modeLabel}</Text><View style={styles.modeChevron} /></Pressable><Text style={[styles.candidateCount, { color: readingTheme.secondary }]}>{candidates.length ? `${candidates.length} 条可拾起` : '暂无记录'}</Text><Pressable accessibilityLabel="再拾一条" onPress={() => setShuffle((value) => value + 1)} style={styles.shuffleButton}><Text style={styles.shuffleText}>↻</Text></Pressable></View>
+      <View style={styles.modeRow}><Pressable ref={modeButtonRef} accessibilityLabel="选择拾取方式" onPress={openModePicker} style={[styles.modeButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.modeButtonText}>{modeLabel}</Text><View style={[styles.modeChevron, modePickerVisible && styles.modeChevronOpen]} /></Pressable><Text style={[styles.candidateCount, { color: readingTheme.secondary }]}>{candidates.length ? `${candidates.length} 条可拾起` : '暂无记录'}</Text><Pressable accessibilityLabel="再拾一条" onPress={() => setShuffle((value) => value + 1)} style={styles.shuffleButton}><SymbolView name={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }} size={17} tintColor="#FFFFFF" /></Pressable></View>
       {mode === 'tag' ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagRow}>{tags.map((item) => <Pressable key={item} onPress={() => { setTag(item); setShuffle(Math.floor(Math.random() * 1_000_000)); }} style={[styles.tagChip, { backgroundColor: tag === item ? colors.primary : readingTheme.surface }]}><Text style={[styles.tagText, { color: tag === item ? '#FFFFFF' : readingTheme.secondary }, tag === item && styles.tagTextActive]}>#{item}</Text></Pressable>)}</ScrollView> : null}
 
       {picked ? <View style={[styles.memoryCard, { backgroundColor: readingTheme.surface }]}>
@@ -108,13 +117,26 @@ export default function MemoriesScreen() {
           </View>
         </Pressable>
       </View> : <View style={[styles.empty, { backgroundColor: readingTheme.surface }]}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>{mode === 'tag' && !tag ? '先选择一个标签' : '今天没有可拾起的记录'}</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>换一种方式看看，过去会在别处等你。</Text></View>}
-
       <Text style={[styles.sectionTitle, { color: readingTheme.text }]}>近况回顾</Text>
-      <ReviewStrip weekEntries={weekEntries} monthEntries={monthEntries} month={now.getMonth() + 1} />
+      <View style={[styles.reviewGroup, { backgroundColor: readingTheme.surface }]}>
+        <ReviewStrip weekEntries={weekEntries} monthEntries={monthEntries} month={now.getMonth() + 1} />
+      </View>
+      <Pressable
+        accessibilityLabel="查看时光总结"
+        onPress={() => router.push({ pathname: '/summaries', params: { period: 'month' } })}
+        style={({ pressed }) => [styles.summaryLink, { backgroundColor: readingTheme.surface }, pressed && styles.summaryLinkPressed]}
+      >
+        <View style={styles.summaryIcon}><SymbolView name={{ ios: 'chart.line.uptrend.xyaxis', android: 'insights', web: 'insights' }} size={18} tintColor={colors.primary} /></View>
+        <View style={styles.summaryCopy}>
+          <Text style={styles.summaryLinkTitle}>时光总结</Text>
+          <Text style={[styles.summaryLinkDescription, { color: readingTheme.secondary }]}>查看周、月与年度记录趋势</Text>
+        </View>
+        <Text style={styles.summaryLinkArrow}>›</Text>
+      </Pressable>
       <Text style={[styles.sectionTitle, { color: readingTheme.text }]}>{now.getFullYear()} 年足迹</Text>
       <Heatmap entries={entries} year={now.getFullYear()} />
     </ScrollView>
-    <Modal visible={modePickerVisible} transparent animationType="fade" onRequestClose={() => setModePickerVisible(false)}><Pressable onPress={() => setModePickerVisible(false)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.modePicker, { backgroundColor: readingTheme.background }]}><Text style={[styles.pickerTitle, { color: readingTheme.text }]}>怎样拾起过去？</Text>{modes.map((item) => <Pressable key={item.value} onPress={() => { setMode(item.value); setShuffle(Math.floor(Math.random() * 1_000_000)); setModePickerVisible(false); }} style={[styles.pickerItem, { borderBottomColor: readingTheme.border }]}><Text style={[styles.pickerItemText, { color: readingTheme.secondary }, mode === item.value && styles.pickerItemActive]}>{item.label}</Text>{mode === item.value ? <Text style={styles.check}>✓</Text> : null}</Pressable>)}<Pressable onPress={() => setModePickerVisible(false)} style={styles.pickerCancel}><Text style={[styles.pickerCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable></Pressable></Pressable></Modal>
+    <Modal visible={modePickerVisible} transparent animationType="fade" onRequestClose={() => setModePickerVisible(false)}><Pressable onPress={() => setModePickerVisible(false)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.modePicker, { backgroundColor: readingTheme.background, left: modeAnchor.x, top: modeAnchor.y + modeAnchor.height + 2, minWidth: Math.max(modeAnchor.width, 132) }]}>{modes.map((item) => <Pressable accessibilityRole="menuitem" key={item.value} onPress={() => { setMode(item.value); setShuffle(Math.floor(Math.random() * 1_000_000)); setModePickerVisible(false); }} style={({ pressed }) => [styles.pickerItem, pressed && { backgroundColor: readingTheme.surface }]}><Text style={[styles.pickerItemText, { color: mode === item.value ? colors.primary : readingTheme.text }, mode === item.value && styles.pickerItemActive]}>{item.label}</Text>{mode === item.value ? <Text style={styles.check}>✓</Text> : null}</Pressable>)}</Pressable></Pressable></Modal>
     <AppDialog visible={hideConfirmationVisible} title="不再推荐这条记录？" message="它仍会保留在时间轴中，只是不再出现在“拾起一刻”。" onClose={() => setHideConfirmationVisible(false)} actions={[{ label: '取消', onPress: () => setHideConfirmationVisible(false) }, { label: '不再推荐', tone: 'danger', onPress: async () => { setHideConfirmationVisible(false); await hidePicked(); } }]} />
   </SafeAreaView>;
 }
@@ -135,7 +157,7 @@ function ReviewStrip({ weekEntries, monthEntries, month }: { weekEntries: Entry[
   const { readingTheme } = useAppPreferences();
   const weekImages = weekEntries.reduce((total, entry) => total + entry.images.length, 0);
   const monthImages = monthEntries.reduce((total, entry) => total + entry.images.length, 0);
-  return <View style={[styles.reviewStrip, { backgroundColor: readingTheme.surface }]}><ReviewMetric title="最近 7 天" count={weekEntries.length} images={weekImages} /><View style={[styles.reviewDivider, { backgroundColor: readingTheme.border }]} /><ReviewMetric title={`${month} 月`} count={monthEntries.length} images={monthImages} /></View>;
+  return <View style={styles.reviewStrip}><ReviewMetric title="最近 7 天" count={weekEntries.length} images={weekImages} /><View style={[styles.reviewDivider, { backgroundColor: readingTheme.border }]} /><ReviewMetric title={`${month} 月`} count={monthEntries.length} images={monthImages} /></View>;
 }
 
 function ReviewMetric({ title, count, images }: { title: string; count: number; images: number }) {
@@ -177,8 +199,10 @@ function Heatmap({ entries, year }: { entries: Entry[]; year: number }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background }, loader: { marginTop: 100 }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 }, scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: 40 },
   modeRow: { height: 36, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }, modeButton: { height: 32, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, modeButtonText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, modeChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, candidateCount: { flex: 1, color: colors.textFaint, fontSize: 9, textAlign: 'right' }, shuffleButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary }, shuffleText: { color: '#FFFFFF', fontSize: 18, lineHeight: 21, textAlign: 'center', includeFontPadding: false }, tagRow: { gap: spacing.sm, paddingBottom: spacing.sm }, tagChip: { paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, tagText: { color: colors.textSecondary, fontSize: 10 }, tagTextActive: { fontWeight: '700' },
+  modeChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] },
   memoryCard: { padding: spacing.md, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted }, memoryHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, memoryDate: { color: colors.primary, fontSize: 10, fontWeight: '700' }, memoryMenu: { color: colors.textSecondary, fontSize: 13, letterSpacing: 1 }, memoryBody: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md, marginTop: spacing.sm }, memoryBodyWithoutImage: { marginTop: spacing.xs }, memoryText: { flex: 1, minHeight: 88 }, memoryContent: { color: colors.text, fontFamily: fonts.serif, fontSize: 15, lineHeight: 23 }, meta: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 10 }, singleThumbnail: { width: 88, height: 88, borderRadius: radii.md, backgroundColor: colors.border }, thumbnailGrid: { width: 88, height: 88, flexDirection: 'row', flexWrap: 'wrap', gap: 4 }, thumbnailCell: { position: 'relative', width: 42, height: 42 }, thumbnailImage: { width: 42, height: 42, borderRadius: radii.sm, backgroundColor: colors.border }, thumbnailMore: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm, backgroundColor: '#00000073' }, thumbnailMoreText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, empty: { alignItems: 'center', paddingVertical: 32, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted }, emptyTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16 }, emptyText: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 10 },
-  sectionTitle: { marginTop: spacing.lg, marginBottom: spacing.sm, color: colors.text, fontFamily: fonts.serif, fontSize: 16, fontWeight: '600' }, reviewStrip: { minHeight: 66, flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted }, reviewMetric: { flex: 1, alignItems: 'center' }, reviewDivider: { width: StyleSheet.hairlineWidth, height: 38, backgroundColor: colors.border }, reviewTitle: { color: colors.primary, fontSize: 9, fontWeight: '700' }, reviewValue: { marginTop: 2, color: colors.text, fontFamily: fonts.serif, fontSize: 15 }, reviewLabel: { color: colors.textFaint, fontSize: 8 },
-  overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, modePicker: { width: '100%', maxWidth: 300, padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.background }, pickerTitle: { marginBottom: spacing.md, color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600', textAlign: 'center' }, pickerItem: { height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, pickerItemText: { color: colors.textSecondary, fontSize: 12 }, pickerItemActive: { color: colors.primary, fontWeight: '700' }, check: { color: colors.primary, fontSize: 12 }, pickerCancel: { alignItems: 'center', paddingTop: spacing.lg }, pickerCancelText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
+  sectionTitle: { marginTop: spacing.xl, marginBottom: spacing.sm, color: colors.text, fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' }, reviewGroup: { overflow: 'hidden', borderRadius: radii.lg }, reviewStrip: { minHeight: 78, flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md }, reviewMetric: { flex: 1, alignItems: 'center', justifyContent: 'center' }, reviewDivider: { width: StyleSheet.hairlineWidth, height: 42, backgroundColor: colors.border }, reviewTitle: { color: colors.primary, fontSize: 10, lineHeight: 13, fontWeight: '700' }, reviewValue: { marginTop: 3, color: colors.text, fontFamily: fonts.serif, fontSize: 14, lineHeight: 18 }, reviewLabel: { marginTop: 2, color: colors.textFaint, fontSize: 9, lineHeight: 12 },
+  summaryLink: { minHeight: 64, flexDirection: 'row', alignItems: 'center', marginTop: spacing.md, paddingHorizontal: spacing.md, borderRadius: radii.lg }, summaryLinkPressed: { opacity: 0.62 }, summaryIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: colors.primarySoft }, summaryCopy: { flex: 1, marginLeft: spacing.md }, summaryLinkTitle: { color: colors.primary, fontSize: 13, lineHeight: 17, fontWeight: '700' }, summaryLinkDescription: { marginTop: 2, fontSize: 10, lineHeight: 13 }, summaryLinkArrow: { color: colors.primary, fontSize: 17 },
+  overlay: { flex: 1, backgroundColor: '#00000014' }, modePicker: { position: 'absolute', overflow: 'hidden', paddingVertical: spacing.xs, borderRadius: radii.md, backgroundColor: colors.background, elevation: 8, shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } }, pickerItem: { minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, paddingHorizontal: spacing.md }, pickerItemText: { color: colors.textSecondary, fontSize: 10, fontWeight: '600' }, pickerItemActive: { color: colors.primary, fontWeight: '700' }, check: { color: colors.primary, fontSize: 12, fontWeight: '700' },
   heatCard: { padding: spacing.sm, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted }, heatContent: { paddingTop: 16 }, monthLabels: { position: 'absolute', top: 0, left: 0, right: 0, height: 14 }, monthLabel: { position: 'absolute', width: 28, fontSize: 8, lineHeight: 11 }, heatmap: { flexDirection: 'row', gap: 3 }, heatWeek: { gap: 3 }, heatCell: { width: 8, height: 8, borderRadius: 2, backgroundColor: colors.border }, heatOutside: { opacity: 0 }, heatOne: { backgroundColor: '#B9D0C3' }, heatTwo: { backgroundColor: '#76A08D' }, heatMany: { backgroundColor: colors.primary }, heatLegend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: spacing.sm }, legendText: { color: colors.textFaint, fontSize: 8 },
 });

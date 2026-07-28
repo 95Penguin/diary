@@ -7,7 +7,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
  * migrated in production: data from those builds must first be exported by the
  * old build and restored through the validated ZIP backup flow.
  */
-export const DATABASE_VERSION = 13;
+export const DATABASE_VERSION = 14;
 export const DATABASE_BASELINE_VERSION = 13;
 
 const BASELINE_SCHEMA = `
@@ -144,6 +144,19 @@ const BASELINE_SCHEMA = `
   CREATE INDEX idx_entries_mood
     ON entries(mood, occurred_at DESC)
     WHERE deleted_at IS NULL AND mood IS NOT NULL;
+  CREATE INDEX idx_follow_ups_created_at
+    ON follow_ups(created_at DESC)
+    WHERE deleted_at IS NULL;
+  CREATE INDEX idx_entry_tags_entry_id
+    ON entry_tags(entry_id, sort_order ASC);
+`;
+
+const MIGRATION_13_TO_14 = `
+  CREATE INDEX IF NOT EXISTS idx_follow_ups_created_at
+    ON follow_ups(created_at DESC)
+    WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS idx_entry_tags_entry_id
+    ON entry_tags(entry_id, sort_order ASC);
 `;
 
 export async function migrateDatabase(db: SQLiteDatabase) {
@@ -163,7 +176,13 @@ export async function migrateDatabase(db: SQLiteDatabase) {
 
   await db.execAsync('BEGIN IMMEDIATE');
   try {
-    await db.execAsync(BASELINE_SCHEMA);
+    if (currentVersion === 0) {
+      await db.execAsync(BASELINE_SCHEMA);
+    } else if (currentVersion === 13) {
+      await db.execAsync(MIGRATION_13_TO_14);
+    } else {
+      throw new Error(`没有可用的数据库迁移路径：${currentVersion} → ${DATABASE_VERSION}`);
+    }
     await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION}; COMMIT`);
   } catch (error) {
     try {
