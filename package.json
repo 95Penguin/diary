@@ -1,12 +1,13 @@
 {
   "name": "shishi-mobile",
   "main": "expo-router/entry",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "dependencies": {
     "@expo-google-fonts/noto-sans-sc": "^0.4.3",
     "@expo-google-fonts/noto-serif-sc": "^0.4.3",
     "@expo/ui": "~57.0.7",
     "expo": "~57.0.8",
+    "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.6",
     "expo-dev-client": "~57.0.9",
     "expo-device": "~57.0.1",

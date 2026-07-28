@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
 import { getJournalStats, getLastExportAt } from '@/database/journal-repository';
@@ -105,6 +105,12 @@ export default function SettingsScreen() {
         <Stat value={stats.images} label="图片" />
       </View>
 
+      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>内容管理</Text>
+      <Pressable onPress={() => router.push('/metadata' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View><Text style={[styles.rowTitle, { color: readingTheme.text }]}>标签与地点</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>整理、合并或移除历史内容</Text></View>
+        <Text style={styles.arrow}>›</Text>
+      </Pressable>
+
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>数据与备份</Text>
       <Pressable onPress={() => router.push('/trash')} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
         <View><Text style={[styles.rowTitle, { color: readingTheme.text }]}>回收站</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>删除的记录保留 30 天</Text></View>
@@ -151,6 +157,12 @@ export default function SettingsScreen() {
       <View style={[styles.preview, { backgroundColor: readingTheme.surface }]}><Text style={[styles.previewTitle, { color: readingTheme.secondary }]}>实时预览</Text><Text style={[styles.previewText, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 24 * fontScale }]}>今天也值得被认真记录。</Text></View>
 
       <View style={[styles.coming, { borderColor: readingTheme.border }]}><Text style={[styles.comingTitle, { color: readingTheme.text }]}>阅读提示</Text><Text style={[styles.comingText, { color: readingTheme.secondary }]}>字体大小会在系统缩放基础上调整；日历数字保持固定比例，避免日期错位。</Text></View>
+
+      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>关于</Text>
+      <Pressable onPress={() => router.push('/about' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View><Text style={[styles.rowTitle, { color: readingTheme.text }]}>关于拾时</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>版本、数据库状态与故障诊断</Text></View>
+        <Text style={styles.arrow}>›</Text>
+      </Pressable>
     </ScrollView>
     <Modal visible={profileEditor !== null} transparent animationType="fade" onRequestClose={() => setProfileEditor(null)}><Pressable onPress={() => setProfileEditor(null)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.editorCard, { backgroundColor: readingTheme.background }]}><Text style={[styles.editorTitle, { color: readingTheme.text }]}>{profileEditor === 'nickname' ? '编辑昵称' : '编辑个性签名'}</Text>{profileEditor === 'nickname' ? <TextInput autoFocus maxLength={20} value={nickname} onChangeText={setNickname} placeholder="输入昵称" placeholderTextColor={readingTheme.secondary} style={[styles.nicknameInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /> : <TextInput autoFocus multiline textAlignVertical="top" maxLength={50} value={signature} onChangeText={setSignature} placeholder="写一句属于你的话" placeholderTextColor={readingTheme.secondary} style={[styles.nicknameInput, styles.signatureInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} />}<View style={styles.editorActions}><Pressable onPress={() => setProfileEditor(null)}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable onPress={() => void saveProfile()}><Text style={styles.confirmText}>保存</Text></Pressable></View></Pressable></Pressable></Modal>
   </SafeAreaView>;

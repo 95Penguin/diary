@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
-import { createDraftId, createEntryWithDetails, deleteDraft, getDraft, getEntry, saveDraft, updateEntryWithDetails } from '@/database/journal-repository';
+import { createDraftId, createEntryWithDetails, deleteDraft, getDraft, getEntry, listEntryFilterOptions, saveDraft, updateEntryWithDetails, type EntryFilterOptions } from '@/database/journal-repository';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatShortDateTime, occurrenceTimeForDate, parseLocalDateTime, toLocalDateTimeInput } from '@/utils/date';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
@@ -24,6 +24,7 @@ const MOODS = ['开心', '平静', '期待', '难过', '疲惫', '生气'] as co
 const MOOD_ICONS: Record<string, string> = { 开心: '😊', 平静: '😌', 期待: '✨', 难过: '😔', 疲惫: '😴', 生气: '😤' };
 const WEATHERS = ['晴', '多云', '阴', '雨', '雷雨', '雪', '雾'] as const;
 const WEATHER_ICONS: Record<string, string> = { 晴: '☀️', 多云: '⛅', 阴: '☁️', 雨: '🌧️', 雷雨: '⛈️', 雪: '🌨️', 雾: '🌫️' };
+const EMPTY_SUGGESTIONS: EntryFilterOptions = { locations: [], tags: [], moods: [], weather: [] };
 
 export default function ComposeScreen() {
   const db = useSQLiteContext();
@@ -51,6 +52,7 @@ export default function ComposeScreen() {
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
   const [locating, setLocating] = useState(false);
+  const [locationStage, setLocationStage] = useState<'coordinate' | 'address' | null>(null);
   const [originalTags, setOriginalTags] = useState<string[]>([]);
   const [originalMood, setOriginalMood] = useState<string | null>(null);
   const [originalWeather, setOriginalWeather] = useState<string | null>(null);
@@ -60,6 +62,7 @@ export default function ComposeScreen() {
   const [imageMenuVisible, setImageMenuVisible] = useState(false);
   const [exitConfirmationVisible, setExitConfirmationVisible] = useState(false);
   const [locationDialog, setLocationDialog] = useState<{ title: string; message: string } | null>(null);
+  const [suggestions, setSuggestions] = useState<EntryFilterOptions>(EMPTY_SUGGESTIONS);
   const inputRef = useRef<TextInput>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -77,6 +80,10 @@ export default function ComposeScreen() {
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
   }, []);
+
+  useEffect(() => {
+    void listEntryFilterOptions(db).then(setSuggestions).catch(() => { /* Suggestions are optional. */ });
+  }, [db]);
 
   useEffect(() => {
     let active = true;
@@ -129,6 +136,7 @@ export default function ComposeScreen() {
   async function fillCurrentLocation() {
     if (locating) return;
     setLocating(true);
+    setLocationStage('coordinate');
     try {
       const servicesEnabled = await Location.hasServicesEnabledAsync();
       if (!servicesEnabled) {
@@ -140,41 +148,48 @@ export default function ComposeScreen() {
         setLocationDialog({ title: '无法读取位置', message: '可以在系统设置中允许位置权限，或直接手动填写地点。' });
         return;
       }
-      const result = await Promise.race([
-        (async () => {
-          const recentPosition = await Location.getLastKnownPositionAsync({
-            maxAge: 5 * 60 * 1000,
-            requiredAccuracy: 1000,
-          });
-          const position = recentPosition
-            ?? await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          const { latitude: nextLatitude, longitude: nextLongitude } = position.coords;
-          const addresses = await Location.reverseGeocodeAsync({
-            latitude: nextLatitude,
-            longitude: nextLongitude,
-          });
-          return { position, address: addresses[0] };
-        })(),
+      const recentPosition = await Location.getLastKnownPositionAsync({
+        maxAge: 10 * 60 * 1000,
+        requiredAccuracy: 3000,
+      });
+      const position = recentPosition ?? await Promise.race([
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+          mayShowUserSettingsDialog: true,
+        }),
         new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('location-flow-timeout')), 5_000);
+          setTimeout(() => reject(new Error('coordinate-timeout')), 8_000);
         }),
       ]);
-      const { latitude: nextLatitude, longitude: nextLongitude } = result.position.coords;
-      const address = result.address;
-      const parts = [
-        address?.name,
-        address?.street,
-        address?.district,
-        address?.subregion,
-        address?.city,
-        address?.region,
-      ].filter((item, index, values): item is string => Boolean(item) && values.indexOf(item) === index);
-      setLocationName(address?.formattedAddress || parts.join(' · ') || `${nextLatitude.toFixed(5)}, ${nextLongitude.toFixed(5)}`);
+      const { latitude: nextLatitude, longitude: nextLongitude } = position.coords;
       setLatitude(nextLatitude); setLongitude(nextLongitude);
+      setLocationName(`${nextLatitude.toFixed(5)}, ${nextLongitude.toFixed(5)}`);
+      setLocationStage('address');
+      try {
+        const addresses = await Promise.race([
+          Location.reverseGeocodeAsync({ latitude: nextLatitude, longitude: nextLongitude }),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('address-timeout')), 4_000);
+          }),
+        ]);
+        const address = addresses[0];
+        const parts = [
+          address?.name,
+          address?.street,
+          address?.district,
+          address?.subregion,
+          address?.city,
+          address?.region,
+        ].filter((item, index, values): item is string => Boolean(item) && values.indexOf(item) === index);
+        if (address?.formattedAddress || parts.length) setLocationName(address?.formattedAddress || parts.join(' · '));
+        else setLocationDialog({ title: '已获取位置', message: '坐标已经保存，但没有查询到地址名称。你可以直接修改地点名称。' });
+      } catch {
+        setLocationDialog({ title: '已获取位置', message: '坐标已经保存，但地址名称解析较慢。你可以直接修改地点名称。' });
+      }
     } catch {
-      setLocationDialog({ title: '定位超时', message: '没有及时获取到位置。可以移到开阔处重试，或直接手动填写地点。' });
+      setLocationDialog({ title: '无法获取坐标', message: '请确认定位权限和系统定位已开启，也可以移到开阔处重试或直接填写地点。' });
     }
-    finally { setLocating(false); }
+    finally { setLocating(false); setLocationStage(null); }
   }
 
   function applyTime() {
@@ -346,10 +361,11 @@ export default function ComposeScreen() {
         {activeMeta === 'weather' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moods}>
           {WEATHERS.map((item) => <Pressable accessibilityLabel={`天气：${item}`} key={item} onPress={() => setWeather((current) => current === item ? null : item)} style={[styles.moodChip, { backgroundColor: readingTheme.surface }, weather === item && styles.moodChipActive]}><Text style={[styles.moodText, { color: readingTheme.secondary }, weather === item && styles.moodTextActive]}>{WEATHER_ICONS[item]} {item}</Text></Pressable>)}
         </ScrollView></View> : null}
-        {activeMeta === 'location' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><Text style={[styles.metaEditorLabel, { color: readingTheme.secondary }]}>地点名称</Text><View style={styles.locationRow}><TextInput maxLength={100} value={locationName} onChangeText={(value) => { setLocationName(value); setLatitude(null); setLongitude(null); }} placeholder="例如：操场、家、咖啡店" placeholderTextColor={readingTheme.secondary} style={[styles.locationInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><Pressable accessibilityLabel="使用当前位置" disabled={locating} onPress={() => void fillCurrentLocation()} style={[styles.locationButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.locationButtonText}>{locating ? '定位中…' : '⌖ 自动定位'}</Text></Pressable></View></View> : null}
+        {activeMeta === 'location' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><Text style={[styles.metaEditorLabel, { color: readingTheme.secondary }]}>地点名称</Text><View style={styles.locationRow}><TextInput maxLength={100} value={locationName} onChangeText={(value) => { setLocationName(value); setLatitude(null); setLongitude(null); }} placeholder="例如：操场、家、咖啡店" placeholderTextColor={readingTheme.secondary} style={[styles.locationInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><Pressable accessibilityLabel="使用当前位置" disabled={locating} onPress={() => void fillCurrentLocation()} style={[styles.locationButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.locationButtonText}>{locationStage === 'coordinate' ? '获取坐标…' : locationStage === 'address' ? '解析地址…' : '⌖ 自动定位'}</Text></Pressable></View>{suggestions.locations.filter((item) => !locationName.trim() || item.toLocaleLowerCase().includes(locationName.trim().toLocaleLowerCase())).slice(0, 5).length ? <View style={styles.suggestionArea}><Text style={[styles.suggestionLabel, { color: readingTheme.secondary }]}>常用地点</Text><View style={styles.suggestionRow}>{suggestions.locations.filter((item) => !locationName.trim() || item.toLocaleLowerCase().includes(locationName.trim().toLocaleLowerCase())).slice(0, 5).map((item) => <Pressable key={item} onPress={() => { setLocationName(item); setLatitude(null); setLongitude(null); }} style={[styles.suggestionChip, { backgroundColor: readingTheme.surface }]}><Text style={styles.suggestionText}>⌖ {item}</Text></Pressable>)}</View></View> : null}</View> : null}
         {activeMeta === 'tags' ? <View style={[styles.metaEditor, styles.tagEditor, { backgroundColor: readingTheme.background }]}>
           {tags.map((tag) => <Pressable accessibilityLabel={`移除标签 ${tag}`} key={tag} onPress={() => setTags((current) => current.filter((item) => item !== tag))} style={[styles.tagChip, { backgroundColor: readingTheme.surface }]}><Text style={styles.tagChipText}>#{tag}　×</Text></Pressable>)}
           {tags.length < 5 ? <View style={[styles.tagInputRow, { backgroundColor: readingTheme.surface }]}><TextInput value={tagValue} onChangeText={changeTagValue} onBlur={() => addTag()} onSubmitEditing={() => addTag()} returnKeyType="done" blurOnSubmit placeholder="输入标签名称" placeholderTextColor={readingTheme.secondary} style={[styles.tagInput, { color: readingTheme.text }]} />{tagValue.trim() ? <Pressable accessibilityLabel="添加标签" hitSlop={6} onPress={() => addTag()} style={styles.tagAddButton}><Text style={styles.tagAddText}>添加</Text></Pressable> : null}</View> : null}
+          {tags.length < 5 ? suggestions.tags.filter((item) => !tags.includes(item) && (!tagValue.trim() || item.toLocaleLowerCase().includes(tagValue.trim().toLocaleLowerCase()))).slice(0, 6).map((item) => <Pressable key={item} onPress={() => addTag(item)} style={[styles.suggestionChip, { backgroundColor: readingTheme.surface }]}><Text style={styles.suggestionText}>#{item}</Text></Pressable>) : null}
         </View> : null}
         </View>
         <View style={styles.editorMeta}><Text style={styles.draft}>{!isEditing && activeDraftId ? '已自动保存到草稿箱' : '不需要标题，写下一句话也可以'}</Text><Text style={styles.counter}>{content.length}/10000</Text></View>
@@ -379,6 +395,7 @@ const styles = StyleSheet.create({
   tagInputRow: { flex: 1, minWidth: 150, height: 36, flexDirection: 'row', alignItems: 'center', borderRadius: radii.md },
   tagInput: { flex: 1, height: 36, paddingHorizontal: spacing.md, paddingVertical: 0, color: colors.text, fontSize: 10 },
   tagAddButton: { height: 28, alignItems: 'center', justifyContent: 'center', marginRight: 4, paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.primary }, tagAddText: { color: '#FFFFFF', fontSize: 10, fontWeight: '700' },
+  suggestionArea: { marginTop: spacing.sm }, suggestionLabel: { marginBottom: 5, fontSize: 9 }, suggestionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }, suggestionChip: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill }, suggestionText: { color: colors.primary, fontSize: 10 },
   imageRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
   imageItem: { position: 'relative' }, imagePreview: { width: 64, height: 64, borderRadius: radii.sm, backgroundColor: 'transparent' },
   sortingImage: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm },

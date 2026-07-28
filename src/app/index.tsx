@@ -22,6 +22,7 @@ import {
   saveCalendarOrder,
   type EntryFilterKind,
   type EntryFilterOptions,
+  type EntryListFilters,
   type EntryPageCursor,
 } from '@/database/journal-repository';
 import type { Entry } from '@/domain/journal';
@@ -91,6 +92,7 @@ export default function HomeScreen() {
 }
 
 type FilterKind = EntryFilterKind;
+type ActiveFilterKind = Exclude<FilterKind, 'none'>;
 const PAGE_SIZE = 30;
 const EMPTY_FILTER_OPTIONS: EntryFilterOptions = { locations: [], tags: [], moods: [], weather: [] };
 
@@ -105,7 +107,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
   const requestId = useRef(0);
   const [filterOptions, setFilterOptions] = useState<EntryFilterOptions>(EMPTY_FILTER_OPTIONS);
   const [filterKind, setFilterKind] = useState<FilterKind>('none');
-  const [filterValue, setFilterValue] = useState<string | null>(null);
+  const [filters, setFilters] = useState<EntryListFilters>({});
   const [filterPickerVisible, setFilterPickerVisible] = useState(false);
   const filterButtonRef = useRef<View>(null);
   const [filterAnchor, setFilterAnchor] = useState<{ x: number; y: number; width: number; height: number }>({ x: spacing.xl, y: 0, width: 96, height: 36 });
@@ -114,12 +116,13 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
   const availableMoods = filterOptions.moods;
   const availableWeather = filterOptions.weather;
   const filterLabels: Record<FilterKind, string> = { none: '全部记录', time: '时间', location: '地点', tag: '标签', mood: '心情', weather: '天气' };
+  const activeFilterCount = Object.values(filters).filter(Boolean).length;
 
   const loadFirstPage = useCallback(async () => {
     const currentRequest = ++requestId.current;
     try {
       const [page, options] = await Promise.all([
-        listEntryPage(db, { limit: PAGE_SIZE, filter: { kind: filterKind, value: filterValue } }),
+        listEntryPage(db, { limit: PAGE_SIZE, filters }),
         listEntryFilterOptions(db),
       ]);
       if (currentRequest !== requestId.current) return;
@@ -130,7 +133,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
     } finally {
       if (currentRequest === requestId.current) setLoading(false);
     }
-  }, [db, filterKind, filterValue]);
+  }, [db, filters]);
 
   useEffect(() => {
     if (refreshKey > 0) void loadFirstPage();
@@ -144,7 +147,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
       const page = await listEntryPage(db, {
         limit: PAGE_SIZE,
         cursor,
-        filter: { kind: filterKind, value: filterValue },
+        filters,
       });
       if (currentRequest !== requestId.current) return;
       setEntries((current) => [...current, ...page.entries.filter((item) => !current.some((entry) => entry.id === item.id))]);
@@ -153,7 +156,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
     } finally {
       if (currentRequest === requestId.current) setLoadingMore(false);
     }
-  }, [cursor, db, filterKind, filterValue, hasMore, loading, loadingMore]);
+  }, [cursor, db, filters, hasMore, loading, loadingMore]);
 
   const groups = useMemo(() => {
     const result: { label: string; weekday: string; data: Entry[] }[] = [];
@@ -175,7 +178,21 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
           : filterKind === 'weather' ? availableWeather.map((value) => ({ value, label: value })) : [];
 
   function chooseFilterKind(kind: FilterKind) {
-    setFilterKind(kind); setFilterValue(null); setFilterPickerVisible(false);
+    if (kind === 'none') {
+      setFilters({});
+      setFilterKind('none');
+    } else setFilterKind(kind);
+    setFilterPickerVisible(false);
+  }
+
+  function setFilterValue(value: string | null) {
+    if (filterKind === 'none') return;
+    setFilters((current) => {
+      const next = { ...current };
+      if (value) next[filterKind] = value;
+      else delete next[filterKind];
+      return next;
+    });
   }
 
   function openFilterPicker() {
@@ -187,15 +204,17 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
 
   return <View style={styles.timelineContainer}>
     <View style={styles.timelineTools}><ScrollView horizontal style={styles.filterBarScroll} contentContainerStyle={styles.filterBar} showsHorizontalScrollIndicator={false}>
-        <Pressable ref={filterButtonRef} accessibilityLabel="选择筛选方式" onPress={openFilterPicker} style={[styles.filterMenuButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.filterMenuText, { color: filterKind !== 'none' ? colors.primary : readingTheme.secondary }]}>{filterLabels[filterKind]}</Text><View style={[styles.filterChevron, filterPickerVisible && styles.filterChevronOpen, { borderColor: filterKind !== 'none' ? colors.primary : readingTheme.secondary }]} /></Pressable>
-        {filterKind !== 'none' ? <><Pressable onPress={() => setFilterValue(null)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, !filterValue && styles.filterChipActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, !filterValue && styles.filterTextActive]}>全部</Text></Pressable>{valueOptions.map((option) => <Pressable key={option.value} onPress={() => setFilterValue(option.value)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, filterValue === option.value && styles.filterChipActive]}><Text numberOfLines={1} style={[styles.filterText, { color: readingTheme.secondary }, filterValue === option.value && styles.filterTextActive]}>{option.label}</Text></Pressable>)}<Pressable accessibilityLabel="清除筛选" hitSlop={8} onPress={() => { setFilterKind('none'); setFilterValue(null); }}><Text style={[styles.clearFilter, { color: readingTheme.secondary }]}>清除</Text></Pressable></> : null}
+        <Pressable ref={filterButtonRef} accessibilityLabel="选择筛选方式" onPress={openFilterPicker} style={[styles.filterMenuButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.filterMenuText, { color: activeFilterCount ? colors.primary : readingTheme.secondary }]}>{activeFilterCount ? `${activeFilterCount} 项筛选` : filterLabels[filterKind]}</Text><View style={[styles.filterChevron, filterPickerVisible && styles.filterChevronOpen, { borderColor: activeFilterCount ? colors.primary : readingTheme.secondary }]} /></Pressable>
+        {filterKind !== 'none' ? <><Pressable onPress={() => setFilterValue(null)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, !filters[filterKind] && styles.filterChipActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, !filters[filterKind] && styles.filterTextActive]}>不限{filterLabels[filterKind]}</Text></Pressable>{valueOptions.map((option) => <Pressable key={option.value} onPress={() => setFilterValue(option.value)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, filters[filterKind] === option.value && styles.filterChipActive]}><Text numberOfLines={1} style={[styles.filterText, { color: readingTheme.secondary }, filters[filterKind] === option.value && styles.filterTextActive]}>{option.label}</Text></Pressable>)}</> : null}
+        {activeFilterCount ? Object.entries(filters).map(([kind, value]) => value ? <Pressable key={kind} accessibilityLabel={`清除${filterLabels[kind as ActiveFilterKind]}筛选`} onPress={() => setFilters((current) => { const next = { ...current }; delete next[kind as ActiveFilterKind]; return next; })} style={[styles.activeFilterChip, { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={styles.activeFilterText}>{filterLabels[kind as ActiveFilterKind]} · {value}　×</Text></Pressable> : null) : null}
+        {activeFilterCount ? <Pressable accessibilityLabel="清除全部筛选" hitSlop={8} onPress={() => { setFilters({}); setFilterKind('none'); }}><Text style={[styles.clearFilter, { color: readingTheme.secondary }]}>清除全部</Text></Pressable> : null}
       </ScrollView><Pressable accessibilityLabel="打开拾起一刻" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></Pressable></View>
     <SectionList
       sections={groups}
       keyExtractor={(entry) => entry.id}
       renderSectionHeader={({ section }) => <View style={[styles.dayHeader, { backgroundColor: readingTheme.background }]}><Text style={[styles.dayTitle, { color: readingTheme.text }]}>{section.label}</Text><Text style={[styles.weekday, { color: readingTheme.secondary }]}>{section.weekday}</Text></View>}
       renderItem={({ item }) => <EntryCard entry={item} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: item.id } })} onLongPress={() => onLongPress(item)} />}
-      ListEmptyComponent={<EmptyState title={filterKind === 'none' ? '从此刻开始' : '没有相关记录'} description={filterKind === 'none' ? '写下第一条记录，把日子慢慢收好。' : '换一个筛选条件试试。'} />}
+      ListEmptyComponent={<EmptyState title={!activeFilterCount ? '从此刻开始' : '没有相关记录'} description={!activeFilterCount ? '写下第一条记录，把日子慢慢收好。' : '减少一个筛选条件试试。'} />}
       contentContainerStyle={styles.timeline}
       showsVerticalScrollIndicator={false}
       stickySectionHeadersEnabled={false}
@@ -211,7 +230,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
     <Modal visible={filterPickerVisible} transparent animationType="fade" onRequestClose={() => setFilterPickerVisible(false)}>
       <Pressable onPress={() => setFilterPickerVisible(false)} style={styles.filterOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.filterPicker, { backgroundColor: readingTheme.background, left: filterAnchor.x, top: filterAnchor.y + filterAnchor.height + 2, width: filterAnchor.width }]}>
         <View style={styles.filterKinds}>
-          {([['none', '全部记录'], ['time', '时间'], ['location', '地点'], ['tag', '标签'], ['mood', '心情'], ['weather', '天气']] as [FilterKind, string][]).map(([kind, title]) => <Pressable accessibilityRole="menuitem" key={kind} onPress={() => chooseFilterKind(kind)} style={({ pressed }) => [styles.filterKind, pressed && { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={[styles.filterKindTitle, { color: kind === filterKind ? colors.primary : readingTheme.text }]}>{title}</Text>{kind === filterKind ? <Text style={styles.filterCheck}>✓</Text> : null}</Pressable>)}
+          {([['none', '清除全部'], ['time', '时间'], ['location', '地点'], ['tag', '标签'], ['mood', '心情'], ['weather', '天气']] as [FilterKind, string][]).map(([kind, title]) => <Pressable accessibilityRole="menuitem" key={kind} onPress={() => chooseFilterKind(kind)} style={({ pressed }) => [styles.filterKind, pressed && { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={[styles.filterKindTitle, { color: kind === filterKind ? colors.primary : readingTheme.text }]}>{title}</Text>{kind !== 'none' && filters[kind] ? <Text style={styles.filterCheck}>✓</Text> : null}</Pressable>)}
         </View>
       </Pressable></Pressable>
     </Modal>
@@ -336,6 +355,7 @@ const styles = StyleSheet.create({
   timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.xl, paddingRight: spacing.xl, gap: spacing.sm }, filterBarScroll: { flex: 1, flexGrow: 1 }, filterBar: { alignItems: 'center', gap: spacing.sm }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.textSecondary, fontSize: 10, lineHeight: 14, fontWeight: '600' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, transform: [{ rotate: '45deg' }] }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] }, clearFilter: { paddingHorizontal: spacing.xs, color: colors.textFaint, fontSize: 10 },
   filterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterChipActive: { backgroundColor: colors.primary },
   filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
+  activeFilterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill }, activeFilterText: { color: colors.primary, fontSize: 10, fontWeight: '600' },
   filterOverlay: { flex: 1, backgroundColor: '#00000014' }, filterPicker: { position: 'absolute', overflow: 'hidden', borderRadius: radii.md, backgroundColor: colors.background, elevation: 8, shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } }, filterKinds: { paddingVertical: spacing.xs }, filterKind: { minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 10, fontWeight: '600' }, filterCheck: { marginLeft: spacing.xs, color: colors.primary, fontSize: 12, fontWeight: '700' },
   dayHeader: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm, paddingTop: 3, paddingBottom: 3 },
   dayTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 23, fontWeight: '600', includeFontPadding: false },

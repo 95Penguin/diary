@@ -80,6 +80,8 @@ function AppStack() {
             <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="trash" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="backup" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="about" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="metadata" options={{ animation: 'slide_from_right' }} />
           </Stack>
         </>;
 }

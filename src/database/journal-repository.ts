@@ -8,9 +8,14 @@ type TagRow = { entry_id: string; label: string };
 type DeletedEntryRow = EntryRow & { deleted_at: string };
 export type EntryFilterKind = 'none' | 'time' | 'location' | 'tag' | 'mood' | 'weather';
 export type EntryListFilter = { kind: EntryFilterKind; value: string | null };
+export type EntryListFilters = Partial<Record<Exclude<EntryFilterKind, 'none'>, string | null>>;
 export type EntryPageCursor = { occurredAt: string; createdAt: string; id: string };
 export type EntryPage = { entries: Entry[]; nextCursor: EntryPageCursor | null };
 export type EntryFilterOptions = { locations: string[]; tags: string[]; moods: string[]; weather: string[] };
+export type MetadataUsageItem = { value: string; count: number; pinned: boolean };
+export type MetadataUsage = { tags: MetadataUsageItem[]; locations: MetadataUsageItem[] };
+type MetadataCatalog = { tags: string[]; locations: string[]; pinnedTags: string[]; pinnedLocations: string[] };
+const EMPTY_METADATA_CATALOG: MetadataCatalog = { tags: [], locations: [], pinnedTags: [], pinnedLocations: [] };
 
 function createId() { return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; }
 function mapFollowUp(row: FollowUpRow, images: FollowUpImage[] = []): FollowUp {
@@ -137,12 +142,16 @@ function appendEntryFilter(where: string[], params: (string | number)[], filter?
 
 export async function listEntryPage(
   db: SQLiteDatabase,
-  options: { limit?: number; cursor?: EntryPageCursor | null; filter?: EntryListFilter } = {},
+  options: { limit?: number; cursor?: EntryPageCursor | null; filter?: EntryListFilter; filters?: EntryListFilters } = {},
 ): Promise<EntryPage> {
   const limit = Math.max(1, Math.min(options.limit ?? 30, 100));
   const where = ['e.deleted_at IS NULL'];
   const params: (string | number)[] = [];
   appendEntryFilter(where, params, options.filter);
+  if (options.filters) {
+    (Object.entries(options.filters) as [Exclude<EntryFilterKind, 'none'>, string | null][])
+      .forEach(([kind, value]) => appendEntryFilter(where, params, { kind, value }));
+  }
   if (options.cursor) {
     where.push(`(
       e.occurred_at < ? OR
@@ -181,7 +190,7 @@ export async function listEntryPage(
 }
 
 export async function listEntryFilterOptions(db: SQLiteDatabase): Promise<EntryFilterOptions> {
-  const [locations, tags, moods, weather] = await Promise.all([
+  const [locations, tags, moods, weather, catalog] = await Promise.all([
     db.getAllAsync<{ value: string }>(`SELECT DISTINCT location_name AS value FROM entries
       WHERE deleted_at IS NULL AND location_name IS NOT NULL AND location_name != '' ORDER BY value COLLATE NOCASE`),
     db.getAllAsync<{ value: string }>(`SELECT t.label AS value FROM entry_tags t
@@ -191,13 +200,138 @@ export async function listEntryFilterOptions(db: SQLiteDatabase): Promise<EntryF
       WHERE deleted_at IS NULL AND mood IS NOT NULL AND mood != '' ORDER BY value COLLATE NOCASE`),
     db.getAllAsync<{ value: string }>(`SELECT DISTINCT weather AS value FROM entries
       WHERE deleted_at IS NULL AND weather IS NOT NULL AND weather != '' ORDER BY value COLLATE NOCASE`),
+    getMetadataCatalog(db),
   ]);
+  const locationValues = [...new Set([...catalog.pinnedLocations, ...catalog.locations, ...locations.map((row) => row.value)])];
+  const tagValues = [...new Set([...catalog.pinnedTags, ...catalog.tags, ...tags.map((row) => row.value)])];
   return {
-    locations: locations.map((row) => row.value),
-    tags: tags.map((row) => row.value),
+    locations: locationValues,
+    tags: tagValues,
     moods: moods.map((row) => row.value),
     weather: weather.map((row) => row.value),
   };
+}
+
+async function getMetadataCatalog(db: SQLiteDatabase): Promise<MetadataCatalog> {
+  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'metadata-catalog'");
+  if (!row) return EMPTY_METADATA_CATALOG;
+  try {
+    const value = JSON.parse(row.value) as Partial<MetadataCatalog>;
+    return {
+      tags: Array.isArray(value.tags) ? value.tags : [],
+      locations: Array.isArray(value.locations) ? value.locations : [],
+      pinnedTags: Array.isArray(value.pinnedTags) ? value.pinnedTags : [],
+      pinnedLocations: Array.isArray(value.pinnedLocations) ? value.pinnedLocations : [],
+    };
+  } catch { return EMPTY_METADATA_CATALOG; }
+}
+
+async function saveMetadataCatalog(db: SQLiteDatabase, catalog: MetadataCatalog) {
+  await db.runAsync(
+    `INSERT INTO kv_store (key, value) VALUES ('metadata-catalog', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    JSON.stringify(catalog),
+  );
+}
+
+export async function listMetadataUsage(db: SQLiteDatabase): Promise<MetadataUsage> {
+  const [tagRows, locationRows, catalog] = await Promise.all([
+    db.getAllAsync<{ value: string; count: number }>(`SELECT t.label AS value, COUNT(*) AS count
+      FROM entry_tags t INNER JOIN entries e ON e.id = t.entry_id
+      WHERE e.deleted_at IS NULL
+      GROUP BY t.label ORDER BY count DESC, value COLLATE NOCASE`),
+    db.getAllAsync<{ value: string; count: number }>(`SELECT location_name AS value, COUNT(*) AS count
+      FROM entries WHERE deleted_at IS NULL AND location_name IS NOT NULL AND location_name != ''
+      GROUP BY location_name ORDER BY count DESC, value COLLATE NOCASE`),
+    getMetadataCatalog(db),
+  ]);
+  const tagsByName = new Map(tagRows.map((item) => [item.value, item.count]));
+  const locationsByName = new Map(locationRows.map((item) => [item.value, item.count]));
+  const tags = [...new Set([...catalog.pinnedTags, ...catalog.tags, ...tagsByName.keys()])]
+    .map((value) => ({ value, count: tagsByName.get(value) ?? 0, pinned: catalog.pinnedTags.includes(value) }));
+  const locations = [...new Set([...catalog.pinnedLocations, ...catalog.locations, ...locationsByName.keys()])]
+    .map((value) => ({ value, count: locationsByName.get(value) ?? 0, pinned: catalog.pinnedLocations.includes(value) }));
+  return { tags, locations };
+}
+
+export async function addMetadataItem(db: SQLiteDatabase, kind: 'tag' | 'location', value: string) {
+  const next = kind === 'tag' ? value.trim().replace(/^#+/, '') : value.trim();
+  if (!next) return;
+  const catalog = await getMetadataCatalog(db);
+  const key = kind === 'tag' ? 'tags' : 'locations';
+  if (!catalog[key].includes(next)) catalog[key].push(next);
+  await saveMetadataCatalog(db, catalog);
+}
+
+export async function toggleMetadataPinned(db: SQLiteDatabase, kind: 'tag' | 'location', value: string) {
+  const catalog = await getMetadataCatalog(db);
+  const catalogKey = kind === 'tag' ? 'tags' : 'locations';
+  const pinnedKey = kind === 'tag' ? 'pinnedTags' : 'pinnedLocations';
+  const max = kind === 'tag' ? 6 : 4;
+  if (!catalog[catalogKey].includes(value)) catalog[catalogKey].push(value);
+  if (catalog[pinnedKey].includes(value)) catalog[pinnedKey] = catalog[pinnedKey].filter((item) => item !== value);
+  else {
+    if (catalog[pinnedKey].length >= max) throw new Error(`最多置顶 ${max} 个`);
+    catalog[pinnedKey].push(value);
+  }
+  await saveMetadataCatalog(db, catalog);
+}
+
+export async function renameTagEverywhere(db: SQLiteDatabase, from: string, to: string) {
+  const next = to.trim().replace(/^#+/, '');
+  if (!next || next === from) return;
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO entry_tags (entry_id, label, sort_order)
+       SELECT entry_id, ?, sort_order FROM entry_tags WHERE label = ?`,
+      next, from,
+    );
+    await db.runAsync('DELETE FROM entry_tags WHERE label = ?', from);
+    const catalog = await getMetadataCatalog(db);
+    catalog.tags = [...new Set(catalog.tags.map((item) => item === from ? next : item))];
+    catalog.pinnedTags = [...new Set(catalog.pinnedTags.map((item) => item === from ? next : item))];
+    await saveMetadataCatalog(db, catalog);
+  });
+}
+
+export async function removeTagEverywhere(db: SQLiteDatabase, value: string) {
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM entry_tags WHERE label = ?', value);
+    const catalog = await getMetadataCatalog(db);
+    catalog.tags = catalog.tags.filter((item) => item !== value);
+    catalog.pinnedTags = catalog.pinnedTags.filter((item) => item !== value);
+    await saveMetadataCatalog(db, catalog);
+  });
+}
+
+export async function renameLocationEverywhere(db: SQLiteDatabase, from: string, to: string) {
+  const next = to.trim();
+  if (!next || next === from) return;
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('UPDATE entries SET location_name = ? WHERE location_name = ?', next, from);
+    await db.runAsync('UPDATE drafts SET location_name = ? WHERE location_name = ?', next, from);
+    const catalog = await getMetadataCatalog(db);
+    catalog.locations = [...new Set(catalog.locations.map((item) => item === from ? next : item))];
+    catalog.pinnedLocations = [...new Set(catalog.pinnedLocations.map((item) => item === from ? next : item))];
+    await saveMetadataCatalog(db, catalog);
+  });
+}
+
+export async function removeLocationEverywhere(db: SQLiteDatabase, value: string) {
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      'UPDATE entries SET location_name = NULL, latitude = NULL, longitude = NULL WHERE location_name = ?',
+      value,
+    );
+    await db.runAsync(
+      'UPDATE drafts SET location_name = NULL, latitude = NULL, longitude = NULL WHERE location_name = ?',
+      value,
+    );
+    const catalog = await getMetadataCatalog(db);
+    catalog.locations = catalog.locations.filter((item) => item !== value);
+    catalog.pinnedLocations = catalog.pinnedLocations.filter((item) => item !== value);
+    await saveMetadataCatalog(db, catalog);
+  });
 }
 
 export async function listCalendarMonthCounts(

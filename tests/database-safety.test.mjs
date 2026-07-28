@@ -2,12 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  addMetadataItem,
   cleanupExpiredTrash,
   createFollowUpWithImages,
   createJournalExport,
   deleteEntry,
   getEntry,
   importJournalBackup,
+  listEntryPage,
+  listEntryFilterOptions,
+  listMetadataUsage,
+  removeLocationEverywhere,
+  renameTagEverywhere,
+  toggleMetadataPinned,
   permanentlyDeleteEntry,
   restoreEntry,
 } from '../src/database/journal-repository.ts';
@@ -197,6 +204,72 @@ test('backup import/export preserves records, media, tags, versions and suppress
   assert.deepEqual(exported.tags, source.tags);
   assert.deepEqual(exported.versions, source.versions);
   assert.deepEqual(exported.suppressedMemoryEntryIds, source.suppressedMemoryEntryIds);
+});
+
+test('timeline combines time-independent tag, location and mood filters', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const matching = backupFixture();
+  const other = backupFixture();
+  other.entries[0] = {
+    ...other.entries[0],
+    id: 'entry-2',
+    content: '另一条记录',
+    mood: '开心',
+    locationName: '上海',
+  };
+  other.followUps = [];
+  other.images = [];
+  other.followUpImages = [];
+  other.tags = [{ entryId: 'entry-2', label: '其他', sortOrder: 0 }];
+  other.versions = [];
+  other.suppressedMemoryEntryIds = [];
+  await importJournalBackup(db, matching);
+  await importJournalBackup(db, other);
+
+  const page = await listEntryPage(db, {
+    filters: { tag: '测试', location: '北京', mood: '平静' },
+  });
+  assert.deepEqual(page.entries.map((entry) => entry.id), ['entry-1']);
+});
+
+test('metadata management merges tags and removes locations without deleting records', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const source = backupFixture();
+  source.tags.push({ entryId: 'entry-1', label: '运动', sortOrder: 1 });
+  await importJournalBackup(db, source);
+
+  await renameTagEverywhere(db, '测试', '运动');
+  let usage = await listMetadataUsage(db);
+  assert.deepEqual(usage.tags.map((item) => ({ ...item })), [{ value: '运动', count: 1, pinned: false }]);
+
+  await removeLocationEverywhere(db, '北京');
+  const entry = await getEntry(db, 'entry-1');
+  assert.equal(entry.locationName, null);
+  assert.equal(entry.latitude, null);
+  assert.equal(entry.longitude, null);
+  usage = await listMetadataUsage(db);
+  assert.equal(usage.locations.length, 0);
+});
+
+test('manual metadata and pinned items appear first in entry suggestions', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await addMetadataItem(db, 'tag', '听歌');
+  await addMetadataItem(db, 'tag', '学习');
+  await toggleMetadataPinned(db, 'tag', '学习');
+  await addMetadataItem(db, 'location', '家');
+  await toggleMetadataPinned(db, 'location', '家');
+
+  const options = await listEntryFilterOptions(db);
+  assert.deepEqual(options.tags, ['学习', '听歌']);
+  assert.deepEqual(options.locations, ['家']);
+  const usage = await listMetadataUsage(db);
+  assert.deepEqual(usage.tags.map((item) => ({ ...item })), [
+    { value: '学习', count: 0, pinned: true },
+    { value: '听歌', count: 0, pinned: false },
+  ]);
 });
 
 test('restore merge keeps newer local content and accepts a newer backup', async (t) => {
