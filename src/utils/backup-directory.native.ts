@@ -43,7 +43,8 @@ export async function saveBackupToDirectory(
     const backups = (await Promise.all(files.map(async (fileUri) => {
       const fileInfo = await LegacyFileSystem.getInfoAsync(fileUri);
       const decoded = decodeURIComponent(fileUri);
-      return fileInfo.exists && !fileInfo.isDirectory && decoded.includes('拾时备份-') && decoded.toLowerCase().includes('.zip')
+      const isShishiBackup = decoded.includes('拾时备份-') || decoded.includes('拾时自动备份-');
+      return fileInfo.exists && !fileInfo.isDirectory && isShishiBackup && decoded.toLowerCase().includes('.zip')
         ? { uri: fileUri, modificationTime: fileInfo.modificationTime }
         : null;
     }))).filter((item): item is { uri: string; modificationTime: number } => Boolean(item))

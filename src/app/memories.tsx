@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { router, useFocusEffect } from 'expo-router';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,6 +10,7 @@ import type { Entry } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
+import { showAppDialog } from '@/components/app-dialog-host';
 import { MediaThumbnail } from '@/components/media-view';
 
 type MemoryMode = 'random' | 'today' | 'month' | 'yearWeek' | 'tag';
@@ -48,7 +49,7 @@ export default function MemoriesScreen() {
     try {
       const [items, hiddenIds] = await Promise.all([listEntries(db), listSuppressedMemoryEntryIds(db)]);
       setEntries(items); setSuppressed(new Set(hiddenIds));
-    } catch { Alert.alert('暂时无法拾起记录', '请稍后再试。'); }
+    } catch { await showAppDialog({ title: '暂时无法拾起记录', message: '请稍后再试。' }); }
     finally { setLoading(false); }
   }, [db]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
@@ -56,7 +57,7 @@ export default function MemoriesScreen() {
   const tags = useMemo(() => [...new Set(entries.flatMap((entry) => entry.tags))].sort((a, b) => a.localeCompare(b, 'zh-CN')), [entries]);
   const candidates = useMemo(() => {
     const available = entries.filter((entry) => !suppressed.has(entry.id));
-    if (mode === 'random') return available.filter((entry) => startOfDay(localDate(entry.occurredAt)) < startOfDay(now));
+    if (mode === 'random') return available.filter((entry) => localDate(entry.occurredAt) <= now);
     if (mode === 'today') return available.filter((entry) => {
       const date = localDate(entry.occurredAt);
       return date.getFullYear() < now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
@@ -84,7 +85,7 @@ export default function MemoriesScreen() {
       await suppressMemoryEntry(db, picked.id);
       setSuppressed((current) => new Set(current).add(picked.id));
       setShuffle((value) => value + 1);
-    } catch { Alert.alert('操作失败', '暂时无法隐藏这条记录。'); }
+    } catch { await showAppDialog({ title: '操作失败', message: '暂时无法隐藏这条记录。' }); }
   }
 
   function confirmHidePicked() {
@@ -130,6 +131,18 @@ export default function MemoriesScreen() {
         <View style={styles.summaryCopy}>
           <Text style={styles.summaryLinkTitle}>时光总结</Text>
           <Text style={[styles.summaryLinkDescription, { color: readingTheme.secondary }]}>查看周、月与年度记录趋势</Text>
+        </View>
+        <Text style={styles.summaryLinkArrow}>›</Text>
+      </Pressable>
+      <Pressable
+        accessibilityLabel="打开足迹地图"
+        onPress={() => router.push('/footprint-map' as Href)}
+        style={({ pressed }) => [styles.summaryLink, { backgroundColor: readingTheme.surface }, pressed && styles.summaryLinkPressed]}
+      >
+        <View style={styles.summaryIcon}><SymbolView name={{ ios: 'map', android: 'map', web: 'map' }} size={18} tintColor={colors.primary} /></View>
+        <View style={styles.summaryCopy}>
+          <Text style={styles.summaryLinkTitle}>足迹地图</Text>
+          <Text style={[styles.summaryLinkDescription, { color: readingTheme.secondary }]}>点亮保存过坐标的地点</Text>
         </View>
         <Text style={styles.summaryLinkArrow}>›</Text>
       </Pressable>
@@ -198,7 +211,7 @@ function Heatmap({ entries, year }: { entries: Entry[]; year: number }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background }, loader: { marginTop: 100 }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 }, scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: 40 },
-  modeRow: { height: 36, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }, modeButton: { height: 32, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, modeButtonText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, modeChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, candidateCount: { flex: 1, color: colors.textFaint, fontSize: 9, textAlign: 'right' }, shuffleButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary }, shuffleText: { color: '#FFFFFF', fontSize: 18, lineHeight: 21, textAlign: 'center', includeFontPadding: false }, tagRow: { gap: spacing.sm, paddingBottom: spacing.sm }, tagChip: { paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, tagText: { color: colors.textSecondary, fontSize: 10 }, tagTextActive: { fontWeight: '700' },
+  modeRow: { height: 32, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }, modeButton: { height: 28, flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, modeButtonText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, modeChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, candidateCount: { flex: 1, color: colors.textFaint, fontSize: 9, textAlign: 'right' }, shuffleButton: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary }, shuffleText: { color: '#FFFFFF', fontSize: 16, lineHeight: 19, textAlign: 'center', includeFontPadding: false }, tagRow: { gap: spacing.xs, paddingBottom: spacing.sm }, tagChip: { paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, tagText: { color: colors.textSecondary, fontSize: 10 }, tagTextActive: { fontWeight: '700' },
   modeChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] },
   memoryCard: { padding: spacing.md, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted }, memoryHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, memoryDate: { color: colors.primary, fontSize: 10, fontWeight: '700' }, memoryMenu: { color: colors.textSecondary, fontSize: 13, letterSpacing: 1 }, memoryBody: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md, marginTop: spacing.sm }, memoryBodyWithoutImage: { marginTop: spacing.xs }, memoryText: { flex: 1, minHeight: 88 }, memoryContent: { color: colors.text, fontFamily: fonts.serif, fontSize: 15, lineHeight: 23 }, meta: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 10 }, singleThumbnail: { width: 88, height: 88, borderRadius: radii.md, backgroundColor: colors.border }, thumbnailGrid: { width: 88, height: 88, flexDirection: 'row', flexWrap: 'wrap', gap: 4 }, thumbnailCell: { position: 'relative', width: 42, height: 42 }, thumbnailImage: { width: 42, height: 42, borderRadius: radii.sm, backgroundColor: colors.border }, thumbnailMore: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm, backgroundColor: '#00000073' }, thumbnailMoreText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, empty: { alignItems: 'center', paddingVertical: 32, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted }, emptyTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16 }, emptyText: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 10 },
   sectionTitle: { marginTop: spacing.xl, marginBottom: spacing.sm, color: colors.text, fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' }, reviewGroup: { overflow: 'hidden', borderRadius: radii.lg }, reviewStrip: { minHeight: 78, flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md }, reviewMetric: { flex: 1, alignItems: 'center', justifyContent: 'center' }, reviewDivider: { width: StyleSheet.hairlineWidth, height: 42, backgroundColor: colors.border }, reviewTitle: { color: colors.primary, fontSize: 10, lineHeight: 13, fontWeight: '700' }, reviewValue: { marginTop: 3, color: colors.text, fontFamily: fonts.serif, fontSize: 14, lineHeight: 18 }, reviewLabel: { marginTop: 2, color: colors.textFaint, fontSize: 9, lineHeight: 12 },

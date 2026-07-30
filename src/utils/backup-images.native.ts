@@ -14,7 +14,8 @@ function extensionFor(mimeType: string | null | undefined, fallback: string) {
 export type BackupMediaProgress = (completed: number, total: number) => void;
 
 export async function embedBackupImages(backup: JournalBackup, onProgress?: BackupMediaProgress): Promise<JournalBackup> {
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0);
+  const hasAvatar = Boolean(backup.appPreferences?.avatarLocalUri);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   const images = [] as JournalBackup['images'];
   for (const image of backup.images) {
@@ -42,14 +43,31 @@ export async function embedBackupImages(backup: JournalBackup, onProgress?: Back
     } catch { followUpImages.push({ ...image, dataBase64: null, mimeType: null }); }
     finally { completed += 1; onProgress?.(completed, total); }
   }
-  return { ...backup, images, followUpImages };
+  let appPreferences = backup.appPreferences;
+  if (appPreferences?.avatarLocalUri) {
+    try {
+      const file = new File(appPreferences.avatarLocalUri);
+      appPreferences = {
+        ...appPreferences,
+        avatarDataBase64: file.exists ? await file.base64() : null,
+        avatarMimeType: file.exists ? file.type || null : null,
+      };
+    } catch {
+      appPreferences = { ...appPreferences, avatarDataBase64: null, avatarMimeType: null };
+    } finally {
+      completed += 1;
+      onProgress?.(completed, total);
+    }
+  }
+  return { ...backup, images, followUpImages, appPreferences };
 }
 
 export async function materializeBackupImages(backup: JournalBackup, onProgress?: BackupMediaProgress) {
   const createdUris: string[] = [];
   const images = [] as JournalBackup['images'];
   const followUpImages = [] as NonNullable<JournalBackup['followUpImages']>;
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0);
+  const hasAvatar = Boolean(backup.appPreferences?.avatarDataBase64);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   try {
     for (const image of backup.images) {
@@ -88,5 +106,18 @@ export async function materializeBackupImages(backup: JournalBackup, onProgress?
     createdUris.forEach(deleteJournalImage);
     throw error;
   }
-  return { backup: { ...backup, images, followUpImages }, createdUris };
+  let appPreferences = backup.appPreferences;
+  if (appPreferences?.avatarDataBase64) {
+    const avatarLocalUri = await persistJournalImageBase64(
+      appPreferences.avatarDataBase64,
+      extensionFor(appPreferences.avatarMimeType, appPreferences.avatarLocalUri ?? '.jpg'),
+    );
+    createdUris.push(avatarLocalUri);
+    completed += 1;
+    onProgress?.(completed, total);
+    appPreferences = { ...appPreferences, avatarLocalUri };
+  } else if (appPreferences?.avatarLocalUri) {
+    appPreferences = { ...appPreferences, avatarLocalUri: null };
+  }
+  return { backup: { ...backup, images, followUpImages, appPreferences }, createdUris };
 }

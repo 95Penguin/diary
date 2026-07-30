@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, InteractionManager, Modal, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,12 +7,14 @@ import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
 import { BottomNavigation, type HomeView } from '@/components/bottom-navigation';
+import { showAppDialog } from '@/components/app-dialog-host';
 import { EmptyState } from '@/components/empty-state';
 import { EntryCard } from '@/components/entry-card';
 import { EntryActionModal } from '@/components/entry-action-modal';
 import {
   cleanupExpiredTrash,
   deleteEntry,
+  getDraftCount,
   getCalendarOrder,
   listCalendarMonthCounts,
   listEntriesForDate,
@@ -31,6 +33,7 @@ import { dateKey, groupLabel, weekdayLabel } from '@/utils/date';
 import { lunarDayLabel } from '@/utils/lunar';
 import { cleanupUnusedJournalMedia, deleteJournalImage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
+import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
 
 export default function HomeScreen() {
   const db = useSQLiteContext();
@@ -40,17 +43,39 @@ export default function HomeScreen() {
   const [view, setView] = useState<HomeView>('timeline');
   const [selectedDate, setSelectedDate] = useState(todayKey);
   const [actionEntry, setActionEntry] = useState<Entry | null>(null);
+  const [draftCount, setDraftCount] = useState(0);
+  const [quickHintVisible, setQuickHintVisible] = useState(false);
+  const cleanupStarted = useRef(false);
 
   const refresh = useCallback(async () => {
-    const expiredImages = await cleanupExpiredTrash(db);
-    expiredImages.forEach(deleteJournalImage);
     setRefreshKey((value) => value + 1);
-    void listReferencedMediaUris(db)
-      .then((uris) => cleanupUnusedJournalMedia(uris))
-      .catch(() => { /* Cleanup is best-effort and must not block the timeline. */ });
+    void getDraftCount(db).then(setDraftCount);
+    if (!cleanupStarted.current) {
+      cleanupStarted.current = true;
+      InteractionManager.runAfterInteractions(() => {
+        void cleanupExpiredTrash(db)
+          .then((expiredImages) => expiredImages.forEach(deleteJournalImage))
+          .catch(() => { /* Cleanup is best-effort and must not block the timeline. */ });
+        void listReferencedMediaUris(db)
+          .then((uris) => cleanupUnusedJournalMedia(uris))
+          .catch(() => { /* Cleanup is best-effort and must not block the timeline. */ });
+      });
+    }
   }, [db]);
 
   useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
+  useEffect(() => {
+    let active = true;
+    void db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'quick-compose-hint-seen'").then((row) => {
+      if (active && !row) setQuickHintVisible(true);
+    });
+    return () => { active = false; };
+  }, [db]);
+
+  function dismissQuickHint() {
+    setQuickHintVisible(false);
+    void db.runAsync("INSERT OR REPLACE INTO kv_store (key, value) VALUES ('quick-compose-hint-seen', '1')");
+  }
 
   const openEntryActions = useCallback((entry: Entry) => {
     setActionEntry(entry);
@@ -62,16 +87,15 @@ export default function HomeScreen() {
       await deleteEntry(db, actionEntry.id);
       setRefreshKey((value) => value + 1);
       setActionEntry(null);
-    } catch { Alert.alert('删除失败', '记录暂时无法删除，请稍后重试。'); }
+    } catch { await showAppDialog({ title: '移入失败', message: '记录暂时无法移入回收站，请稍后重试。' }); }
   }
 
   return (
     <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
       <View style={styles.header}>
-        <View style={styles.headerIdentity}><Text style={[styles.brand, { color: readingTheme.text }]}>拾时</Text><Text numberOfLines={1} style={[styles.subtitle, { color: readingTheme.secondary }]}>{view === 'timeline' ? (preferences.signature.trim() || '我的日迹') : '日历回看'}</Text></View>
+        <View style={styles.headerIdentity}><Text style={[styles.brand, { color: readingTheme.text }]}>拾时</Text><Text numberOfLines={1} style={[styles.subtitle, { color: readingTheme.secondary }]}>{preferences.signature.trim() || '我的日迹'}</Text></View>
         <View style={styles.headerActions}>
-          <Pressable accessibilityLabel="草稿箱" onPress={() => router.push('/drafts' as Href)} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'doc.text', android: 'draft', web: 'draft' }} size={18} tintColor={colors.primary} /></Pressable>
-          <Pressable accessibilityLabel="收藏列表" onPress={() => router.push('/favorites' as Href)} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'bookmark', android: 'bookmark', web: 'bookmark' }} size={19} tintColor={colors.primary} /></Pressable>
+          <Pressable accessibilityLabel={`草稿箱${draftCount > 0 ? `，${draftCount} 份草稿` : ''}`} onPress={() => router.push('/drafts' as Href)} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'doc.text', android: 'draft', web: 'draft' }} size={18} tintColor={colors.primary} />{draftCount > 0 ? <View style={styles.draftDot} /> : null}</Pressable>
           <Pressable accessibilityLabel="搜索" onPress={() => router.push('/search')} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }} size={19} tintColor={colors.primary} /></Pressable>
           <Pressable accessibilityLabel={`我的，${preferences.nickname}`} onPress={() => router.push('/settings')} style={styles.profileButton}>{preferences.avatarUri ? <Image source={preferences.avatarUri} contentFit="cover" style={styles.profileImage} /> : <Text style={styles.profileText}>{preferences.nickname.slice(0, 1)}</Text>}</Pressable>
         </View>
@@ -82,10 +106,11 @@ export default function HomeScreen() {
         <View accessibilityElementsHidden={view !== 'calendar'} importantForAccessibility={view === 'calendar' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'calendar' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'calendar' && styles.hiddenPane]}><CalendarView refreshKey={refreshKey} selected={selectedDate} onSelect={setSelectedDate} onLongPress={openEntryActions} /></View>
       </View>
 
+      {quickHintVisible ? <Pressable accessibilityRole="button" accessibilityLabel="知道了" onPress={dismissQuickHint} style={[styles.quickHint, { backgroundColor: readingTheme.surface }]}><Text style={[styles.quickHintText, { color: readingTheme.secondary }]}>长按“＋”可以直接进入快速记录</Text><Text style={styles.quickHintClose}>知道了</Text></Pressable> : null}
       <BottomNavigation view={view} onChange={setView} onCompose={() => {
         if (view === 'calendar') router.push({ pathname: '/compose', params: { date: selectedDate } });
         else router.push('/compose');
-      }} />
+      }} onQuickCompose={() => router.push({ pathname: '/compose', params: { quick: '1' } })} />
       <EntryActionModal visible={Boolean(actionEntry)} onClose={() => setActionEntry(null)} onEdit={() => { if (!actionEntry) return; const entryId = actionEntry.id; setActionEntry(null); router.push({ pathname: '/compose', params: { id: entryId } }); }} onDelete={deleteSelectedEntry} />
     </SafeAreaView>
   );
@@ -105,6 +130,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const requestId = useRef(0);
+  const initialLoadStartedAt = useRef(startupTimer());
   const [filterOptions, setFilterOptions] = useState<EntryFilterOptions>(EMPTY_FILTER_OPTIONS);
   const [filterKind, setFilterKind] = useState<FilterKind>('none');
   const [filters, setFilters] = useState<EntryListFilters>({});
@@ -130,6 +156,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
       setCursor(page.nextCursor);
       setHasMore(Boolean(page.nextCursor));
       setFilterOptions(options);
+      finishStartupMetric('home', initialLoadStartedAt.current);
     } finally {
       if (currentRequest === requestId.current) setLoading(false);
     }
@@ -208,7 +235,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
         {filterKind !== 'none' ? <><Pressable onPress={() => setFilterValue(null)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, !filters[filterKind] && styles.filterChipActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, !filters[filterKind] && styles.filterTextActive]}>不限{filterLabels[filterKind]}</Text></Pressable>{valueOptions.map((option) => <Pressable key={option.value} onPress={() => setFilterValue(option.value)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, filters[filterKind] === option.value && styles.filterChipActive]}><Text numberOfLines={1} style={[styles.filterText, { color: readingTheme.secondary }, filters[filterKind] === option.value && styles.filterTextActive]}>{option.label}</Text></Pressable>)}</> : null}
         {activeFilterCount ? Object.entries(filters).map(([kind, value]) => value ? <Pressable key={kind} accessibilityLabel={`清除${filterLabels[kind as ActiveFilterKind]}筛选`} onPress={() => setFilters((current) => { const next = { ...current }; delete next[kind as ActiveFilterKind]; return next; })} style={[styles.activeFilterChip, { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={styles.activeFilterText}>{filterLabels[kind as ActiveFilterKind]} · {value}　×</Text></Pressable> : null) : null}
         {activeFilterCount ? <Pressable accessibilityLabel="清除全部筛选" hitSlop={8} onPress={() => { setFilters({}); setFilterKind('none'); }}><Text style={[styles.clearFilter, { color: readingTheme.secondary }]}>清除全部</Text></Pressable> : null}
-      </ScrollView><Pressable accessibilityLabel="打开拾起一刻" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></Pressable></View>
+      </ScrollView><Pressable accessibilityLabel="打开回忆" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></Pressable></View>
     <SectionList
       sections={groups}
       keyExtractor={(entry) => entry.id}
@@ -342,27 +369,29 @@ const CalendarView = memo(CalendarViewComponent);
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, paddingTop: spacing.xs, paddingBottom: spacing.xs },
-  headerIdentity: { flex: 1, minWidth: 0, marginRight: spacing.md },
+  headerIdentity: { flex: 1, minWidth: 0, marginRight: spacing.md, paddingBottom: 2 },
   brand: { color: colors.text, fontFamily: fonts.serif, fontSize: 24, lineHeight: 29, fontWeight: '600', includeFontPadding: false },
-  subtitle: { marginTop: 2, color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 12, lineHeight: 15, letterSpacing: 0.5, includeFontPadding: false },
+  subtitle: { marginTop: 5, color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 11, lineHeight: 14, letterSpacing: 0.4, includeFontPadding: false },
   headerActions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  searchButton: { width: 36, height: 36, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceMuted },
-  profileButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary },
+  searchButton: { width: 32, height: 32, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceMuted },
+  draftDot: { position: 'absolute', top: 5, right: 5, width: 6, height: 6, borderRadius: 3, backgroundColor: '#C06C58' },
+  profileButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary },
   profileImage: { width: 36, height: 36, borderRadius: 18 },
   profileText: { color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' },
   content: { flex: 1 }, viewPane: { ...StyleSheet.absoluteFill }, hiddenPane: { opacity: 0 }, loader: { marginTop: 80 }, pageLoader: { marginVertical: spacing.lg },
+  quickHint: { position: 'absolute', left: spacing.xl, right: spacing.xl, bottom: 86, zIndex: 30, minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md, elevation: 4, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }, quickHintText: { fontSize: 11 }, quickHintClose: { marginLeft: spacing.md, color: colors.primary, fontSize: 11, fontWeight: '700' },
   timelineContainer: { flex: 1 }, timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.xl, paddingRight: spacing.xl, gap: spacing.sm }, filterBarScroll: { flex: 1, flexGrow: 1 }, filterBar: { alignItems: 'center', gap: spacing.sm }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.textSecondary, fontSize: 10, lineHeight: 14, fontWeight: '600' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, transform: [{ rotate: '45deg' }] }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] }, clearFilter: { paddingHorizontal: spacing.xs, color: colors.textFaint, fontSize: 10 },
   filterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterChipActive: { backgroundColor: colors.primary },
   filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
   activeFilterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill }, activeFilterText: { color: colors.primary, fontSize: 10, fontWeight: '600' },
-  filterOverlay: { flex: 1, backgroundColor: '#00000014' }, filterPicker: { position: 'absolute', overflow: 'hidden', borderRadius: radii.md, backgroundColor: colors.background, elevation: 8, shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } }, filterKinds: { paddingVertical: spacing.xs }, filterKind: { minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 10, fontWeight: '600' }, filterCheck: { marginLeft: spacing.xs, color: colors.primary, fontSize: 12, fontWeight: '700' },
+  filterOverlay: { flex: 1, backgroundColor: '#00000014' }, filterPicker: { position: 'absolute', overflow: 'hidden', borderRadius: radii.md, backgroundColor: colors.background, elevation: 8, shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } }, filterKinds: { paddingVertical: spacing.xs }, filterKind: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 10, fontWeight: '600' }, filterCheck: { marginLeft: spacing.xs, color: colors.primary, fontSize: 12, fontWeight: '700' },
   dayHeader: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm, paddingTop: 3, paddingBottom: 3 },
   dayTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 23, fontWeight: '600', includeFontPadding: false },
   weekday: { color: colors.textFaint, fontFamily: fonts.sans, fontSize: 9, lineHeight: 14, includeFontPadding: false },
   calendar: { paddingHorizontal: spacing.md, paddingBottom: spacing.xxxl },
   monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  monthButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.surfaceMuted },
+  monthButton: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.surfaceMuted },
   monthArrow: { width: 9, height: 9, borderLeftWidth: 2, borderBottomWidth: 2, borderColor: colors.text },
   monthArrowLeft: { transform: [{ rotate: '45deg' }] },
   monthArrowRight: { transform: [{ rotate: '225deg' }] },

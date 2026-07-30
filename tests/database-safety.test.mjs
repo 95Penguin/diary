@@ -3,18 +3,28 @@ import test from 'node:test';
 
 import {
   addMetadataItem,
+  applyCoordinatesToLocation,
   cleanupExpiredTrash,
   createFollowUpWithImages,
   createJournalExport,
   deleteEntry,
   getEntry,
+  getFootprintViewPreferences,
+  getLocationPageDetail,
   importJournalBackup,
+  isNewFootprintLocation,
   listEntryPage,
   listEntryFilterOptions,
+  listFootprintEntries,
   listMetadataUsage,
+  listLocationMapPreferences,
   removeLocationEverywhere,
   renameTagEverywhere,
+  saveLocationDetail,
+  saveFootprintViewPreferences,
   toggleMetadataPinned,
+  updateLocationPreferences,
+  updateLocationCoordinates,
   permanentlyDeleteEntry,
   restoreEntry,
 } from '../src/database/journal-repository.ts';
@@ -206,6 +216,43 @@ test('backup import/export preserves records, media, tags, versions and suppress
   assert.deepEqual(exported.suppressedMemoryEntryIds, source.suppressedMemoryEntryIds);
 });
 
+test('backup v11 preserves location details and portable app preferences', async (t) => {
+  const sourceDb = await setup();
+  const restoredDb = await setup();
+  t.after(() => sourceDb.close());
+  t.after(() => restoredDb.close());
+  await importJournalBackup(sourceDb, backupFixture());
+  await saveLocationDetail(sourceDb, '北京', { address: '北京市海淀区', latitude: 39.9, longitude: 116.4 });
+  await updateLocationPreferences(sourceDb, '北京', { category: '学校', favorite: true });
+  await sourceDb.runAsync(
+    "INSERT INTO kv_store (key, value) VALUES ('app-preferences', ?)",
+    JSON.stringify({
+      nickname: '小拾',
+      signature: '今天也认真生活。',
+      avatarUri: 'file:///avatar.png',
+      readingTheme: 'green',
+      fontSize: 'large',
+      readingFont: 'sans',
+      appLockEnabled: true,
+      appLockDelaySeconds: 60,
+      backupReminderDays: 14,
+      backupDirectoryUri: 'content://device-only',
+    }),
+  );
+
+  const backup = await createJournalExport(sourceDb);
+  assert.equal(backup.version, 11);
+  assert.equal(backup.appPreferences.nickname, '小拾');
+  assert.equal(backup.appPreferences.avatarLocalUri, 'file:///avatar.png');
+  assert.equal(backup.appPreferences.readingTheme, 'green');
+  assert.equal('backupDirectoryUri' in backup.appPreferences, false);
+  await importJournalBackup(restoredDb, backup);
+  const detail = await getLocationPageDetail(restoredDb, '北京');
+  assert.equal(detail.address, '北京市海淀区');
+  assert.equal(detail.category, '学校');
+  assert.equal(detail.favorite, true);
+});
+
 test('timeline combines time-independent tag, location and mood filters', async (t) => {
   const db = await setup();
   t.after(() => db.close());
@@ -231,6 +278,80 @@ test('timeline combines time-independent tag, location and mood filters', async 
     filters: { tag: '测试', location: '北京', mood: '平静' },
   });
   assert.deepEqual(page.entries.map((entry) => entry.id), ['entry-1']);
+});
+
+test('footprint lists active coordinates and counts named locations without coordinates', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const source = backupFixture();
+  const missing = backupFixture();
+  missing.entries[0] = {
+    ...missing.entries[0],
+    id: 'entry-without-coordinates',
+    content: '手动地点',
+    locationName: '家',
+    latitude: null,
+    longitude: null,
+  };
+  missing.followUps = [];
+  missing.images = [];
+  missing.followUpImages = [];
+  missing.tags = [];
+  missing.versions = [];
+  missing.suppressedMemoryEntryIds = [];
+  await importJournalBackup(db, source);
+  await importJournalBackup(db, missing);
+
+  const footprint = await listFootprintEntries(db);
+  assert.deepEqual(footprint.entries.map((entry) => entry.id), ['entry-1']);
+  assert.equal(footprint.missingCoordinates, 1);
+  assert.deepEqual(footprint.pendingEntries.map((entry) => entry.id), ['entry-without-coordinates']);
+  assert.deepEqual(footprint.pendingGroups, [{ locationName: '家', count: 1 }]);
+
+  await applyCoordinatesToLocation(db, '家', 39.91, 116.39);
+  const updated = await getEntry(db, 'entry-without-coordinates');
+  assert.equal(updated.latitude, 39.91);
+  assert.equal(updated.longitude, 116.39);
+  await assert.rejects(() => applyCoordinatesToLocation(db, '家', 200, 116.39), /无效地点坐标/);
+});
+
+test('location detail includes saved address, visits and attached media', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  await saveLocationDetail(db, '北京', {
+    address: '北京市海淀区',
+    latitude: 39.9,
+    longitude: 116.4,
+  });
+  await updateLocationPreferences(db, '北京', { category: '常去', favorite: true });
+
+  const detail = await getLocationPageDetail(db, '北京');
+  assert.equal(detail.name, '北京');
+  assert.equal(detail.address, '北京市海淀区');
+  assert.equal(detail.category, '常去');
+  assert.equal(detail.favorite, true);
+  assert.equal(detail.entries.length, 1);
+  assert.equal(detail.entries[0].images.length, 1);
+  assert.equal(detail.entries[0].tags[0], '测试');
+  assert.deepEqual(await listLocationMapPreferences(db), {
+    北京: { category: '常去', favorite: true },
+  });
+  assert.equal(await isNewFootprintLocation(db, '北京', 39.9, 116.4), false);
+  assert.equal(await isNewFootprintLocation(db, '附近的新名字', 39.9005, 116.4005), false);
+  assert.equal(await isNewFootprintLocation(db, '上海', 31.23, 121.47), true);
+  await updateLocationCoordinates(db, '北京', {
+    address: '北京市西城区',
+    latitude: 39.91,
+    longitude: 116.38,
+  });
+  const corrected = await getLocationPageDetail(db, '北京');
+  assert.equal(corrected.address, '北京市西城区');
+  assert.equal(corrected.latitude, 39.91);
+  assert.equal(corrected.longitude, 116.38);
+  assert.equal(corrected.category, '常去');
+  assert.equal(corrected.favorite, true);
+  assert.equal(await getLocationPageDetail(db, '不存在'), null);
 });
 
 test('metadata management merges tags and removes locations without deleting records', async (t) => {
@@ -270,6 +391,31 @@ test('manual metadata and pinned items appear first in entry suggestions', async
     { value: '学习', count: 0, pinned: true },
     { value: '听歌', count: 0, pinned: false },
   ]);
+});
+
+test('footprint view preferences persist locally and reject malformed values', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  assert.deepEqual(await getFootprintViewPreferences(db), {
+    viewMode: 'map',
+    sort: 'recent',
+    favoriteOnly: false,
+    category: null,
+  });
+  await saveFootprintViewPreferences(db, {
+    viewMode: 'list',
+    sort: 'visits',
+    favoriteOnly: true,
+    category: '旅行',
+  });
+  assert.deepEqual(await getFootprintViewPreferences(db), {
+    viewMode: 'list',
+    sort: 'visits',
+    favoriteOnly: true,
+    category: '旅行',
+  });
+  await db.runAsync("UPDATE kv_store SET value = 'not-json' WHERE key = 'footprint-view-preferences'");
+  assert.equal((await getFootprintViewPreferences(db)).viewMode, 'map');
 });
 
 test('restore merge keeps newer local content and accepts a newer backup', async (t) => {

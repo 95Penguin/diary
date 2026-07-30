@@ -4,11 +4,11 @@ import { useAppPreferences } from '@/preferences/app-preferences';
 
 export type HomeView = 'timeline' | 'calendar';
 
-export function BottomNavigation({ view, onChange, onCompose }: { view: HomeView; onChange: (view: HomeView) => void; onCompose: () => void }) {
+export function BottomNavigation({ view, onChange, onCompose, onQuickCompose }: { view: HomeView; onChange: (view: HomeView) => void; onCompose: () => void; onQuickCompose?: () => void }) {
   const { readingTheme } = useAppPreferences();
   return <View style={[styles.container, { backgroundColor: readingTheme.background, borderTopColor: readingTheme.border }]}> 
     <Pressable style={styles.item} onPress={() => onChange('timeline')}><Text style={[styles.icon, { color: readingTheme.secondary }, view === 'timeline' && styles.active]}>⌂</Text><Text style={[styles.label, { color: readingTheme.secondary }, view === 'timeline' && styles.active]}>时间轴</Text></Pressable>
-    <Pressable accessibilityLabel="记录此刻" onPress={onCompose} style={({ pressed }) => [styles.compose, { borderColor: readingTheme.background }, pressed && { opacity: 0.75 }]}><Text style={styles.plus}>＋</Text></Pressable>
+    <Pressable accessibilityLabel="记录此刻，长按快速记录" delayLongPress={350} onPress={onCompose} onLongPress={onQuickCompose} style={({ pressed }) => [styles.compose, { borderColor: readingTheme.background }, pressed && { opacity: 0.75 }]}><Text style={styles.plus}>＋</Text></Pressable>
     <Pressable style={styles.item} onPress={() => onChange('calendar')}><Text style={[styles.icon, { color: readingTheme.secondary }, view === 'calendar' && styles.active]}>▦</Text><Text style={[styles.label, { color: readingTheme.secondary }, view === 'calendar' && styles.active]}>日历</Text></Pressable>
   </View>;
 }

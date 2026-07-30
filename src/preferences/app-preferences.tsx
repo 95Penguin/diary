@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Platform, useColorScheme } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
+import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type FontSizeMode = 'verySmall' | 'small' | 'standard' | 'large' | 'veryLarge';
@@ -9,6 +10,8 @@ export type ReadingFontName = 'serif' | 'sans' | 'light' | 'mono' | 'system';
 export type BackupReminderDays = 0 | 7 | 14 | 30;
 export type BackupHealth = 'healthy' | 'warning' | 'failed' | null;
 export type AppLockDelaySeconds = 0 | 60 | 300;
+export type LocationPrivacyMode = 'precise' | 'approximate' | 'nameOnly' | 'ask';
+export type ExportLocationMode = 'include' | 'hidden';
 export type AppPreferences = {
   nickname: string;
   signature: string;
@@ -24,6 +27,10 @@ export type AppPreferences = {
   lastBackupHealth: BackupHealth;
   backupDirectoryUri: string | null;
   backupDirectoryLabel: string | null;
+  automaticBackupEnabled: boolean;
+  lastAutomaticBackupAt: string | null;
+  locationPrivacyMode: LocationPrivacyMode;
+  exportLocationMode: ExportLocationMode;
 };
 
 const defaults: AppPreferences = {
@@ -41,6 +48,10 @@ const defaults: AppPreferences = {
   lastBackupHealth: null,
   backupDirectoryUri: null,
   backupDirectoryLabel: null,
+  automaticBackupEnabled: false,
+  lastAutomaticBackupAt: null,
+  locationPrivacyMode: 'precise',
+  exportLocationMode: 'include',
 };
 export const readingThemes = {
   cream: { label: '米白', background: '#FFFDF8', surface: '#F4F6F2', text: '#27332E', secondary: '#7F8A84', border: '#E7EBE6' },
@@ -65,6 +76,7 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    const startedAt = startupTimer();
     void db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'app-preferences'").then((row) => {
       if (!active || !row) return;
       try {
@@ -76,7 +88,10 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
         ) stored.readingFont = 'sans';
         setPreferences({ ...defaults, ...stored });
       } catch { /* Keep defaults. */ }
-    }).finally(() => { if (active) setReady(true); });
+    }).finally(() => {
+      finishStartupMetric('preferences', startedAt);
+      if (active) setReady(true);
+    });
     return () => { active = false; };
   }, [db]);
 
@@ -96,9 +111,9 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
     fontScale: preferences.fontSize === 'verySmall' ? 0.82 : preferences.fontSize === 'small' ? 0.92 : preferences.fontSize === 'large' ? 1.15 : preferences.fontSize === 'veryLarge' ? 1.3 : 1,
     readingTheme: readingThemes[preferences.readingTheme] ?? readingThemes.cream,
     readingFontFamily: preferences.readingFont === 'serif'
-      ? 'ShishiSerif'
+      ? Platform.select({ ios: 'Noto Serif SC', android: 'ShishiSerif', web: 'ShishiSerif', default: 'serif' })
       : preferences.readingFont === 'sans'
-        ? 'ShishiSans'
+        ? Platform.select({ ios: 'Noto Sans SC', android: 'ShishiSans', web: 'ShishiSans', default: 'sans-serif' })
         : preferences.readingFont === 'light'
           ? Platform.select({ ios: 'Avenir Next', android: 'sans-serif-light', default: 'sans-serif' })
           : preferences.readingFont === 'mono'

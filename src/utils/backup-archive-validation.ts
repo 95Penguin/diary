@@ -15,6 +15,10 @@ function assertItemFiles(item: BackupMedia, files: ArchiveFiles) {
 export function validateArchiveMediaReferences(backup: JournalBackup, files: ArchiveFiles) {
   backup.images.forEach((item) => assertItemFiles(item, files));
   (backup.followUpImages ?? []).forEach((item) => assertItemFiles(item, files));
+  const avatarPath = backup.appPreferences?.avatarLocalUri;
+  if (avatarPath && (!files[avatarPath] || files[avatarPath].byteLength === 0)) {
+    throw new Error('missing-backup-media');
+  }
 }
 
 export function readBackupArchive(

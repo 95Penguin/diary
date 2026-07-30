@@ -21,7 +21,8 @@ async function embedUri(uri: string | null | undefined) {
 export type BackupMediaProgress = (completed: number, total: number) => void;
 
 export async function embedBackupImages(backup: JournalBackup, onProgress?: BackupMediaProgress): Promise<JournalBackup> {
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0);
+  const hasAvatar = Boolean(backup.appPreferences?.avatarLocalUri);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   const images = await Promise.all(backup.images.map(async (image) => {
     const primary = await embedUri(image.localUri);
@@ -37,11 +38,18 @@ export async function embedBackupImages(backup: JournalBackup, onProgress?: Back
     completed += 1; onProgress?.(completed, total);
     return { ...image, ...primary, pairedVideoDataBase64: paired.dataBase64, pairedVideoMimeType: paired.mimeType, thumbnailDataBase64: thumbnail.dataBase64, thumbnailMimeType: thumbnail.mimeType };
   }));
-  return { ...backup, images, followUpImages };
+  let appPreferences = backup.appPreferences;
+  if (appPreferences?.avatarLocalUri) {
+    const avatar = await embedUri(appPreferences.avatarLocalUri);
+    completed += 1; onProgress?.(completed, total);
+    appPreferences = { ...appPreferences, avatarDataBase64: avatar.dataBase64, avatarMimeType: avatar.mimeType };
+  }
+  return { ...backup, images, followUpImages, appPreferences };
 }
 
 export async function materializeBackupImages(backup: JournalBackup, onProgress?: BackupMediaProgress) {
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0);
+  const hasAvatar = Boolean(backup.appPreferences?.avatarDataBase64);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   const images = [] as JournalBackup['images'];
   for (const image of backup.images) {
@@ -61,5 +69,14 @@ export async function materializeBackupImages(backup: JournalBackup, onProgress?
     followUpImages.push({ ...image, localUri: await persistJournalImageBase64(image.dataBase64, extension), pairedVideoLocalUri, thumbnailLocalUri });
     completed += 1; onProgress?.(completed, total);
   }
-  return { backup: { ...backup, images, followUpImages }, createdUris: [] as string[] };
+  let appPreferences = backup.appPreferences;
+  if (appPreferences?.avatarDataBase64) {
+    const extension = appPreferences.avatarMimeType === 'image/png' ? '.png' : appPreferences.avatarMimeType === 'image/webp' ? '.webp' : '.jpg';
+    const avatarLocalUri = await persistJournalImageBase64(appPreferences.avatarDataBase64, extension);
+    completed += 1; onProgress?.(completed, total);
+    appPreferences = { ...appPreferences, avatarLocalUri };
+  } else if (appPreferences?.avatarLocalUri) {
+    appPreferences = { ...appPreferences, avatarLocalUri: null };
+  }
+  return { backup: { ...backup, images, followUpImages, appPreferences }, createdUris: [] as string[] };
 }

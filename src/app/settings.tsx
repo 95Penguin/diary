@@ -1,13 +1,14 @@
 import { useCallback, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { showAppDialog } from '@/components/app-dialog-host';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
-import { getJournalStats, getLastExportAt } from '@/database/journal-repository';
+import { getDraftCount, getJournalStats, getLastExportAt } from '@/database/journal-repository';
 import type { JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { readingThemes, useAppPreferences, type AppLockDelaySeconds, type BackupReminderDays, type FontSizeMode, type ReadingFontName, type ReadingThemeName } from '@/preferences/app-preferences';
@@ -19,12 +20,18 @@ const EMPTY_STATS: JournalStats = { entries: 0, followUps: 0, images: 0, deleted
 export default function SettingsScreen() {
   const db = useSQLiteContext();
   const [stats, setStats] = useState(EMPTY_STATS);
+  const [draftCount, setDraftCount] = useState(0);
   const { preferences, readingFontFamily, readingTheme, fontScale, updatePreferences } = useAppPreferences();
   const [profileEditor, setProfileEditor] = useState<'nickname' | 'signature' | null>(null);
   const [nickname, setNickname] = useState(preferences.nickname);
   const [signature, setSignature] = useState(preferences.signature);
 
-  useFocusEffect(useCallback(() => { void getJournalStats(db).then(setStats); }, [db]));
+  useFocusEffect(useCallback(() => {
+    void Promise.all([getJournalStats(db), getDraftCount(db)]).then(([nextStats, nextDraftCount]) => {
+      setStats(nextStats);
+      setDraftCount(nextDraftCount);
+    });
+  }, [db]));
 
   async function chooseAvatar() {
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 });
@@ -34,7 +41,7 @@ export default function SettingsScreen() {
       const uri = await persistJournalImage(result.assets[0].uri, result.assets[0].fileName);
       await updatePreferences({ avatarUri: uri });
       if (previous) deleteJournalImage(previous);
-    } catch { Alert.alert('头像保存失败', '请稍后再试。'); }
+    } catch { await showAppDialog({ title: '头像保存失败', message: '请稍后再试。' }); }
   }
 
   async function saveProfile() {
@@ -60,7 +67,7 @@ export default function SettingsScreen() {
       LocalAuthentication.isEnrolledAsync(),
     ]);
     if (!hardware || !enrolled) {
-      Alert.alert('暂时无法开启', '请先在手机设置中录入指纹或人脸，并设置锁屏密码。');
+      await showAppDialog({ title: '暂时无法开启', message: '请先在手机设置中录入指纹或人脸，并设置锁屏密码。' });
       return;
     }
     const result = await LocalAuthentication.authenticateAsync({
@@ -76,7 +83,7 @@ export default function SettingsScreen() {
     const lastExportAt = await getLastExportAt(db);
     const enabled = await setBackupReminder(days, lastExportAt);
     if (!enabled) {
-      Alert.alert('没有通知权限', '请在手机设置中允许拾时发送通知，才能定期提醒备份。');
+      await showAppDialog({ title: '没有通知权限', message: '请在手机设置中允许拾时发送通知，才能定期提醒备份。' });
       return;
     }
     await updatePreferences({ backupReminderDays: days });
@@ -105,20 +112,28 @@ export default function SettingsScreen() {
         <Stat value={stats.images} label="图片" />
       </View>
 
-      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>内容管理</Text>
-      <Pressable onPress={() => router.push('/metadata' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View><Text style={[styles.rowTitle, { color: readingTheme.text }]}>标签与地点</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>整理、合并或移除历史内容</Text></View>
+      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>记录与整理</Text>
+      <Pressable onPress={() => router.push('/drafts' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>草稿箱</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>继续编辑尚未保存的内容</Text></View>
+        <View style={styles.rowRight}>{draftCount > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{draftCount}</Text></View> : null}<Text style={styles.arrow}>›</Text></View>
+      </Pressable>
+      <Pressable onPress={() => router.push('/favorites' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>收藏</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>查看标记过的重要时刻</Text></View>
+        <Text style={styles.arrow}>›</Text>
+      </Pressable>
+      <Pressable onPress={() => router.push('/content-management' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>内容管理</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>批量管理、标签与地点、地点隐私与体检</Text></View>
         <Text style={styles.arrow}>›</Text>
       </Pressable>
 
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>数据与备份</Text>
       <Pressable onPress={() => router.push('/trash')} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View><Text style={[styles.rowTitle, { color: readingTheme.text }]}>回收站</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>删除的记录保留 30 天</Text></View>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>回收站</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>移入回收站的记录保留 30 天</Text></View>
         <View style={styles.rowRight}>{stats.deleted > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{stats.deleted}</Text></View> : null}<Text style={styles.arrow}>›</Text></View>
       </Pressable>
 
       <Pressable onPress={() => router.push('/backup')} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View><Text style={[styles.rowTitle, { color: readingTheme.text }]}>备份与导出</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>导出 ZIP，并检查备份是否完整可恢复</Text></View>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>备份与导出</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>导出 ZIP，并检查备份是否完整可恢复</Text></View>
         <Text style={styles.arrow}>›</Text>
       </Pressable>
       <View style={styles.reminderGap} />
@@ -136,7 +151,7 @@ export default function SettingsScreen() {
         onPress={() => void toggleAppLock()}
         style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}
       >
-        <View><Text style={[styles.rowTitle, { color: readingTheme.text }]}>应用锁</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>离开应用后使用手机凭据重新解锁</Text></View>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>应用锁</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>离开应用后使用手机凭据重新解锁</Text></View>
         <View style={[styles.switchTrack, preferences.appLockEnabled && styles.switchTrackActive]}>
           <View style={[styles.switchThumb, preferences.appLockEnabled && styles.switchThumbActive]} />
         </View>
@@ -156,11 +171,9 @@ export default function SettingsScreen() {
       <SettingChoice title="字体大小" value={preferences.fontSize} options={[["verySmall", "很小"], ["small", "小"], ["standard", "标准"], ["large", "大"], ["veryLarge", "很大"]]} onChange={(value) => void updatePreferences({ fontSize: value as FontSizeMode })} />
       <View style={[styles.preview, { backgroundColor: readingTheme.surface }]}><Text style={[styles.previewTitle, { color: readingTheme.secondary }]}>实时预览</Text><Text style={[styles.previewText, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 24 * fontScale }]}>今天也值得被认真记录。</Text></View>
 
-      <View style={[styles.coming, { borderColor: readingTheme.border }]}><Text style={[styles.comingTitle, { color: readingTheme.text }]}>阅读提示</Text><Text style={[styles.comingText, { color: readingTheme.secondary }]}>字体大小会在系统缩放基础上调整；日历数字保持固定比例，避免日期错位。</Text></View>
-
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>关于</Text>
       <Pressable onPress={() => router.push('/about' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View><Text style={[styles.rowTitle, { color: readingTheme.text }]}>关于拾时</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>版本、数据库状态与故障诊断</Text></View>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>关于拾时</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>版本、数据库状态与故障诊断</Text></View>
         <Text style={styles.arrow}>›</Text>
       </Pressable>
     </ScrollView>
@@ -200,7 +213,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 },
-  scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: spacing.xxxl },
+  scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: spacing.xxxl },
   profile: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   profileInfo: { flex: 1, minWidth: 0, gap: 4 },
   profileField: { minHeight: 24, justifyContent: 'center' },
@@ -208,23 +221,22 @@ const styles = StyleSheet.create({
   avatarImage: { backgroundColor: 'transparent' },
   avatarText: { color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' },
   brand: { flex: 1, color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 21, fontWeight: '600' }, slogan: { flex: 1, color: colors.textSecondary, fontSize: 12, lineHeight: 16 },
-  sectionTitle: { marginTop: spacing.lg, marginBottom: 6, color: colors.textFaint, fontSize: 10, letterSpacing: 1 },
+  sectionTitle: { marginTop: spacing.xxl, marginBottom: spacing.sm, color: colors.textFaint, fontSize: 11, lineHeight: 16, letterSpacing: 1 },
   statsCard: { height: 64, flexDirection: 'row', alignItems: 'center', borderRadius: radii.md, backgroundColor: colors.surfaceMuted },
-  stat: { flex: 1, alignItems: 'center', justifyContent: 'center' }, statValue: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 21, fontWeight: '600', includeFontPadding: false }, statLabel: { marginTop: 1, color: colors.textSecondary, fontSize: 9 },
+  stat: { flex: 1, alignItems: 'center', justifyContent: 'center' }, statValue: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 21, fontWeight: '600', includeFontPadding: false }, statLabel: { marginTop: 1, color: colors.textSecondary, fontSize: 11 },
   statDivider: { width: StyleSheet.hairlineWidth, height: 24, backgroundColor: colors.border },
-  row: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted },
+  row: { minHeight: 64, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radii.md, backgroundColor: colors.surfaceMuted },
+  rowCopy: { flex: 1, minWidth: 0 },
   nextRow: { marginTop: spacing.sm },
-  pressed: { opacity: 0.62 }, rowTitle: { color: colors.text, fontSize: 13, fontWeight: '600' }, rowDescription: { marginTop: 1, color: colors.textFaint, fontSize: 9 },
-  rowRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, badge: { minWidth: 22, height: 22, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6, borderRadius: 11, backgroundColor: colors.primarySoft }, badgeText: { color: colors.primary, fontSize: 10, fontWeight: '700' }, arrow: { color: colors.textFaint, fontSize: 22 },
+  pressed: { opacity: 0.62 }, rowTitle: { color: colors.text, fontSize: 13, fontWeight: '600' }, rowDescription: { marginTop: 2, color: colors.textFaint, fontSize: 11 },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, badge: { minWidth: 24, height: 24, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6, borderRadius: 12, backgroundColor: colors.primarySoft }, badgeText: { color: colors.primary, fontSize: 11, fontWeight: '700' }, arrow: { color: colors.textFaint, fontSize: 22 },
   switchTrack: { width: 42, height: 24, justifyContent: 'center', paddingHorizontal: 3, borderRadius: 12, backgroundColor: colors.border },
   switchTrackActive: { backgroundColor: colors.primary },
   switchThumb: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#FFFFFF' },
   switchThumbActive: { alignSelf: 'flex-end' },
   reminderGap: { height: spacing.sm },
-  coming: { marginTop: spacing.lg, padding: spacing.md, borderRadius: radii.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
-  comingTitle: { color: colors.textSecondary, fontSize: 11, fontWeight: '600' }, comingText: { marginTop: spacing.xs, color: colors.textFaint, fontSize: 10, lineHeight: 17 },
-  choiceRow: { minHeight: 54, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.sm, marginBottom: spacing.sm, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, choiceTitle: { color: colors.text, fontSize: 12, lineHeight: 32, fontWeight: '600' }, choices: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.xs }, choice: { height: 32, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: 16 }, singleCharacterChoice: { width: 32, paddingHorizontal: 0 }, choiceActive: { backgroundColor: colors.primary }, choiceText: { color: colors.textSecondary, fontSize: 9 }, choiceTextActive: { color: '#FFFFFF', fontWeight: '700' },
-  themeRow: { minHeight: 82, marginBottom: spacing.sm, paddingLeft: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, themeChoices: { alignItems: 'center', gap: spacing.md, paddingLeft: spacing.sm, paddingRight: spacing.md, paddingBottom: spacing.sm }, themeChoice: { width: 42, alignItems: 'center' }, themeSwatch: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 15 }, themeSwatchActive: { borderWidth: 2 }, themeSwatchInner: { width: 12, height: 12, borderRadius: 6 }, themeLabel: { marginTop: 3, fontSize: 8 }, themeLabelActive: { fontWeight: '700' },
-  preview: { marginBottom: spacing.sm, padding: spacing.lg, borderRadius: radii.md }, previewTitle: { fontSize: 9 }, previewText: { marginTop: spacing.sm },
+  choiceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.sm, marginBottom: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, choiceTitle: { color: colors.text, fontSize: 12, lineHeight: 30, fontWeight: '600' }, choices: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.xs }, choice: { minHeight: 30, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: 15 }, singleCharacterChoice: { width: 30, paddingHorizontal: 0 }, choiceActive: { backgroundColor: colors.primary }, choiceText: { color: colors.textSecondary, fontSize: 10 }, choiceTextActive: { color: '#FFFFFF', fontWeight: '700' },
+  themeRow: { minHeight: 88, marginBottom: spacing.sm, paddingLeft: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, themeChoices: { alignItems: 'center', gap: spacing.md, paddingLeft: spacing.sm, paddingRight: spacing.md, paddingBottom: spacing.sm }, themeChoice: { minWidth: 44, minHeight: 52, alignItems: 'center', justifyContent: 'center' }, themeSwatch: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 16 }, themeSwatchActive: { borderWidth: 2 }, themeSwatchInner: { width: 12, height: 12, borderRadius: 6 }, themeLabel: { marginTop: 3, fontSize: 11 }, themeLabelActive: { fontWeight: '700' },
+  preview: { marginBottom: spacing.sm, padding: spacing.lg, borderRadius: radii.md }, previewTitle: { fontSize: 11 }, previewText: { marginTop: spacing.sm },
   overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, editorCard: { width: '100%', maxWidth: 300, padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.background }, editorTitle: { marginBottom: spacing.md, color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600', textAlign: 'center' }, nicknameInput: { height: 44, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 14 }, signatureInput: { height: 76, paddingTop: spacing.sm }, editorActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.xxl, marginTop: spacing.xl }, cancelText: { color: colors.textSecondary, fontSize: 12 }, confirmText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
 });

@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
@@ -18,6 +18,8 @@ import { deleteJournalImage, getJournalMediaStorageUsage } from '@/utils/image-s
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { setBackupReminder } from '@/utils/backup-reminder';
 import { chooseBackupDirectory, saveBackupToDirectory } from '@/utils/backup-directory';
+import { AUTOMATIC_BACKUP_RETENTION } from '@/utils/automatic-backup';
+import { recordAppError } from '@/utils/app-error-log';
 
 const EMPTY_STATS: JournalStats = { entries: 0, followUps: 0, images: 0, deleted: 0 };
 type OperationProgress = { label: string; value: number } | null;
@@ -89,7 +91,8 @@ export default function BackupScreen() {
       await finishSuccessfulBackup(archive.missingMedia);
       setOperationProgress({ label: '备份已完成', value: 1 });
       setMessage(archive.missingMedia ? `ZIP 备份已生成（${formatBytes(archive.bytes.length)}），${archive.missingMedia} 个本地媒体文件未找到` : `完整 ZIP 备份已生成（${formatBytes(archive.bytes.length)}）`);
-    } catch {
+    } catch (error) {
+      void recordAppError('backup.export-zip', error);
       const now = new Date().toISOString();
       await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: 'failed' }).catch(() => undefined);
       setMessage('导出失败，请稍后重试');
@@ -109,7 +112,34 @@ export default function BackupScreen() {
         backupDirectoryLabel: '系统或网盘目录',
       });
       setMessage('备份目录已设置。拾时只会在此目录中管理自己生成的备份文件。');
-    } catch {
+    } catch (error) {
+      void recordAppError('backup.select-directory', error);
+      setMessage('无法授权这个目录，请换一个目录再试');
+    }
+  }
+
+  async function toggleAutomaticBackup() {
+    if (preferences.automaticBackupEnabled) {
+      await updatePreferences({ automaticBackupEnabled: false });
+      setMessage('自动备份已关闭，已有备份文件不会删除。');
+      return;
+    }
+    if (preferences.backupDirectoryUri) {
+      await updatePreferences({ automaticBackupEnabled: true });
+      setMessage('自动备份已开启，将在应用回到前台时每天检查一次。');
+      return;
+    }
+    try {
+      const result = await chooseBackupDirectory();
+      if (!result.granted || !result.directoryUri) return;
+      await updatePreferences({
+        backupDirectoryUri: result.directoryUri,
+        backupDirectoryLabel: '系统或网盘目录',
+        automaticBackupEnabled: true,
+      });
+      setMessage('目录已设置，自动备份已开启。');
+    } catch (error) {
+      void recordAppError('backup.enable-automatic', error);
       setMessage('无法授权这个目录，请换一个目录再试');
     }
   }
@@ -130,14 +160,15 @@ export default function BackupScreen() {
         preferences.backupDirectoryUri,
         archive.bytes,
         `拾时备份-${stamp}`,
-        5,
+        AUTOMATIC_BACKUP_RETENTION,
       );
       await finishSuccessfulBackup(archive.missingMedia);
       setOperationProgress({ label: '目录备份已完成', value: 1 });
       setMessage(archive.missingMedia
         ? `已写入目录（${formatBytes(saved.size)}），但有 ${archive.missingMedia} 个本地媒体缺失`
         : `已写入并校验（${formatBytes(saved.size)}），目录中保留最近 ${saved.retained} 份`);
-    } catch {
+    } catch (error) {
+      void recordAppError('backup.save-directory', error);
       const now = new Date().toISOString();
       await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: 'failed' }).catch(() => undefined);
       setMessage('目录备份失败。请重新选择目录，或检查网盘是否仍可用。');
@@ -159,7 +190,8 @@ export default function BackupScreen() {
       const now = new Date().toISOString();
       await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: 'healthy' });
       setMessage(`备份健康：可恢复 ${backup.entries.length} 条记录、${backup.followUps.length} 条后续`);
-    } catch {
+    } catch (error) {
+      void recordAppError('backup.health-check', error);
       const now = new Date().toISOString();
       await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: 'failed' });
       setMessage('备份检查失败：ZIP 已损坏、缺少数据或媒体文件');
@@ -182,6 +214,7 @@ export default function BackupScreen() {
         setPendingZipUri(null);
       }
     } catch (error) {
+      void recordAppError('backup.read-restore-file', error);
       const reason = error instanceof Error ? error.message : '';
       setMessage(reason === 'unsupported-backup' ? '暂不支持这个备份版本' : '无法读取这个备份文件');
     }
@@ -207,14 +240,33 @@ export default function BackupScreen() {
       setOperationProgress({ label: '正在合并记录', value: 0.88 });
       const result = await importJournalBackup(db, materialized.backup);
       imported = true;
+      const restoredPreferences = materialized.backup.appPreferences;
+      if (restoredPreferences) {
+        await updatePreferences({
+          nickname: restoredPreferences.nickname,
+          signature: restoredPreferences.signature,
+          avatarUri: restoredPreferences.avatarLocalUri,
+          themeMode: restoredPreferences.themeMode,
+          fontSize: restoredPreferences.fontSize,
+          readingTheme: restoredPreferences.readingTheme,
+          readingFont: restoredPreferences.readingFont,
+          appLockEnabled: restoredPreferences.appLockEnabled,
+          appLockDelaySeconds: restoredPreferences.appLockDelaySeconds,
+          backupReminderDays: restoredPreferences.backupReminderDays,
+          locationPrivacyMode: restoredPreferences.locationPrivacyMode ?? 'precise',
+          exportLocationMode: restoredPreferences.exportLocationMode ?? 'include',
+        });
+        await setBackupReminder(restoredPreferences.backupReminderDays).catch(() => undefined);
+      }
       setPendingBackup(null);
       setPendingZipUri(null);
       await load();
       const created = result.createdEntries + result.createdFollowUps;
       const updated = result.updatedEntries + result.updatedFollowUps;
       setOperationProgress({ label: '恢复已完成', value: 1 });
-      setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条`);
+      setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条${restoredPreferences ? '，个人资料和设置已恢复' : ''}`);
     } catch (error) {
+      void recordAppError('backup.restore', error);
       if (!imported) createdImageUris.forEach(deleteJournalImage);
       setPendingBackup(null);
       setPendingZipUri(null);
@@ -253,10 +305,13 @@ export default function BackupScreen() {
       </View>
 
       <View style={[styles.explanation, { backgroundColor: readingTheme.surface }]}>
-        <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>ZIP 完整备份</Text>
+        <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>完整备份</Text>
         <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>记录数据保存为独立 JSON，图片、视频和封面按文件存放，避免 Base64 额外增加约三分之一体积。</Text>
         <View style={[styles.notice, { backgroundColor: readingTheme.background }]}><Text style={[styles.noticeText, { color: readingTheme.secondary }]}>仍兼容以前导出的 JSON 备份；视频较多时导出和恢复需要更长时间。</Text></View>
       </View>
+      <Pressable onPress={() => router.push('/readable-export' as Href)} style={({ pressed }) => [styles.readableCard, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.directoryCopy}><Text style={[styles.explanationTitle, { color: readingTheme.text }]}>可阅读导出</Text><Text style={[styles.explanationText, { color: readingTheme.secondary }]}>导出 Markdown / HTML，用于阅读、编辑或打印；不能代替完整备份</Text></View><Text style={styles.readableArrow}>›</Text>
+      </Pressable>
 
       <View style={[styles.directoryCard, { borderColor: readingTheme.border }]}>
         <View style={styles.directoryCopy}>
@@ -269,6 +324,19 @@ export default function BackupScreen() {
           <Text style={styles.directorySelectText}>{preferences.backupDirectoryUri ? '更换' : '选择'}</Text>
         </Pressable>
       </View>
+      <Pressable accessibilityRole="switch" accessibilityState={{ checked: preferences.automaticBackupEnabled }} onPress={() => void toggleAutomaticBackup()} style={[styles.autoBackupRow, { backgroundColor: readingTheme.surface }]}>
+        <View style={styles.directoryCopy}>
+          <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>每日自动备份</Text>
+          <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>
+            {preferences.lastAutomaticBackupAt
+              ? `最近自动备份：${formatShortDateTime(preferences.lastAutomaticBackupAt)}`
+              : '打开应用时检查，满 24 小时后备份并保留最近 5 份'}
+          </Text>
+        </View>
+        <View style={[styles.switchTrack, preferences.automaticBackupEnabled && styles.switchTrackActive]}>
+          <View style={[styles.switchThumb, preferences.automaticBackupEnabled && styles.switchThumbActive]} />
+        </View>
+      </Pressable>
       <Pressable disabled={exporting} onPress={() => void saveToSelectedDirectory()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
         {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>{preferences.backupDirectoryUri ? '备份到固定目录' : '选择目录并备份'}</Text>}
       </Pressable>
@@ -288,7 +356,16 @@ export default function BackupScreen() {
       <Pressable onPress={() => { setPendingBackup(null); setPendingZipUri(null); }} style={styles.overlay}>
         <Pressable onPress={(event) => event.stopPropagation()} style={[styles.confirmCard, { backgroundColor: readingTheme.background }]}>
           <Text style={[styles.confirmTitle, { color: readingTheme.text }]}>合并这份备份？</Text>
-          {pendingBackup ? <Text style={styles.confirmSummary}>{pendingBackup.entries.length} 条记录 · {pendingBackup.followUps.length} 条后续 · {pendingBackup.tags.length} 个标签</Text> : null}
+          {pendingBackup ? <>
+            <Text style={styles.confirmSummary}>{pendingBackup.entries.length} 条记录 · {pendingBackup.followUps.length} 条后续 · {pendingBackup.images.length + (pendingBackup.followUpImages?.length ?? 0)} 个媒体</Text>
+            <View style={[styles.preview, { backgroundColor: readingTheme.surface }]}>
+              <View style={styles.previewRow}><Text style={[styles.previewLabel, { color: readingTheme.secondary }]}>备份时间</Text><Text style={[styles.previewValue, { color: readingTheme.text }]}>{formatShortDateTime(pendingBackup.exportedAt)}</Text></View>
+              <View style={styles.previewRow}><Text style={[styles.previewLabel, { color: readingTheme.secondary }]}>备份版本</Text><Text style={[styles.previewValue, { color: readingTheme.text }]}>v{pendingBackup.version}</Text></View>
+              <View style={styles.previewRow}><Text style={[styles.previewLabel, { color: readingTheme.secondary }]}>地点目录</Text><Text style={[styles.previewValue, { color: readingTheme.text }]}>{pendingBackup.metadataCatalog?.locations.length ?? 0} 个地点</Text></View>
+              <View style={styles.previewRow}><Text style={[styles.previewLabel, { color: readingTheme.secondary }]}>个人资料</Text><Text style={[styles.previewValue, { color: readingTheme.text }]}>{pendingBackup.appPreferences ? `${pendingBackup.appPreferences.nickname}${pendingBackup.appPreferences.avatarLocalUri ? ' · 含头像' : ''}` : '旧版备份未包含'}</Text></View>
+              <View style={styles.previewRow}><Text style={[styles.previewLabel, { color: readingTheme.secondary }]}>显示与安全设置</Text><Text style={[styles.previewValue, { color: readingTheme.text }]}>{pendingBackup.appPreferences ? '将一并恢复' : '保留本机设置'}</Text></View>
+            </View>
+          </> : null}
           <Text style={[styles.confirmHint, { color: readingTheme.secondary }]}>不会清空现有内容；同一记录将保留更新时间较新的版本。</Text>
           <View style={styles.confirmActions}><Pressable onPress={() => { setPendingBackup(null); setPendingZipUri(null); }} style={[styles.confirmButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={importing} onPress={() => void restoreBackup()} style={[styles.confirmButton, styles.restoreButton]}>{importing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.restoreText}>开始恢复</Text>}</Pressable></View>
         </Pressable>
@@ -303,7 +380,7 @@ const styles = StyleSheet.create({
   back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 },
   content: { padding: spacing.xl, paddingBottom: spacing.xxxl },
   summary: { padding: spacing.lg, borderRadius: radii.lg, backgroundColor: colors.primarySoft },
-  summaryTitle: { color: colors.primary, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, summaryCount: { marginTop: spacing.sm, color: colors.text, fontSize: 11 }, lastExport: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 10 },
+  summaryTitle: { color: colors.primary, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, summaryCount: { marginTop: spacing.sm, color: colors.text, fontSize: 12 }, lastExport: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 11 },
   healthRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm },
   healthDot: { width: 7, height: 7, marginRight: 6, borderRadius: 4 },
   healthGood: { backgroundColor: colors.primary },
@@ -312,20 +389,30 @@ const styles = StyleSheet.create({
   healthUnknown: { backgroundColor: colors.textFaint },
   healthText: { flex: 1, marginTop: 0 },
   explanation: { marginTop: spacing.lg, padding: spacing.lg, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted },
+  readableCard: { minHeight: 70, flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, padding: spacing.lg, borderRadius: radii.lg }, readableArrow: { marginLeft: spacing.md, color: colors.primary, fontSize: 22 },
   explanationTitle: { color: colors.text, fontSize: 13, fontWeight: '600' }, explanationText: { marginTop: spacing.sm, color: colors.textSecondary, fontSize: 11, lineHeight: 18 },
-  notice: { marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: '#F7EFE2' }, noticeText: { color: '#816E4F', fontSize: 10, lineHeight: 16 },
+  notice: { marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: '#F7EFE2' }, noticeText: { color: '#816E4F', fontSize: 11, lineHeight: 17 },
   directoryCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg },
   directoryCopy: { flex: 1 },
   directorySelect: { minWidth: 58, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill },
   directorySelectText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
+  autoBackupRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm, padding: spacing.md, borderRadius: radii.lg },
+  switchTrack: { width: 44, height: 26, justifyContent: 'center', paddingHorizontal: 3, borderRadius: 13, backgroundColor: colors.border },
+  switchTrackActive: { backgroundColor: colors.primary },
+  switchThumb: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFFFFF' },
+  switchThumbActive: { alignSelf: 'flex-end' },
   exportButton: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, pressed: { opacity: 0.62 }, exportText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   importButton: { height: 42, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, importText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
   checkButton: { height: 38, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.pill },
   checkText: { fontSize: 11, fontWeight: '600' },
   message: { marginTop: spacing.md, color: colors.primary, fontSize: 11, textAlign: 'center' }, error: { color: colors.danger },
-  progressArea: { marginTop: spacing.md }, progressTrack: { height: 5, overflow: 'hidden', borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, progressFill: { height: '100%', borderRadius: radii.pill, backgroundColor: colors.primary }, progressLabel: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 9, textAlign: 'center' },
-  hint: { marginTop: spacing.lg, paddingHorizontal: spacing.md, color: colors.textFaint, fontSize: 10, lineHeight: 17, textAlign: 'center' },
+  progressArea: { marginTop: spacing.md }, progressTrack: { height: 5, overflow: 'hidden', borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, progressFill: { height: '100%', borderRadius: radii.pill, backgroundColor: colors.primary }, progressLabel: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 11, textAlign: 'center' },
+  hint: { marginTop: spacing.lg, paddingHorizontal: spacing.md, color: colors.textFaint, fontSize: 11, lineHeight: 18, textAlign: 'center' },
   overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, confirmCard: { width: '100%', maxWidth: 320, padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.background },
-  confirmTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, confirmSummary: { marginTop: spacing.md, color: colors.primary, fontSize: 11, fontWeight: '600', textAlign: 'center' }, confirmHint: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 10, lineHeight: 16, textAlign: 'center' },
+  confirmTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, confirmSummary: { marginTop: spacing.md, color: colors.primary, fontSize: 12, fontWeight: '600', textAlign: 'center' }, confirmHint: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 11, lineHeight: 17, textAlign: 'center' },
+  preview: { gap: spacing.sm, marginTop: spacing.lg, padding: spacing.md, borderRadius: radii.md },
+  previewRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md },
+  previewLabel: { flexShrink: 0, fontSize: 11, lineHeight: 18 },
+  previewValue: { flex: 1, fontSize: 11, fontWeight: '600', lineHeight: 18, textAlign: 'right' },
   confirmActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xl }, confirmButton: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, restoreButton: { backgroundColor: colors.primary }, cancelText: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' }, restoreText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
 });

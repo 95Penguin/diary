@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -10,6 +10,7 @@ import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatFullDate, formatShortDateTime } from '@/utils/date';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
+import { showAppDialog } from '@/components/app-dialog-host';
 
 function changedFields(version: EntryVersion, newer: Entry | EntryVersion | null) {
   if (!newer) return ['历史版本'];
@@ -64,7 +65,7 @@ export default function EntryHistoryScreen() {
         {preview ? <><Text style={[styles.previewTitle, { color: readingTheme.text }]}>历史版本</Text><Text style={[styles.previewDate, { color: readingTheme.secondary }]}>保存于 {formatShortDateTime(preview.createdAt)} · 发生于 {formatFullDate(preview.occurredAt)}</Text><ScrollView style={styles.previewScroll} showsVerticalScrollIndicator={false}><Text style={[styles.previewContent, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 25 * fontScale }]}>{preview.content}</Text><View style={styles.previewMeta}>{preview.mood ? <Text style={[styles.metaText, { backgroundColor: readingTheme.surface, color: readingTheme.secondary }]}>{preview.mood}</Text> : null}{preview.weather ? <Text style={[styles.metaText, { backgroundColor: readingTheme.surface, color: readingTheme.secondary }]}>{preview.weather}</Text> : null}{preview.locationName ? <Text style={[styles.metaText, { backgroundColor: readingTheme.surface, color: readingTheme.secondary }]}>⌖ {preview.locationName}</Text> : null}{preview.tags.map((tag) => <Text key={tag} style={[styles.metaText, { backgroundColor: readingTheme.surface, color: readingTheme.secondary }]}>#{tag}</Text>)}</View></ScrollView><View style={styles.previewActions}><Pressable onPress={() => setPreview(null)} style={[styles.cancelButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable onPress={() => restore(preview)} style={styles.restoreButton}><Text style={styles.restoreText}>恢复此版本</Text></Pressable></View></> : null}
       </Pressable></Pressable>
     </Modal>
-    <AppDialog visible={Boolean(pendingRestore)} title="恢复这个版本？" message="当前内容会先保存为一个新历史版本，你可以之后再次恢复。图片不会发生变化。" onClose={() => setPendingRestore(null)} actions={[{ label: '取消', onPress: () => setPendingRestore(null) }, { label: '恢复', tone: 'primary', onPress: async () => { if (!pendingRestore) return; const restored = await restoreEntryVersion(db, pendingRestore.id); setPendingRestore(null); if (!restored) { Alert.alert('恢复失败', '这个历史版本可能已不存在。'); return; } setPreview(null); await load(); } }]} />
+    <AppDialog visible={Boolean(pendingRestore)} title="恢复这个版本？" message="当前内容会先保存为一个新历史版本，你可以之后再次恢复。图片不会发生变化。" onClose={() => setPendingRestore(null)} actions={[{ label: '取消', onPress: () => setPendingRestore(null) }, { label: '恢复', tone: 'primary', onPress: async () => { if (!pendingRestore) return; const restored = await restoreEntryVersion(db, pendingRestore.id); setPendingRestore(null); if (!restored) { await showAppDialog({ title: '恢复失败', message: '这个历史版本可能已不存在。' }); return; } setPreview(null); await load(); } }]} />
   </SafeAreaView>;
 }
 

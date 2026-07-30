@@ -23,7 +23,8 @@ async function readUri(uri: string | null | undefined) {
 
 export async function createZipBackup(backup: JournalBackup, onProgress?: ZipBackupProgress) {
   const files: Zippable = {};
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0);
+  const hasAvatar = Boolean(backup.appPreferences?.avatarLocalUri);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   let missingMedia = 0;
   async function archiveItem<T extends BackupMedia>(item: T, group: string): Promise<T> {
@@ -38,7 +39,15 @@ export async function createZipBackup(backup: JournalBackup, onProgress?: ZipBac
   for (const item of backup.images) images.push(await archiveItem(item, 'entries'));
   const followUpImages = [] as NonNullable<JournalBackup['followUpImages']>;
   for (const item of backup.followUpImages ?? []) followUpImages.push(await archiveItem(item, 'follow-ups'));
-  files['backup.json'] = [strToU8(JSON.stringify({ ...backup, images, followUpImages })), { level: 6 }];
+  let appPreferences = backup.appPreferences;
+  if (appPreferences?.avatarLocalUri) {
+    const avatarPath = `profile/avatar${extensionFor(appPreferences.avatarLocalUri, '.jpg')}`;
+    const avatar = await readUri(appPreferences.avatarLocalUri);
+    if (avatar) files[avatarPath] = [avatar, { level: 0 }]; else missingMedia += 1;
+    completed += 1; onProgress?.(completed, total);
+    appPreferences = { ...appPreferences, avatarLocalUri: avatar ? avatarPath : null, avatarDataBase64: undefined, avatarMimeType: undefined };
+  }
+  files['backup.json'] = [strToU8(JSON.stringify({ ...backup, images, followUpImages, appPreferences })), { level: 6 }];
   return { bytes: zipSync(files), missingMedia };
 }
 
@@ -52,7 +61,8 @@ export function inspectZipBackup(bytes: Uint8Array) {
 
 export async function materializeZipBackup(bytes: Uint8Array, onProgress?: ZipBackupProgress) {
   const { files, backup } = readZip(bytes);
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0);
+  const hasAvatar = Boolean(backup.appPreferences?.avatarLocalUri);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   async function restoreItem<T extends BackupMedia>(item: T): Promise<T> {
     const primary = item.localUri ? files[item.localUri] : null;
@@ -64,5 +74,14 @@ export async function materializeZipBackup(bytes: Uint8Array, onProgress?: ZipBa
   for (const item of backup.images) images.push(await restoreItem(item));
   const followUpImages = [] as NonNullable<JournalBackup['followUpImages']>;
   for (const item of backup.followUpImages ?? []) followUpImages.push(await restoreItem(item));
-  return { backup: { ...backup, images, followUpImages }, createdUris: [] as string[] };
+  let appPreferences = backup.appPreferences;
+  if (appPreferences?.avatarLocalUri) {
+    const avatarPath = appPreferences.avatarLocalUri;
+    const avatar = files[avatarPath];
+    if (!avatar) throw new Error('missing-backup-media');
+    const avatarLocalUri = await persistJournalImageBytes(avatar, extensionFor(avatarPath, '.jpg'));
+    completed += 1; onProgress?.(completed, total);
+    appPreferences = { ...appPreferences, avatarLocalUri };
+  }
+  return { backup: { ...backup, images, followUpImages, appPreferences }, createdUris: [] as string[] };
 }

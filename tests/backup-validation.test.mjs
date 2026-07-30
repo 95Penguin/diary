@@ -87,6 +87,50 @@ test('rejects invalid media metadata', () => {
   assert.throws(() => parseJournalBackup(JSON.stringify(backup)), /invalid-backup/);
 });
 
+test('accepts location catalog in v10 and rejects unsafe location metadata', () => {
+  const backup = {
+    ...validBackup(),
+    version: 10,
+    metadataCatalog: {
+      tags: [],
+      locations: ['学校'],
+      pinnedTags: [],
+      pinnedLocations: ['学校'],
+      locationDetails: {
+        学校: { address: '北京市海淀区', latitude: 39.9, longitude: 116.4, category: '学校', favorite: true },
+      },
+    },
+  };
+  assert.deepEqual(parseJournalBackup(JSON.stringify(backup)), backup);
+  backup.metadataCatalog.locationDetails.学校.latitude = 'not-a-coordinate';
+  assert.throws(() => parseJournalBackup(JSON.stringify(backup)), /invalid-backup/);
+  backup.metadataCatalog.locationDetails.学校.latitude = null;
+  backup.metadataCatalog.locationDetails.学校.longitude = null;
+  assert.deepEqual(parseJournalBackup(JSON.stringify(backup)), backup);
+});
+
+test('accepts portable profile and settings in v11 and rejects invalid values', () => {
+  const backup = {
+    ...validBackup(),
+    version: 11,
+    appPreferences: {
+      nickname: '拾时',
+      signature: '把日子慢慢收好。',
+      avatarLocalUri: 'profile/avatar.png',
+      themeMode: 'system',
+      fontSize: 'large',
+      readingTheme: 'green',
+      readingFont: 'serif',
+      appLockEnabled: true,
+      appLockDelaySeconds: 60,
+      backupReminderDays: 14,
+    },
+  };
+  assert.deepEqual(parseJournalBackup(JSON.stringify(backup)), backup);
+  backup.appPreferences.fontSize = 'huge';
+  assert.throws(() => parseJournalBackup(JSON.stringify(backup)), /invalid-backup/);
+});
+
 test('accepts archive only when every referenced media file is present', () => {
   const backup = parseJournalBackup(JSON.stringify(validBackup()));
   const files = {
@@ -97,6 +141,33 @@ test('accepts archive only when every referenced media file is present', () => {
   assert.doesNotThrow(() => validateArchiveMediaReferences(backup, files));
   delete files['media/entries/image-1/thumbnail.jpg'];
   assert.throws(() => validateArchiveMediaReferences(backup, files), /missing-backup-media/);
+});
+
+test('requires a referenced profile avatar to exist in the archive', () => {
+  const backup = parseJournalBackup(JSON.stringify({
+    ...validBackup(),
+    version: 11,
+    appPreferences: {
+      nickname: '拾时',
+      signature: '',
+      avatarLocalUri: 'profile/avatar.jpg',
+      themeMode: 'system',
+      fontSize: 'standard',
+      readingTheme: 'cream',
+      readingFont: 'serif',
+      appLockEnabled: false,
+      appLockDelaySeconds: 0,
+      backupReminderDays: 0,
+    },
+  }));
+  const files = {
+    'media/entries/image-1/primary.mp4': new Uint8Array([1]),
+    'media/entries/image-1/thumbnail.jpg': new Uint8Array([2]),
+    'media/follow-ups/follow-up-image-1/primary.jpg': new Uint8Array([3]),
+  };
+  assert.throws(() => validateArchiveMediaReferences(backup, files), /missing-backup-media/);
+  files['profile/avatar.jpg'] = new Uint8Array([4]);
+  assert.doesNotThrow(() => validateArchiveMediaReferences(backup, files));
 });
 
 test('rejects empty media files as corrupt archive content', () => {

@@ -11,9 +11,9 @@ export function AppDialog({ visible, title, message, actions, onClose }: { visib
     <Pressable accessibilityLabel="关闭弹窗" onPress={onClose} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.card, { backgroundColor: readingTheme.background }]}>
       <Text style={[styles.title, { color: readingTheme.text }]}>{title}</Text>
       {message ? <Text style={[styles.message, { color: readingTheme.secondary }]}>{message}</Text> : null}
-      <View style={styles.actions}>{actions.map((action) => {
+      <View style={[styles.actions, actions.length > 2 && styles.actionsVertical]}>{actions.map((action) => {
         const primary = action.tone === 'primary';
-        return <Pressable key={action.label} onPress={() => void action.onPress()} style={({ pressed }) => [styles.button, { backgroundColor: primary ? colors.primary : readingTheme.surface }, pressed && styles.pressed]}><Text style={[styles.buttonText, { color: action.tone === 'danger' ? colors.danger : primary ? '#FFFFFF' : readingTheme.text }]}>{action.label}</Text></Pressable>;
+        return <Pressable key={action.label} onPress={() => void action.onPress()} style={({ pressed }) => [styles.button, actions.length > 2 && styles.buttonVertical, { backgroundColor: primary ? colors.primary : readingTheme.surface }, pressed && styles.pressed]}><Text style={[styles.buttonText, { color: action.tone === 'danger' ? colors.danger : primary ? '#FFFFFF' : readingTheme.text }]}>{action.label}</Text></Pressable>;
       })}</View>
     </Pressable></Pressable>
   </Modal>;
@@ -25,6 +25,8 @@ const styles = StyleSheet.create({
   title: { fontFamily: fonts.serif, fontSize: 18, lineHeight: 26, fontWeight: '600', textAlign: 'center', includeFontPadding: false },
   message: { marginTop: spacing.sm, fontSize: 11, lineHeight: 18, textAlign: 'center' },
   actions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xl },
+  actionsVertical: { flexDirection: 'column' },
   button: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md },
+  buttonVertical: { flex: 0, width: '100%' },
   buttonText: { fontSize: 12, fontWeight: '700' }, pressed: { opacity: 0.58 },
 });

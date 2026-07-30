@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 export const colors = {
   background: '#FFFDF8', surface: '#FFFFFF', surfaceMuted: '#F4F6F2', primary: '#426C5A',
   primarySoft: '#E5EEE8', text: '#27332E', textSecondary: '#7F8A84', textFaint: '#AEB6B1',
@@ -5,4 +7,7 @@ export const colors = {
 } as const;
 export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24, xxxl: 32 } as const;
 export const radii = { sm: 8, md: 12, lg: 18, pill: 999 } as const;
-export const fonts = { sans: 'ShishiSans', serif: 'ShishiSerif' } as const;
+export const fonts = {
+  sans: Platform.select({ android: 'ShishiSans', web: 'ShishiSans', default: 'System' }) ?? 'System',
+  serif: Platform.select({ android: 'ShishiSerif', web: 'ShishiSerif', default: 'serif' }) ?? 'serif',
+} as const;

@@ -1,5 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, EntryVersion, FollowUp, FollowUpImage, ImportResult, JournalBackup, JournalMediaType, JournalStats, SearchResult } from '@/domain/journal';
+import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, EntryVersion, FollowUp, FollowUpImage, FootprintEntry, ImportResult, JournalBackup, JournalMediaType, JournalStats, PendingFootprintEntry, PendingLocationGroup, SearchResult } from '@/domain/journal';
+import { findLocationDuplicates, type LocationDuplicateSuggestion } from '../utils/location-duplicates.ts';
 
 type EntryRow = { id: string; content: string; occurred_at: string; created_at: string; updated_at: string; mood: string | null; weather: string | null; favorited_at: string | null; location_name: string | null; latitude: number | null; longitude: number | null };
 type FollowUpRow = { id: string; entry_id: string; content: string; created_at: string; updated_at: string };
@@ -12,10 +13,31 @@ export type EntryListFilters = Partial<Record<Exclude<EntryFilterKind, 'none'>, 
 export type EntryPageCursor = { occurredAt: string; createdAt: string; id: string };
 export type EntryPage = { entries: Entry[]; nextCursor: EntryPageCursor | null };
 export type EntryFilterOptions = { locations: string[]; tags: string[]; moods: string[]; weather: string[] };
-export type MetadataUsageItem = { value: string; count: number; pinned: boolean };
+export type MetadataUsageItem = { value: string; count: number; pinned: boolean; address?: string };
 export type MetadataUsage = { tags: MetadataUsageItem[]; locations: MetadataUsageItem[] };
-type MetadataCatalog = { tags: string[]; locations: string[]; pinnedTags: string[]; pinnedLocations: string[] };
-const EMPTY_METADATA_CATALOG: MetadataCatalog = { tags: [], locations: [], pinnedTags: [], pinnedLocations: [] };
+export type LocationCategory = '家' | '学校' | '工作' | '旅行' | '常去' | '想再去';
+export type LocationMapPreference = { category: LocationCategory | null; favorite: boolean };
+export type FootprintViewPreferences = {
+  viewMode: 'map' | 'list';
+  sort: 'recent' | 'visits';
+  favoriteOnly: boolean;
+  category: LocationCategory | null;
+};
+type LocationDetail = { address: string; latitude: number | null; longitude: number | null; category?: LocationCategory | null; favorite?: boolean };
+export type LocationPageDetail = {
+  name: string;
+  address: string | null;
+  latitude: number;
+  longitude: number;
+  category: LocationCategory | null;
+  favorite: boolean;
+  entries: Entry[];
+};
+type MetadataCatalog = { tags: string[]; locations: string[]; pinnedTags: string[]; pinnedLocations: string[]; locationDetails: Record<string, LocationDetail> };
+
+function emptyMetadataCatalog(): MetadataCatalog {
+  return { tags: [], locations: [], pinnedTags: [], pinnedLocations: [], locationDetails: {} };
+}
 
 function createId() { return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; }
 function mapFollowUp(row: FollowUpRow, images: FollowUpImage[] = []): FollowUp {
@@ -212,9 +234,182 @@ export async function listEntryFilterOptions(db: SQLiteDatabase): Promise<EntryF
   };
 }
 
+export async function listFootprintEntries(db: SQLiteDatabase): Promise<{ entries: FootprintEntry[]; missingCoordinates: number; pendingEntries: PendingFootprintEntry[]; pendingGroups: PendingLocationGroup[] }> {
+  const [rows, missing, pendingRows, pendingGroupRows] = await Promise.all([
+    db.getAllAsync<{
+      id: string; content: string; occurred_at: string; location_name: string; latitude: number; longitude: number;
+    }>(
+      `SELECT id, content, occurred_at, location_name, latitude, longitude
+       FROM entries
+       WHERE deleted_at IS NULL
+         AND location_name IS NOT NULL AND TRIM(location_name) != ''
+         AND latitude IS NOT NULL AND longitude IS NOT NULL
+       ORDER BY occurred_at DESC`,
+    ),
+    db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM entries
+       WHERE deleted_at IS NULL
+         AND location_name IS NOT NULL AND TRIM(location_name) != ''
+         AND (latitude IS NULL OR longitude IS NULL)`,
+    ),
+    db.getAllAsync<{
+      id: string; content: string; occurred_at: string; location_name: string;
+    }>(
+      `SELECT id, content, occurred_at, location_name
+       FROM entries
+       WHERE deleted_at IS NULL
+         AND location_name IS NOT NULL AND TRIM(location_name) != ''
+         AND (latitude IS NULL OR longitude IS NULL)
+       ORDER BY occurred_at DESC
+       LIMIT 6`,
+    ),
+    db.getAllAsync<{ location_name: string; count: number }>(
+      `SELECT location_name, COUNT(*) AS count
+       FROM entries
+       WHERE deleted_at IS NULL
+         AND location_name IS NOT NULL AND TRIM(location_name) != ''
+         AND (latitude IS NULL OR longitude IS NULL)
+       GROUP BY location_name
+       ORDER BY count DESC, location_name COLLATE NOCASE`,
+    ),
+  ]);
+  return {
+    entries: rows.map((row) => ({
+      id: row.id, content: row.content, occurredAt: row.occurred_at, locationName: row.location_name,
+      latitude: row.latitude, longitude: row.longitude,
+    })),
+    missingCoordinates: missing?.count ?? 0,
+    pendingEntries: pendingRows.map((row) => ({
+      id: row.id, content: row.content, occurredAt: row.occurred_at, locationName: row.location_name,
+    })),
+    pendingGroups: pendingGroupRows.map((row) => ({ locationName: row.location_name, count: row.count })),
+  };
+}
+
+export async function getLocationPageDetail(db: SQLiteDatabase, name: string): Promise<LocationPageDetail | null> {
+  const normalizedName = name.trim();
+  if (!normalizedName) return null;
+  const [rows, catalog] = await Promise.all([
+    db.getAllAsync<EntryRow>(
+      `SELECT id, content, occurred_at, created_at, updated_at, mood, weather, favorited_at, location_name, latitude, longitude
+       FROM entries
+       WHERE deleted_at IS NULL AND location_name = ?
+       ORDER BY occurred_at DESC, created_at DESC`,
+      normalizedName,
+    ),
+    getMetadataCatalog(db),
+  ]);
+  if (!rows.length) return null;
+  const entries = await attachFollowUps(db, rows);
+  const coordinateEntry = entries.find((entry) => entry.latitude != null && entry.longitude != null);
+  const savedDetail = catalog.locationDetails[normalizedName];
+  const latitude = coordinateEntry?.latitude ?? savedDetail?.latitude;
+  const longitude = coordinateEntry?.longitude ?? savedDetail?.longitude;
+  if (latitude == null || longitude == null) return null;
+  return {
+    name: normalizedName,
+    address: savedDetail?.address || null,
+    latitude,
+    longitude,
+    category: savedDetail?.category ?? null,
+    favorite: savedDetail?.favorite ?? false,
+    entries,
+  };
+}
+
+export async function listLocationMapPreferences(db: SQLiteDatabase): Promise<Record<string, LocationMapPreference>> {
+  const catalog = await getMetadataCatalog(db);
+  return Object.fromEntries(Object.entries(catalog.locationDetails).map(([name, detail]) => [
+    name,
+    { category: detail.category ?? null, favorite: detail.favorite ?? false },
+  ]));
+}
+
+export async function getFootprintViewPreferences(db: SQLiteDatabase): Promise<FootprintViewPreferences> {
+  const fallback: FootprintViewPreferences = { viewMode: 'map', sort: 'recent', favoriteOnly: false, category: null };
+  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'footprint-view-preferences'");
+  if (!row) return fallback;
+  try {
+    const value = JSON.parse(row.value) as Partial<FootprintViewPreferences>;
+    const categories: (LocationCategory | null | undefined)[] = [null, '家', '学校', '工作', '旅行', '常去', '想再去'];
+    return {
+      viewMode: value.viewMode === 'list' ? 'list' : 'map',
+      sort: value.sort === 'visits' ? 'visits' : 'recent',
+      favoriteOnly: value.favoriteOnly === true,
+      category: categories.includes(value.category) ? value.category ?? null : null,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export async function saveFootprintViewPreferences(db: SQLiteDatabase, value: FootprintViewPreferences) {
+  await db.runAsync(
+    `INSERT INTO kv_store (key, value) VALUES ('footprint-view-preferences', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    JSON.stringify(value),
+  );
+}
+
+export async function listLocationDuplicateSuggestions(db: SQLiteDatabase): Promise<LocationDuplicateSuggestion[]> {
+  const rows = await db.getAllAsync<{ name: string; count: number; latitude: number; longitude: number }>(
+    `SELECT location_name AS name, COUNT(*) AS count, AVG(latitude) AS latitude, AVG(longitude) AS longitude
+     FROM entries
+     WHERE deleted_at IS NULL AND location_name IS NOT NULL AND TRIM(location_name) != ''
+       AND latitude IS NOT NULL AND longitude IS NOT NULL
+     GROUP BY location_name
+     ORDER BY count DESC, location_name COLLATE NOCASE`,
+  );
+  return findLocationDuplicates(rows);
+}
+
+export async function isNewFootprintLocation(
+  db: SQLiteDatabase,
+  name: string,
+  latitude: number,
+  longitude: number,
+) {
+  if (!name.trim() || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
+  const rows = await db.getAllAsync<{ location_name: string; latitude: number; longitude: number }>(
+    `SELECT location_name, latitude, longitude FROM entries
+     WHERE deleted_at IS NULL AND location_name IS NOT NULL
+       AND latitude IS NOT NULL AND longitude IS NOT NULL`,
+  );
+  const normalized = name.trim().toLocaleLowerCase();
+  return !rows.some((row) => {
+    if (row.location_name.trim().toLocaleLowerCase() === normalized) return true;
+    const latitudeDistance = (row.latitude - latitude) * 111_320;
+    const longitudeDistance = (row.longitude - longitude) * 111_320 * Math.cos(latitude * Math.PI / 180);
+    return Math.hypot(latitudeDistance, longitudeDistance) <= 120;
+  });
+}
+
+export async function applyCoordinatesToLocation(
+  db: SQLiteDatabase,
+  locationName: string,
+  latitude: number,
+  longitude: number,
+) {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+    throw new Error('无效地点坐标');
+  }
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `UPDATE entries SET latitude = ?, longitude = ?, updated_at = ?
+       WHERE deleted_at IS NULL AND location_name = ? AND (latitude IS NULL OR longitude IS NULL)`,
+      latitude, longitude, new Date().toISOString(), locationName,
+    );
+    await db.runAsync(
+      `UPDATE drafts SET latitude = ?, longitude = ?, updated_at = ?
+       WHERE location_name = ? AND (latitude IS NULL OR longitude IS NULL)`,
+      latitude, longitude, new Date().toISOString(), locationName,
+    );
+  });
+}
+
 async function getMetadataCatalog(db: SQLiteDatabase): Promise<MetadataCatalog> {
   const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'metadata-catalog'");
-  if (!row) return EMPTY_METADATA_CATALOG;
+  if (!row) return emptyMetadataCatalog();
   try {
     const value = JSON.parse(row.value) as Partial<MetadataCatalog>;
     return {
@@ -222,8 +417,9 @@ async function getMetadataCatalog(db: SQLiteDatabase): Promise<MetadataCatalog> 
       locations: Array.isArray(value.locations) ? value.locations : [],
       pinnedTags: Array.isArray(value.pinnedTags) ? value.pinnedTags : [],
       pinnedLocations: Array.isArray(value.pinnedLocations) ? value.pinnedLocations : [],
+      locationDetails: value.locationDetails && typeof value.locationDetails === 'object' ? value.locationDetails : {},
     };
-  } catch { return EMPTY_METADATA_CATALOG; }
+  } catch { return emptyMetadataCatalog(); }
 }
 
 async function saveMetadataCatalog(db: SQLiteDatabase, catalog: MetadataCatalog) {
@@ -250,8 +446,82 @@ export async function listMetadataUsage(db: SQLiteDatabase): Promise<MetadataUsa
   const tags = [...new Set([...catalog.pinnedTags, ...catalog.tags, ...tagsByName.keys()])]
     .map((value) => ({ value, count: tagsByName.get(value) ?? 0, pinned: catalog.pinnedTags.includes(value) }));
   const locations = [...new Set([...catalog.pinnedLocations, ...catalog.locations, ...locationsByName.keys()])]
-    .map((value) => ({ value, count: locationsByName.get(value) ?? 0, pinned: catalog.pinnedLocations.includes(value) }));
+    .map((value) => ({ value, count: locationsByName.get(value) ?? 0, pinned: catalog.pinnedLocations.includes(value), address: catalog.locationDetails[value]?.address }));
   return { tags, locations };
+}
+
+export async function saveLocationDetail(db: SQLiteDatabase, name: string, detail: LocationDetail) {
+  const next = name.trim();
+  if (!next || !detail.address.trim()) return;
+  const catalog = await getMetadataCatalog(db);
+  catalog.locationDetails[next] = { ...catalog.locationDetails[next], ...detail, address: detail.address.trim() };
+  if (!catalog.locations.includes(next)) catalog.locations.push(next);
+  await saveMetadataCatalog(db, catalog);
+}
+
+export async function updateLocationPreferences(
+  db: SQLiteDatabase,
+  name: string,
+  preferences: { category?: LocationCategory | null; favorite?: boolean },
+) {
+  const next = name.trim();
+  if (!next) return;
+  const catalog = await getMetadataCatalog(db);
+  const current = catalog.locationDetails[next];
+  const savedCoordinate = current?.latitude != null && current.longitude != null
+    ? { latitude: current.latitude, longitude: current.longitude }
+    : null;
+  const coordinate = savedCoordinate ?? await db.getFirstAsync<{ latitude: number; longitude: number }>(
+    `SELECT latitude, longitude FROM entries
+     WHERE deleted_at IS NULL AND location_name = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+     ORDER BY occurred_at DESC LIMIT 1`,
+    next,
+  );
+  if (!coordinate) return;
+  catalog.locationDetails[next] = {
+    address: current?.address || next,
+    latitude: coordinate.latitude,
+    longitude: coordinate.longitude,
+    category: preferences.category === undefined ? current?.category : preferences.category,
+    favorite: preferences.favorite === undefined ? current?.favorite : preferences.favorite,
+  };
+  if (!catalog.locations.includes(next)) catalog.locations.push(next);
+  await saveMetadataCatalog(db, catalog);
+}
+
+export async function updateLocationCoordinates(
+  db: SQLiteDatabase,
+  name: string,
+  detail: { address: string; latitude: number; longitude: number },
+) {
+  const next = name.trim();
+  if (!next || !Number.isFinite(detail.latitude) || !Number.isFinite(detail.longitude)
+    || Math.abs(detail.latitude) > 90 || Math.abs(detail.longitude) > 180) {
+    throw new Error('无效地点坐标');
+  }
+  await db.withTransactionAsync(async () => {
+    const now = new Date().toISOString();
+    await db.runAsync(
+      `UPDATE entries SET latitude = ?, longitude = ?, updated_at = ?
+       WHERE deleted_at IS NULL AND location_name = ?`,
+      detail.latitude, detail.longitude, now, next,
+    );
+    await db.runAsync(
+      `UPDATE drafts SET latitude = ?, longitude = ?, updated_at = ?
+       WHERE location_name = ?`,
+      detail.latitude, detail.longitude, now, next,
+    );
+    const catalog = await getMetadataCatalog(db);
+    const current = catalog.locationDetails[next];
+    catalog.locationDetails[next] = {
+      ...current,
+      address: detail.address.trim() || current?.address || next,
+      latitude: detail.latitude,
+      longitude: detail.longitude,
+    };
+    if (!catalog.locations.includes(next)) catalog.locations.push(next);
+    await saveMetadataCatalog(db, catalog);
+  });
 }
 
 export async function addMetadataItem(db: SQLiteDatabase, kind: 'tag' | 'location', value: string) {
@@ -267,7 +537,7 @@ export async function toggleMetadataPinned(db: SQLiteDatabase, kind: 'tag' | 'lo
   const catalog = await getMetadataCatalog(db);
   const catalogKey = kind === 'tag' ? 'tags' : 'locations';
   const pinnedKey = kind === 'tag' ? 'pinnedTags' : 'pinnedLocations';
-  const max = kind === 'tag' ? 6 : 4;
+  const max = 4;
   if (!catalog[catalogKey].includes(value)) catalog[catalogKey].push(value);
   if (catalog[pinnedKey].includes(value)) catalog[pinnedKey] = catalog[pinnedKey].filter((item) => item !== value);
   else {
@@ -313,6 +583,8 @@ export async function renameLocationEverywhere(db: SQLiteDatabase, from: string,
     const catalog = await getMetadataCatalog(db);
     catalog.locations = [...new Set(catalog.locations.map((item) => item === from ? next : item))];
     catalog.pinnedLocations = [...new Set(catalog.pinnedLocations.map((item) => item === from ? next : item))];
+    if (!catalog.locationDetails[next] && catalog.locationDetails[from]) catalog.locationDetails[next] = catalog.locationDetails[from];
+    delete catalog.locationDetails[from];
     await saveMetadataCatalog(db, catalog);
   });
 }
@@ -330,6 +602,7 @@ export async function removeLocationEverywhere(db: SQLiteDatabase, value: string
     const catalog = await getMetadataCatalog(db);
     catalog.locations = catalog.locations.filter((item) => item !== value);
     catalog.pinnedLocations = catalog.pinnedLocations.filter((item) => item !== value);
+    delete catalog.locationDetails[value];
     await saveMetadataCatalog(db, catalog);
   });
 }
@@ -561,6 +834,173 @@ export async function setEntryFavorite(db: SQLiteDatabase, id: string, favorite:
   await db.runAsync('UPDATE entries SET favorited_at = ? WHERE id = ? AND deleted_at IS NULL', favorite ? new Date().toISOString() : null, id);
 }
 
+function sqlPlaceholders(values: string[]) {
+  return values.map(() => '?').join(', ');
+}
+
+export async function batchSetEntryFavorite(db: SQLiteDatabase, ids: string[], favorite: boolean) {
+  if (!ids.length) return;
+  await db.runAsync(
+    `UPDATE entries SET favorited_at = ?, updated_at = ? WHERE deleted_at IS NULL AND id IN (${sqlPlaceholders(ids)})`,
+    favorite ? new Date().toISOString() : null, new Date().toISOString(), ...ids,
+  );
+}
+
+export async function batchAddEntryTag(db: SQLiteDatabase, ids: string[], label: string) {
+  const normalized = label.trim();
+  if (!ids.length || !normalized) return;
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    for (const id of ids) {
+      const row = await txn.getFirstAsync<{ next_order: number }>(
+        'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM entry_tags WHERE entry_id = ?', id,
+      );
+      await txn.runAsync(
+        'INSERT OR IGNORE INTO entry_tags (entry_id, label, sort_order) VALUES (?, ?, ?)',
+        id, normalized, row?.next_order ?? 0,
+      );
+    }
+  });
+}
+
+export async function batchRemoveEntryTag(db: SQLiteDatabase, ids: string[], label: string) {
+  const normalized = label.trim();
+  if (!ids.length || !normalized) return;
+  await db.runAsync(
+    `DELETE FROM entry_tags WHERE label = ? AND entry_id IN (${sqlPlaceholders(ids)})`,
+    normalized, ...ids,
+  );
+}
+
+export async function batchSetEntryLocation(
+  db: SQLiteDatabase,
+  ids: string[],
+  locationName: string | null,
+  coordinateMode: 'precise' | 'approximate' | 'nameOnly' = 'precise',
+) {
+  if (!ids.length) return;
+  const normalized = locationName?.trim() || null;
+  let latitude: number | null = null;
+  let longitude: number | null = null;
+  if (normalized) {
+    const known = await db.getFirstAsync<{ latitude: number; longitude: number }>(
+      `SELECT latitude, longitude FROM entries
+       WHERE deleted_at IS NULL AND location_name = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+       ORDER BY updated_at DESC LIMIT 1`, normalized,
+    );
+    latitude = known?.latitude ?? null;
+    longitude = known?.longitude ?? null;
+    if (coordinateMode === 'nameOnly') { latitude = null; longitude = null; }
+    if (coordinateMode === 'approximate' && latitude != null && longitude != null) {
+      latitude = Math.round(latitude * 100) / 100;
+      longitude = Math.round(longitude * 100) / 100;
+    }
+  }
+  await db.runAsync(
+    `UPDATE entries SET location_name = ?, latitude = ?, longitude = ?, updated_at = ?
+     WHERE deleted_at IS NULL AND id IN (${sqlPlaceholders(ids)})`,
+    normalized, latitude, longitude, new Date().toISOString(), ...ids,
+  );
+}
+
+export async function transformHistoricalCoordinates(db: SQLiteDatabase, action: 'approximate' | 'remove') {
+  const count = await db.getFirstAsync<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM entries WHERE deleted_at IS NULL AND latitude IS NOT NULL AND longitude IS NOT NULL',
+  );
+  const now = new Date().toISOString();
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    if (action === 'remove') {
+      await txn.runAsync('UPDATE entries SET latitude = NULL, longitude = NULL, updated_at = ? WHERE deleted_at IS NULL AND latitude IS NOT NULL AND longitude IS NOT NULL', now);
+      await txn.runAsync('UPDATE drafts SET latitude = NULL, longitude = NULL, updated_at = ? WHERE latitude IS NOT NULL AND longitude IS NOT NULL', now);
+    } else {
+      await txn.runAsync('UPDATE entries SET latitude = ROUND(latitude, 2), longitude = ROUND(longitude, 2), updated_at = ? WHERE deleted_at IS NULL AND latitude IS NOT NULL AND longitude IS NOT NULL', now);
+      await txn.runAsync('UPDATE drafts SET latitude = ROUND(latitude, 2), longitude = ROUND(longitude, 2), updated_at = ? WHERE latitude IS NOT NULL AND longitude IS NOT NULL', now);
+    }
+  });
+  const catalog = await getMetadataCatalog(db);
+  if (action === 'remove') {
+    for (const detail of Object.values(catalog.locationDetails)) {
+      detail.latitude = null;
+      detail.longitude = null;
+    }
+  } else {
+    for (const detail of Object.values(catalog.locationDetails)) {
+      if (detail.latitude != null) detail.latitude = Math.round(detail.latitude * 100) / 100;
+      if (detail.longitude != null) detail.longitude = Math.round(detail.longitude * 100) / 100;
+    }
+  }
+  await saveMetadataCatalog(db, catalog);
+  return count?.count ?? 0;
+}
+
+export async function clearCoordinatesForLocation(db: SQLiteDatabase, name: string) {
+  const normalized = name.trim();
+  if (!normalized) return;
+  const now = new Date().toISOString();
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync('UPDATE entries SET latitude = NULL, longitude = NULL, updated_at = ? WHERE deleted_at IS NULL AND location_name = ?', now, normalized);
+    await txn.runAsync('UPDATE drafts SET latitude = NULL, longitude = NULL, updated_at = ? WHERE location_name = ?', now, normalized);
+  });
+  const catalog = await getMetadataCatalog(db);
+  if (catalog.locationDetails[normalized]) {
+    catalog.locationDetails[normalized].latitude = null;
+    catalog.locationDetails[normalized].longitude = null;
+  }
+  await saveMetadataCatalog(db, catalog);
+}
+
+export async function batchDeleteEntries(db: SQLiteDatabase, ids: string[]) {
+  if (!ids.length) return;
+  const now = new Date().toISOString();
+  const placeholders = sqlPlaceholders(ids);
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(`UPDATE entries SET deleted_at = ?, updated_at = ? WHERE id IN (${placeholders})`, now, now, ...ids);
+    await txn.runAsync(`UPDATE follow_ups SET deleted_at = ?, updated_at = ? WHERE entry_id IN (${placeholders})`, now, now, ...ids);
+  });
+}
+
+export async function listEntriesForReadableExport(db: SQLiteDatabase, startAt?: string, endAt?: string): Promise<Entry[]> {
+  const where = ['deleted_at IS NULL'];
+  const params: string[] = [];
+  if (startAt) { where.push('occurred_at >= ?'); params.push(startAt); }
+  if (endAt) { where.push('occurred_at < ?'); params.push(endAt); }
+  const rows = await db.getAllAsync<EntryRow>(
+    `SELECT id, content, occurred_at, created_at, updated_at, mood, weather, favorited_at, location_name, latitude, longitude
+     FROM entries WHERE ${where.join(' AND ')}
+     ORDER BY occurred_at ASC, created_at ASC, id ASC`,
+    params,
+  );
+  return attachFollowUps(db, rows);
+}
+
+export type LocationHealthReport = {
+  savedCoordinates: number;
+  missingCoordinates: number;
+  unnamedCoordinates: number;
+  longLocationNames: number;
+  duplicateSuggestions: number;
+};
+
+export async function getLocationHealthReport(db: SQLiteDatabase): Promise<LocationHealthReport> {
+  const [saved, missing, unnamed, longNames, duplicates] = await Promise.all([
+    db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM entries WHERE deleted_at IS NULL
+      AND latitude IS NOT NULL AND longitude IS NOT NULL`),
+    db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM entries WHERE deleted_at IS NULL
+      AND location_name IS NOT NULL AND TRIM(location_name) != '' AND (latitude IS NULL OR longitude IS NULL)`),
+    db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM entries WHERE deleted_at IS NULL
+      AND (location_name IS NULL OR TRIM(location_name) = '') AND latitude IS NOT NULL AND longitude IS NOT NULL`),
+    db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM entries WHERE deleted_at IS NULL
+      AND location_name IS NOT NULL AND LENGTH(TRIM(location_name)) > 40`),
+    listLocationDuplicateSuggestions(db),
+  ]);
+  return {
+    savedCoordinates: saved?.count ?? 0,
+    missingCoordinates: missing?.count ?? 0,
+    unnamedCoordinates: unnamed?.count ?? 0,
+    longLocationNames: longNames?.count ?? 0,
+    duplicateSuggestions: duplicates.length,
+  };
+}
+
 export async function listSuppressedMemoryEntryIds(db: SQLiteDatabase): Promise<string[]> {
   const rows = await db.getAllAsync<{ entry_id: string }>('SELECT entry_id FROM memory_suppressed_entries');
   return rows.map((row) => row.entry_id);
@@ -694,9 +1134,33 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
      FROM entry_versions ORDER BY entry_id, created_at ASC`,
   );
   const suppressed = await db.getAllAsync<{ entry_id: string }>('SELECT entry_id FROM memory_suppressed_entries');
+  const metadataCatalog = await getMetadataCatalog(db);
+  const preferencesRow = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'app-preferences'");
+  let appPreferences: JournalBackup['appPreferences'];
+  if (preferencesRow) {
+    try {
+      const stored = JSON.parse(preferencesRow.value) as Record<string, unknown>;
+      appPreferences = {
+        nickname: typeof stored.nickname === 'string' ? stored.nickname : '拾时',
+        signature: typeof stored.signature === 'string' ? stored.signature : '把日子慢慢收好。',
+        avatarLocalUri: typeof stored.avatarUri === 'string' ? stored.avatarUri : null,
+        themeMode: stored.themeMode === 'light' || stored.themeMode === 'dark' ? stored.themeMode : 'system',
+        fontSize: stored.fontSize === 'verySmall' || stored.fontSize === 'small' || stored.fontSize === 'large' || stored.fontSize === 'veryLarge' ? stored.fontSize : 'standard',
+        readingTheme: stored.readingTheme === 'white' || stored.readingTheme === 'warm' || stored.readingTheme === 'green' || stored.readingTheme === 'blue' || stored.readingTheme === 'pink' || stored.readingTheme === 'red' || stored.readingTheme === 'lavender' || stored.readingTheme === 'gray' || stored.readingTheme === 'night' ? stored.readingTheme : 'cream',
+        readingFont: stored.readingFont === 'sans' || stored.readingFont === 'light' || stored.readingFont === 'mono' || stored.readingFont === 'system' ? stored.readingFont : 'serif',
+        appLockEnabled: stored.appLockEnabled === true,
+        appLockDelaySeconds: stored.appLockDelaySeconds === 60 || stored.appLockDelaySeconds === 300 ? stored.appLockDelaySeconds : 0,
+        backupReminderDays: stored.backupReminderDays === 7 || stored.backupReminderDays === 14 || stored.backupReminderDays === 30 ? stored.backupReminderDays : 0,
+        locationPrivacyMode: stored.locationPrivacyMode === 'approximate' || stored.locationPrivacyMode === 'nameOnly' || stored.locationPrivacyMode === 'ask' ? stored.locationPrivacyMode : 'precise',
+        exportLocationMode: stored.exportLocationMode === 'hidden' ? 'hidden' : 'include',
+      };
+    } catch {
+      // Invalid preferences are ignored; journal data should still be exportable.
+    }
+  }
   return {
     format: 'shishi-journal',
-    version: 9,
+    version: 11,
     exportedAt: new Date().toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     entries: entries.map((entry) => ({
@@ -723,6 +1187,8 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
       occurredAt: version.occurred_at, mood: version.mood, weather: version.weather, locationName: version.location_name,
       latitude: version.latitude, longitude: version.longitude, tags: parseJsonArray<string>(version.tags_json), createdAt: version.created_at })),
     suppressedMemoryEntryIds: suppressed.map((item) => item.entry_id),
+    metadataCatalog,
+    appPreferences,
   };
 }
 
@@ -844,6 +1310,17 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
       if (parent) await txn.runAsync(
         'INSERT OR IGNORE INTO memory_suppressed_entries (entry_id, suppressed_at) VALUES (?, ?)', entryId, new Date().toISOString(),
       );
+    }
+    if (backup.metadataCatalog) {
+      const current = await getMetadataCatalog(txn);
+      const restored: MetadataCatalog = {
+        tags: [...new Set([...backup.metadataCatalog.tags, ...current.tags])],
+        locations: [...new Set([...backup.metadataCatalog.locations, ...current.locations])],
+        pinnedTags: [...new Set([...backup.metadataCatalog.pinnedTags, ...current.pinnedTags])].slice(0, 4),
+        pinnedLocations: [...new Set([...backup.metadataCatalog.pinnedLocations, ...current.pinnedLocations])].slice(0, 4),
+        locationDetails: { ...backup.metadataCatalog.locationDetails, ...current.locationDetails },
+      };
+      await saveMetadataCatalog(txn, restored);
     }
   });
   return result;
@@ -968,6 +1445,12 @@ export async function listDrafts(db: SQLiteDatabase): Promise<Draft[]> {
   await migrateLegacyDraft(db);
   const rows = await db.getAllAsync<DraftRow>('SELECT id, content, occurred_at, mood, weather, tags_json, images_json, location_name, latitude, longitude, created_at, updated_at FROM drafts ORDER BY updated_at DESC');
   return rows.map(mapDraft);
+}
+
+export async function getDraftCount(db: SQLiteDatabase) {
+  await migrateLegacyDraft(db);
+  const row = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) AS count FROM drafts');
+  return row?.count ?? 0;
 }
 
 export async function getDraft(db: SQLiteDatabase, id: string): Promise<Draft | null> {

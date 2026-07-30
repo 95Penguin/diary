@@ -1,6 +1,6 @@
 import type { ImagePickerAsset } from 'expo-image-picker';
-import { Alert } from 'react-native';
 
+import { showAppDialog } from '@/components/app-dialog-host';
 import type { JournalMediaType } from '@/domain/journal';
 import { formatFileSize, getPickedMediaSize, VIDEO_MAX_BYTES, VIDEO_WARNING_BYTES } from '@/utils/media-file-info';
 import { compressVideo } from '@/utils/video-compression';
@@ -28,19 +28,17 @@ export async function inspectPickedVideos(assets: ImagePickerAsset[]) {
   };
 }
 
-function chooseVideoHandling(message: string, allowOriginal: boolean) {
-  return new Promise<'compress' | 'original' | 'cancel'>((resolve) => {
-    Alert.alert(
-      '处理视频',
-      message,
-      [
-        { text: '取消', style: 'cancel', onPress: () => resolve('cancel') },
-        ...(allowOriginal ? [{ text: '使用原视频', onPress: () => resolve('original' as const) }] : []),
-        { text: '压缩后添加', onPress: () => resolve('compress') },
-      ],
-      { cancelable: true, onDismiss: () => resolve('cancel') },
-    );
+async function chooseVideoHandling(message: string, allowOriginal: boolean) {
+  const value = await showAppDialog({
+    title: '处理视频',
+    message,
+    actions: [
+      { label: '取消', value: 'cancel' },
+      ...(allowOriginal ? [{ label: '使用原视频', value: 'original' }] : []),
+      { label: '压缩后添加', value: 'compress', tone: 'primary' },
+    ],
   });
+  return (value ?? 'cancel') as 'compress' | 'original' | 'cancel';
 }
 
 export async function preparePickedMedia(
@@ -78,10 +76,10 @@ export async function preparePickedMedia(
     }
     return next;
   } catch {
-    Alert.alert(
-      '视频压缩失败',
-      '当前安装包不包含压缩模块，或这个视频格式暂不受支持。请重新构建应用后重试，也可以先在系统相册中裁剪视频。',
-    );
+    await showAppDialog({
+      title: '视频压缩失败',
+      message: '当前安装包不包含压缩模块，或这个视频格式暂不受支持。请重新构建应用后重试，也可以先在系统相册中裁剪视频。',
+    });
     return null;
   } finally {
     onProgress?.(null);

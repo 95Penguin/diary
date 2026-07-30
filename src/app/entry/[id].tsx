@@ -1,9 +1,9 @@
 import { useCallback, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
@@ -16,6 +16,7 @@ import { formatFullDate, formatShortDateTime } from '@/utils/date';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
+import { showAppDialog } from '@/components/app-dialog-host';
 import { DraggableMediaItem } from '@/components/draggable-media-item';
 import { MediaThumbnail, MediaViewer, type JournalMedia } from '@/components/media-view';
 import { getPickerMediaType, preparePickedMedia } from '@/utils/picker-media';
@@ -26,7 +27,7 @@ type PendingMedia = JournalMedia & { width: number; height: number; fileName?: s
 export default function EntryDetailScreen() {
   const db = useSQLiteContext();
   const { fontScale, readingFontFamily, readingTheme } = useAppPreferences();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, lit } = useLocalSearchParams<{ id: string; lit?: string }>();
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
   const [followUp, setFollowUp] = useState('');
@@ -42,6 +43,7 @@ export default function EntryDetailScreen() {
   const [entryMenuVisible, setEntryMenuVisible] = useState(false);
   const [followUpOrder, setFollowUpOrder] = useState<'asc' | 'desc'>('asc');
   const [compressionStatus, setCompressionStatus] = useState<string | null>(null);
+  const [litLocation, setLitLocation] = useState(lit ?? '');
 
   const load = useCallback(async () => {
     if (!id) { setLoading(false); return; }
@@ -64,7 +66,7 @@ export default function EntryDetailScreen() {
     const next = !entry.favoritedAt;
     setEntry({ ...entry, favoritedAt: next ? new Date().toISOString() : null });
     try { await setEntryFavorite(db, entry.id, next); }
-    catch { await load(); Alert.alert('操作失败', '收藏状态没有保存，请稍后重试。'); }
+    catch { await load(); await showAppDialog({ title: '操作失败', message: '收藏状态没有保存，请稍后重试。' }); }
   }
 
   async function addFollowUp() {
@@ -90,7 +92,7 @@ export default function EntryDetailScreen() {
     }
     catch {
       persisted.forEach(deleteJournalImage);
-      Alert.alert('添加失败', '后续没有保存，请稍后重试。');
+      await showAppDialog({ title: '添加失败', message: '后续没有保存，请稍后重试。' });
     }
     finally { setSending(false); }
   }
@@ -138,7 +140,7 @@ export default function EntryDetailScreen() {
     const remaining = 5 - followUpImages.length;
     if (remaining <= 0) return;
     const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) { Alert.alert('无法使用相机', '请在系统设置中允许拾时使用相机。'); return; }
+    if (!permission.granted) { await showAppDialog({ title: '无法使用相机', message: '请在系统设置中允许拾时使用相机。' }); return; }
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ['images', 'videos'],
       videoMaxDuration: 60,
@@ -182,7 +184,7 @@ export default function EntryDetailScreen() {
     }
     catch {
       setEntryMenuVisible(false);
-      Alert.alert('删除失败', '记录暂时无法删除，请稍后重试。');
+      await showAppDialog({ title: '移入失败', message: '记录暂时无法移入回收站，请稍后重试。' });
     }
   }
 
@@ -196,7 +198,7 @@ export default function EntryDetailScreen() {
     try {
       await updateFollowUp(db, editingFollowUp.id, editValue);
       setEditingFollowUp(null); setEditValue(''); await load();
-    } catch { Alert.alert('保存失败', '这条后续没有保存，请稍后重试。'); }
+    } catch { await showAppDialog({ title: '保存失败', message: '这条后续没有保存，请稍后重试。' }); }
   }
 
   if (loading) return <SafeAreaView style={styles.safe}><View style={styles.missing}><Text style={styles.loadingText}>正在打开这一刻…</Text></View></SafeAreaView>;
@@ -235,7 +237,7 @@ export default function EntryDetailScreen() {
           <Pressable accessibilityLabel="移除后续媒体" onPress={() => setFollowUpImages((current) => current.filter((_, itemIndex) => itemIndex !== index))} style={styles.pendingRemove}><Text style={styles.pendingRemoveText}>×</Text></Pressable>
         </View>)}</ScrollView> : null}
         {compressionStatus ? <Text style={[styles.compressionStatus, { color: readingTheme.secondary }]}>{compressionStatus}</Text> : null}
-        <View style={styles.inputBar}><TextInput maxLength={2000} value={followUp} onChangeText={setFollowUp} onSubmitEditing={() => void addFollowUp()} returnKeyType="send" placeholder="写一条后续……" placeholderTextColor={readingTheme.secondary} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text, fontFamily: readingFontFamily }]} /><Pressable accessibilityLabel="添加后续图片或视频" disabled={followUpImages.length >= 5 || sending || Boolean(compressionStatus)} hitSlop={6} onPress={() => setMediaMenuVisible(true)} style={[styles.imagePickerButton, { backgroundColor: readingTheme.surface, borderColor: readingTheme.border }]}><Text style={styles.imagePickerText}>＋</Text></Pressable><Pressable disabled={(!followUp.trim() && !followUpImages.length) || sending} onPress={() => void addFollowUp()}><Text style={[styles.send, ((!followUp.trim() && !followUpImages.length) || sending) && styles.disabled]}>{sending ? '发送中' : '发送'}</Text></Pressable></View>
+        <View style={styles.inputBar}><TextInput maxLength={2000} value={followUp} onChangeText={setFollowUp} onSubmitEditing={() => void addFollowUp()} returnKeyType="send" placeholder="写一条后续……" placeholderTextColor={readingTheme.secondary} textAlignVertical="center" style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text, fontFamily: readingFontFamily }]} /><Pressable accessibilityLabel="添加后续图片或视频" disabled={followUpImages.length >= 5 || sending || Boolean(compressionStatus)} hitSlop={6} onPress={() => setMediaMenuVisible(true)} style={[styles.imagePickerButton, { backgroundColor: readingTheme.surface, borderColor: readingTheme.border }]}><Text style={styles.imagePickerText}>＋</Text></Pressable><Pressable disabled={(!followUp.trim() && !followUpImages.length) || sending} onPress={() => void addFollowUp()}><Text style={[styles.send, ((!followUp.trim() && !followUpImages.length) || sending) && styles.disabled]}>{sending ? '发送中' : '发送'}</Text></Pressable></View>
       </View>
       <Modal visible={Boolean(editingFollowUp)} transparent animationType="fade" onRequestClose={() => setEditingFollowUp(null)}>
         <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -264,8 +266,9 @@ export default function EntryDetailScreen() {
         </GestureHandlerRootView>
       </Modal>
       <EntryActionModal visible={entryMenuVisible} onClose={() => setEntryMenuVisible(false)} onEdit={editEntry} onDelete={deleteCurrentEntry} onHistory={() => { setEntryMenuVisible(false); router.push({ pathname: '/history/[id]', params: { id: entry.id } }); }} />
+      <AppDialog visible={Boolean(litLocation)} title="🍃 新地点已点亮" message={`你在“${litLocation}”留下了第一条足迹。`} onClose={() => setLitLocation('')} actions={[{ label: '继续记录', onPress: () => setLitLocation('') }, { label: '查看地图', tone: 'primary', onPress: () => { setLitLocation(''); router.push('/footprint-map' as Href); } }]} />
       <AppDialog visible={mediaMenuVisible} title="添加图片或视频" message="最多添加 5 个；拍照会打开系统相机，可切换照片或视频模式。" onClose={() => setMediaMenuVisible(false)} actions={[{ label: '相册', onPress: () => { setMediaMenuVisible(false); void pickFollowUpImages(); } }, { label: '拍照', onPress: () => { setMediaMenuVisible(false); void captureFollowUpMedia(); } }]} />
-      <AppDialog visible={Boolean(followUpAction)} title={confirmingFollowUpDelete ? '删除这条后续？' : '后续操作'} message={confirmingFollowUpDelete ? '删除后将无法恢复。' : undefined} onClose={() => { setFollowUpAction(null); setConfirmingFollowUpDelete(false); }} actions={confirmingFollowUpDelete ? [{ label: '取消', onPress: () => setConfirmingFollowUpDelete(false) }, { label: '删除', tone: 'danger', onPress: async () => { if (!followUpAction) return; try { const images = await deleteFollowUp(db, followUpAction.id); images.forEach(deleteJournalImage); setFollowUpAction(null); setConfirmingFollowUpDelete(false); await load(); } catch { Alert.alert('删除失败', '这条后续暂时无法删除，请稍后重试。'); } } }] : [{ label: '编辑', tone: 'primary', onPress: () => { if (!followUpAction) return; setEditingFollowUp(followUpAction); setEditValue(followUpAction.content); setFollowUpAction(null); } }, { label: '删除', tone: 'danger', onPress: () => setConfirmingFollowUpDelete(true) }]} />
+      <AppDialog visible={Boolean(followUpAction)} title={confirmingFollowUpDelete ? '删除这条后续？' : '后续操作'} message={confirmingFollowUpDelete ? '删除后将无法恢复。' : undefined} onClose={() => { setFollowUpAction(null); setConfirmingFollowUpDelete(false); }} actions={confirmingFollowUpDelete ? [{ label: '取消', onPress: () => setConfirmingFollowUpDelete(false) }, { label: '删除', tone: 'danger', onPress: async () => { if (!followUpAction) return; try { const images = await deleteFollowUp(db, followUpAction.id); images.forEach(deleteJournalImage); setFollowUpAction(null); setConfirmingFollowUpDelete(false); await load(); } catch { await showAppDialog({ title: '删除失败', message: '这条后续暂时无法删除，请稍后重试。' }); } } }] : [{ label: '编辑', tone: 'primary', onPress: () => { if (!followUpAction) return; setEditingFollowUp(followUpAction); setEditValue(followUpAction.content); setFollowUpAction(null); } }, { label: '删除', tone: 'danger', onPress: () => setConfirmingFollowUpDelete(true) }]} />
     </KeyboardAvoidingView>
   </SafeAreaView>;
 }
@@ -284,7 +287,7 @@ const styles = StyleSheet.create({
   followUpBody: { flex: 1, paddingBottom: spacing.sm }, followUpMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, followUpTime: { color: colors.textFaint, fontSize: 10 }, followUpMenu: { minWidth: 28, color: colors.textSecondary, textAlign: 'right', letterSpacing: 1 }, followUpText: { marginTop: 1, color: colors.text, fontSize: 13, lineHeight: 20 }, followUpImageRow: { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.sm }, followUpImage: { width: 72, height: 72, borderRadius: radii.sm },
   empty: { color: colors.textFaint, textAlign: 'center', paddingVertical: spacing.xl, fontSize: 11 },
   inputArea: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, compressionStatus: { marginBottom: spacing.xs, fontSize: 10, textAlign: 'right' }, inputBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, imagePickerButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: 16 }, imagePickerText: { color: colors.primary, fontSize: 18, lineHeight: 20, fontWeight: '400' }, pendingImages: { flexDirection: 'row', gap: spacing.sm, paddingTop: 5, paddingBottom: spacing.sm }, pendingImage: { width: 50, height: 50, borderRadius: radii.sm }, pendingSorting: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm }, pendingRemove: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: colors.overlay }, pendingRemoveText: { color: '#FFFFFF', fontSize: 14, lineHeight: 16 },
-  input: { flex: 1, height: 40, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 13 }, send: { color: colors.primary, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.3 },
+  input: { flex: 1, height: 42, paddingHorizontal: spacing.md, paddingVertical: 0, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 13, lineHeight: 20, includeFontPadding: false }, send: { color: colors.primary, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.3 },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center' }, loadingText: { color: colors.textFaint, fontSize: 12 }, missingTitle: { fontFamily: fonts.serif, fontSize: 18 }, backLink: { marginTop: spacing.lg, color: colors.primary },
   modalKeyboard: { flex: 1 }, modalOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, modalCard: { width: '100%', padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.surface }, modalTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' },
   modalInput: { minHeight: 120, marginTop: spacing.lg, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 15, lineHeight: 23 }, modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.xxl, marginTop: spacing.xl }, modalCancel: { color: colors.textSecondary }, modalSave: { color: colors.primary, fontWeight: '700' },

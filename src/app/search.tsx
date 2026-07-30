@@ -27,7 +27,9 @@ export default function SearchScreen() {
   const search = useCallback(async (value: string, filter: TimeFilter) => {
     if (!value.trim()) { setResults([]); setLoading(false); return; }
     setLoading(true);
-    try { setResults(await searchEntries(db, value, dateRange(filter))); } finally { setLoading(false); }
+    try {
+      setResults(await searchEntries(db, value, dateRange(filter)));
+    } finally { setLoading(false); }
   }, [db]);
 
   useEffect(() => {
@@ -82,7 +84,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl }, back: { color: colors.primary, fontSize: 28 }, title: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 20 },
   searchBox: { height: 42, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.xl, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, icon: { color: colors.textSecondary, fontSize: 22 }, input: { flex: 1, color: colors.text, fontSize: 13 }, clear: { color: colors.textSecondary, fontSize: 20 },
-  filterScroll: { flexGrow: 0, height: 42 }, filters: { alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.xl }, filter: { paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterActive: { backgroundColor: colors.primary }, filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
+  filterScroll: { flexGrow: 0, height: 36 }, filters: { alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.xl }, filter: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterActive: { backgroundColor: colors.primary }, filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
   loader: { marginTop: 70 }, results: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, resultCount: { marginTop: spacing.sm, marginBottom: spacing.sm, color: colors.textSecondary, fontSize: 10 },
   card: { marginBottom: spacing.sm, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, pressed: { opacity: 0.66 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, date: { color: colors.primary, fontSize: 10, fontWeight: '700' }, matchSource: { color: colors.textFaint, fontSize: 9 },

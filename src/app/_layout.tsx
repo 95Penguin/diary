@@ -1,41 +1,40 @@
-import { NotoSansSC_400Regular } from '@expo-google-fonts/noto-sans-sc/400Regular';
-import { NotoSerifSC_400Regular } from '@expo-google-fonts/noto-serif-sc/400Regular';
-import { useFonts } from 'expo-font';
 import { router, Stack } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
-import { SQLiteProvider } from 'expo-sqlite';
+import { SQLiteProvider, useSQLiteContext } from 'expo-sqlite';
 import { StatusBar } from 'expo-status-bar';
-import { Component, type ErrorInfo, type ReactNode, Suspense, useEffect } from 'react';
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Component, type ErrorInfo, type ReactNode, Suspense, useEffect, useRef } from 'react';
+import { ActivityIndicator, AppState, InteractionManager, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppLockGate } from '@/components/app-lock-gate';
+import { AppDialogHost } from '@/components/app-dialog-host';
 import { migrateDatabase } from '@/database/migrate';
-import { AppPreferencesProvider } from '@/preferences/app-preferences';
+import { useAppFonts } from '@/hooks/use-app-fonts';
+import { AppPreferencesProvider, useAppPreferences } from '@/preferences/app-preferences';
 import { colors } from '@/theme/tokens';
 import { backfillVideoThumbnails } from '@/utils/video-thumbnail-cache';
+import { AUTOMATIC_BACKUP_INTERVAL_MS, runAutomaticBackup } from '@/utils/automatic-backup';
+import { recordAppError } from '@/utils/app-error-log';
+import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
 
 void SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
-  const [fontsLoaded, fontError] = useFonts({
-    ShishiSans: NotoSansSC_400Regular,
-    ShishiSerif: NotoSerifSC_400Regular,
-  });
+  const fontsReady = useAppFonts();
 
   useEffect(() => {
-    if (fontsLoaded || fontError) void SplashScreen.hideAsync();
-  }, [fontError, fontsLoaded]);
+    if (fontsReady) void SplashScreen.hideAsync();
+  }, [fontsReady]);
 
-  if (!fontsLoaded && !fontError) return null;
+  if (!fontsReady) return null;
 
   return (
     <GestureHandlerRootView style={styles.root}>
       <DatabaseErrorBoundary>
         <Suspense fallback={<LoadingFallback />}>
           <SQLiteProvider databaseName="shishi.db" onInit={initializeDatabase} useSuspense>
-            <AppPreferencesProvider><AppLockGate><AppStack /></AppLockGate></AppPreferencesProvider>
+            <AppPreferencesProvider><AutomaticBackupGate /><AppLockGate><AppStack /></AppLockGate><AppDialogHost /></AppPreferencesProvider>
           </SQLiteProvider>
         </Suspense>
       </DatabaseErrorBoundary>
@@ -43,30 +42,83 @@ export default function RootLayout() {
   );
 }
 
+function AutomaticBackupGate() {
+  const db = useSQLiteContext();
+  const { preferences, ready, updatePreferences } = useAppPreferences();
+  const running = useRef(false);
+
+  useEffect(() => {
+    async function check() {
+      if (
+        Platform.OS !== 'android'
+        || !ready
+        || !preferences.automaticBackupEnabled
+        || !preferences.backupDirectoryUri
+        || running.current
+      ) return;
+      const lastTime = preferences.lastAutomaticBackupAt ? Date.parse(preferences.lastAutomaticBackupAt) : 0;
+      if (Number.isFinite(lastTime) && Date.now() - lastTime < AUTOMATIC_BACKUP_INTERVAL_MS) return;
+      running.current = true;
+      try {
+        const result = await runAutomaticBackup(db, preferences.backupDirectoryUri);
+        await updatePreferences({
+          lastAutomaticBackupAt: result.now,
+          lastBackupCheckAt: result.now,
+          lastBackupHealth: result.missingMedia ? 'warning' : 'healthy',
+        });
+      } catch (error) {
+        void recordAppError('automatic-backup', error);
+        const now = new Date().toISOString();
+        await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: 'failed' }).catch(() => undefined);
+        console.warn('Automatic backup failed', error);
+      } finally {
+        running.current = false;
+      }
+    }
+    const task = InteractionManager.runAfterInteractions(() => {
+      setTimeout(() => void check(), 1_000);
+    });
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void check();
+    });
+    return () => { task.cancel(); subscription.remove(); };
+  }, [db, preferences.automaticBackupEnabled, preferences.backupDirectoryUri, preferences.lastAutomaticBackupAt, ready, updatePreferences]);
+
+  return null;
+}
+
 async function initializeDatabase(db: Parameters<typeof migrateDatabase>[0]) {
+  const startedAt = startupTimer();
   await migrateDatabase(db);
-  void backfillVideoThumbnails(db).catch((error) => console.warn('Video thumbnail backfill failed', error));
+  finishStartupMetric('database', startedAt);
+  void backfillVideoThumbnails(db).catch((error) => {
+    void recordAppError('video-thumbnail-backfill', error);
+    console.warn('Video thumbnail backfill failed', error);
+  });
 }
 
 function AppStack() {
+  const { preferences } = useAppPreferences();
   useEffect(() => {
     const openBackup = (response: Notifications.NotificationResponse | null) => {
       const route = response?.notification.request.content.data?.route;
       if (route === '/backup') router.push('/backup');
     };
-    void Notifications.getLastNotificationResponseAsync().then((response) => {
-      openBackup(response);
-      if (response) void Notifications.clearLastNotificationResponseAsync();
+    const task = InteractionManager.runAfterInteractions(() => {
+      void Notifications.getLastNotificationResponseAsync().then((response) => {
+        openBackup(response);
+        if (response) void Notifications.clearLastNotificationResponseAsync();
+      });
     });
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
       openBackup(response);
       void Notifications.clearLastNotificationResponseAsync();
     });
-    return () => subscription.remove();
+    return () => { task.cancel(); subscription.remove(); };
   }, []);
 
   return <>
-          <StatusBar style="dark" />
+          <StatusBar animated style={preferences.readingTheme === 'night' ? 'light' : 'dark'} />
           <Stack screenOptions={{ headerShown: false, contentStyle: styles.content }}>
             <Stack.Screen name="index" />
             <Stack.Screen name="compose" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
@@ -82,6 +134,12 @@ function AppStack() {
             <Stack.Screen name="backup" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="about" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="metadata" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="content-management" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="batch-manage" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="readable-export" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="location-health" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="footprint-map" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="location/[name]" options={{ animation: 'slide_from_right' }} />
           </Stack>
         </>;
 }
@@ -90,7 +148,10 @@ class DatabaseErrorBoundary extends Component<{ children: ReactNode }, { error: 
   state = { error: null as Error | null };
 
   static getDerivedStateFromError(error: Error) { return { error }; }
-  componentDidCatch(error: Error, info: ErrorInfo) { console.error('Database initialization failed', error, info); }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    void recordAppError('app-render-or-database', error);
+    console.error('Database initialization failed', error, info);
+  }
 
   reload = () => {
     if (Platform.OS === 'web') window.location.reload();
@@ -100,9 +161,10 @@ class DatabaseErrorBoundary extends Component<{ children: ReactNode }, { error: 
   render() {
     if (!this.state.error) return this.props.children;
     const locked = this.state.error.message.includes('createSyncAccessHandle');
+    const databaseRelated = /database|sqlite|migration|createSyncAccessHandle/i.test(this.state.error.message);
     return <View style={styles.errorPage}>
-      <Text style={styles.errorTitle}>{locked ? '数据库正在被其他页面使用' : '暂时无法打开拾时'}</Text>
-      <Text style={styles.errorDescription}>{locked ? '请关闭其他打开拾时的浏览器标签页，然后重新加载。手机 App 不受这个 Web 限制影响。' : '数据库初始化失败，请重新加载后再试。'}</Text>
+      <Text style={styles.errorTitle}>{locked ? '数据库正在被其他页面使用' : databaseRelated ? '暂时无法打开拾时' : '当前页面暂时无法显示'}</Text>
+      <Text style={styles.errorDescription}>{locked ? '请关闭其他打开拾时的浏览器标签页，然后重新加载。手机 App 不受这个 Web 限制影响。' : databaseRelated ? '数据库初始化失败，请重新加载后再试。' : '页面组件运行时遇到问题，错误信息已保存到本地诊断。请重新加载后再试。'}</Text>
       <Pressable onPress={this.reload} style={styles.retryButton}><Text style={styles.retryText}>重新加载</Text></Pressable>
     </View>;
   }

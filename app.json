@@ -2,15 +2,15 @@
   "expo": {
     "name": "拾时",
     "slug": "shishi-journal",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/shishi-icon-v3.png",
     "scheme": "shishi",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon",
+      "icon": "./assets/images/shishi-icon-v3.png",
       "bundleIdentifier": "com.penguin95.shishi",
-      "buildNumber": "3",
+      "buildNumber": "4",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -18,10 +18,9 @@
     "android": {
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
-        "backgroundColor": "#FFFDF8",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#EAF4F6",
+        "foregroundImage": "./assets/images/shishi-mark-v3.png",
+        "monochromeImage": "./assets/images/shishi-mark-v3.png"
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
@@ -32,11 +31,11 @@
         "android.permission.USE_FINGERPRINT"
       ],
       "package": "com.penguin95.shishi",
-      "versionCode": 3
+      "versionCode": 5
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon-v3.png"
     },
     "plugins": [
       [
@@ -51,9 +50,40 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#FFFDF8",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#EAF4F6",
+          "image": "./assets/images/shishi-mark-v3.png",
+          "imageWidth": 88
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./node_modules/@expo-google-fonts/noto-sans-sc/400Regular/NotoSansSC_400Regular.ttf",
+            "./node_modules/@expo-google-fonts/noto-serif-sc/400Regular/NotoSerifSC_400Regular.ttf"
+          ],
+          "android": {
+            "fonts": [
+              {
+                "fontFamily": "ShishiSans",
+                "fontDefinitions": [
+                  {
+                    "path": "./node_modules/@expo-google-fonts/noto-sans-sc/400Regular/NotoSansSC_400Regular.ttf",
+                    "weight": 400
+                  }
+                ]
+              },
+              {
+                "fontFamily": "ShishiSerif",
+                "fontDefinitions": [
+                  {
+                    "path": "./node_modules/@expo-google-fonts/noto-serif-sc/400Regular/NotoSerifSC_400Regular.ttf",
+                    "weight": 400
+                  }
+                ]
+              }
+            ]
+          }
         }
       ],
       [
