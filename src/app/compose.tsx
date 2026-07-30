@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import { reGeocode } from 'expo-gaode-map';
 import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
-import { createDraftId, createEntryWithDetails, deleteDraft, getDraft, getEntry, isNewFootprintLocation, listEntryFilterOptions, saveDraft, saveLocationDetail, updateEntryWithDetails, type EntryFilterOptions } from '@/database/journal-repository';
+import { createDraftId, createEntryWithDetails, deleteDraft, getDraft, getEntry, getLocationPageDetail, isNewFootprintLocation, listEntryFilterOptions, saveDraft, saveLocationDetail, updateEntryWithDetails, type EntryFilterOptions } from '@/database/journal-repository';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatShortDateTime, occurrenceTimeForDate, parseLocalDateTime, toLocalDateTimeInput } from '@/utils/date';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
@@ -25,6 +26,8 @@ import { LocationPickerModal } from '@/components/location-picker-modal';
 import { applyJournalTemplate, JOURNAL_TEMPLATES, type JournalTemplate } from '@/utils/journal-templates';
 import { recordAppError } from '@/utils/app-error-log';
 import { applyLocationPrivacy, type CoordinatePrivacyChoice } from '@/utils/location-privacy';
+import { wgs84ToGcj02 } from '@/utils/china-coordinates';
+import { rankNearbyPois } from '@/utils/location-poi';
 
 type SelectedImage = { id?: string; uri: string; width: number; height: number; fileName?: string | null; draftOwned?: boolean; mediaType?: JournalMediaType; pairedVideoUri?: string | null; pairedVideoFileName?: string | null; duration?: number | null; thumbnailUri?: string | null };
 const MOODS = ['开心', '平静', '期待', '难过', '疲惫', '生气'] as const;
@@ -45,6 +48,7 @@ export default function ComposeScreen() {
   const [editingTime, setEditingTime] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [draftStatus, setDraftStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [activeDraftId, setActiveDraftId] = useState<string | null>(requestedDraftId ?? null);
   const [originalContent, setOriginalContent] = useState('');
   const [originalOccurredAt, setOriginalOccurredAt] = useState('');
@@ -56,6 +60,7 @@ export default function ComposeScreen() {
   const [weather, setWeather] = useState<string | null>(null);
   const [activeMeta, setActiveMeta] = useState<'mood' | 'weather' | 'location' | 'tags' | null>(null);
   const [locationName, setLocationName] = useState('');
+  const [locationAddress, setLocationAddress] = useState('');
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
   const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
@@ -84,6 +89,7 @@ export default function ComposeScreen() {
   const undoBatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationRequestRef = useRef(0);
   const addressRequestRef = useRef(0);
+  const draftSaveVersionRef = useRef(0);
 
   function leaveComposer() {
     if (router.canGoBack()) router.back();
@@ -159,6 +165,10 @@ export default function ComposeScreen() {
         if (entry && active) {
           setContent(entry.content); setOccurredAt(entry.occurredAt); setTimeValue(toLocalDateTimeInput(entry.occurredAt));
           setOriginalContent(entry.content); setOriginalOccurredAt(entry.occurredAt); setTimeChanged(false); setImages(entry.images); setOriginalImageUris(entry.images.map((image) => image.uri)); setTags(entry.tags); setOriginalTags(entry.tags); setMood(entry.mood); setOriginalMood(entry.mood); setWeather(entry.weather); setOriginalWeather(entry.weather); setLocationName(entry.locationName ?? ''); setOriginalLocationName(entry.locationName ?? ''); setLatitude(entry.latitude); setLongitude(entry.longitude);
+          if (entry.locationName) {
+            const detail = await getLocationPageDetail(db, entry.locationName);
+            if (active) setLocationAddress(detail?.address ?? '');
+          }
         } else if (active) {
           await showAppDialog({ title: '记录不存在', message: '这条记录可能已经被删除。' });
           leaveComposer();
@@ -189,16 +199,27 @@ export default function ComposeScreen() {
     const timer = setTimeout(() => {
       const hasDraft = Boolean(content.trim() || images.length || tags.length || mood || weather || locationName.trim());
       if (hasDraft) {
+        const saveVersion = ++draftSaveVersionRef.current;
+        setDraftStatus('saving');
         const nextId = activeDraftId ?? createDraftId();
         if (!activeDraftId) setActiveDraftId(nextId);
         void saveDraft(db, { id: nextId, content, occurredAt, updatedAt: new Date().toISOString(), tags, mood, weather, images: images.map(({ uri, width, height, mediaType, pairedVideoUri, duration, thumbnailUri }) => ({ uri, width, height, mediaType, pairedVideoUri, duration, thumbnailUri })), locationName: locationName.trim() || null, latitude, longitude })
+          .then(() => {
+            if (draftSaveVersionRef.current === saveVersion) setDraftStatus('saved');
+          })
           .catch((error) => {
             void recordAppError('compose.auto-save-draft', error);
+            if (draftSaveVersionRef.current === saveVersion) setDraftStatus('error');
             showToast('草稿自动保存失败');
           });
       } else if (activeDraftId) {
+        draftSaveVersionRef.current += 1;
         void deleteDraft(db, activeDraftId).then((uris) => uris.forEach(deleteJournalImage)).catch(() => showToast('草稿清理失败'));
         setActiveDraftId(null);
+        setDraftStatus('idle');
+      } else {
+        draftSaveVersionRef.current += 1;
+        setDraftStatus('idle');
       }
     }, 500);
     return () => clearTimeout(timer);
@@ -222,15 +243,25 @@ export default function ComposeScreen() {
       if (requestId !== locationRequestRef.current) return;
       setLocationStatus(`${source}${accuracy != null ? ` · 约 ±${Math.max(1, Math.round(accuracy))} 米` : ''} · 地址解析中…`);
       try {
-        const addresses = await Promise.race([
-          Location.reverseGeocodeAsync({ latitude: nextLatitude, longitude: nextLongitude }),
+        const systemAddressPromise = Location.reverseGeocodeAsync({ latitude: nextLatitude, longitude: nextLongitude });
+        const gaodeResult = Platform.OS === 'android' ? await Promise.race([
+          reGeocode({ location: wgs84ToGcj02({ latitude: nextLatitude, longitude: nextLongitude }), radius: 200 }),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('gaode-address-timeout')), 4000);
+          }),
+        ]).catch(() => null) : null;
+        const nearbyPoi = gaodeResult ? rankNearbyPois(gaodeResult.pois)[0] : null;
+        const addresses = nearbyPoi ? [] : await Promise.race([
+          systemAddressPromise,
           new Promise<never>((_, reject) => {
             setTimeout(() => reject(new Error('address-timeout')), 6000);
           }),
         ]);
         if (requestId !== locationRequestRef.current || addressRequest !== addressRequestRef.current) return;
-        const nextLocationName = formatLocationName(addresses[0]);
+        const nextLocationName = nearbyPoi?.name || formatLocationName(addresses[0]);
         if (nextLocationName) {
+          const systemAddress = addresses[0]?.formattedAddress?.trim();
+          setLocationAddress(gaodeResult?.formattedAddress?.trim() || systemAddress || nearbyPoi?.address?.trim() || '');
           setLocationName(nextLocationName);
           setLocationStatus(`${source}${accuracy != null ? ` · 约 ±${Math.max(1, Math.round(accuracy))} 米` : ''} · ${formatElapsed()}`);
         } else {
@@ -250,6 +281,7 @@ export default function ComposeScreen() {
       setLongitude(nextLongitude);
       setLocationCoordinateChanged(true);
       setLocationAccuracy(accuracy);
+      setLocationAddress('');
       setLocationName(`${nextLatitude.toFixed(5)}, ${nextLongitude.toFixed(5)}`);
       setLocationStatus(`${source}${accuracy != null ? ` · 约 ±${Math.max(1, Math.round(accuracy))} 米` : ''} · ${formatElapsed()}`);
       setLocating(false);
@@ -453,9 +485,11 @@ export default function ComposeScreen() {
       }
       if (!entryId) throw new Error('Missing entry id');
       if (locationName.trim() && privateLatitude != null && privateLongitude != null) {
-        await saveLocationDetail(db, locationName, {
-          address: locationName, latitude: privateLatitude, longitude: privateLongitude,
-        });
+        if (locationAddress.trim()) {
+          await saveLocationDetail(db, locationName, {
+            address: locationAddress, latitude: privateLatitude, longitude: privateLongitude,
+          });
+        }
       }
       removedUris.forEach(deleteJournalImage);
       if (id) leaveComposer();
@@ -532,20 +566,24 @@ export default function ComposeScreen() {
         {activeMeta === 'weather' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.metaChoiceScroll} contentContainerStyle={styles.moods}>
           {WEATHERS.map((item) => <Pressable accessibilityLabel={`天气：${item}`} key={item} onPress={() => setWeather((current) => current === item ? null : item)} style={[styles.moodChip, { backgroundColor: readingTheme.surface }, weather === item && styles.moodChipActive]}><Text style={[styles.moodText, { color: readingTheme.secondary }, weather === item && styles.moodTextActive]}>{WEATHER_ICONS[item]} {item}</Text></Pressable>)}
         </ScrollView></View> : null}
-        {activeMeta === 'location' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><Text style={[styles.metaEditorLabel, { color: readingTheme.secondary }]}>地点显示名称</Text><View style={styles.locationRow}><TextInput maxLength={100} value={locationName} onChangeText={(value) => { locationRequestRef.current += 1; addressRequestRef.current += 1; setLocationName(value); setLocationStatus(''); setLocating(false); }} placeholder="例如：学校、家、咖啡店" placeholderTextColor={readingTheme.secondary} style={[styles.locationInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><Pressable accessibilityLabel="使用当前位置" disabled={locating} onPress={() => void fillCurrentLocation()} style={[styles.locationButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.locationButtonText}>{locating ? '获取坐标…' : '⌖ 自动定位'}</Text></Pressable></View><View style={styles.locationTools}><Pressable onPress={() => { locationRequestRef.current += 1; addressRequestRef.current += 1; setLocating(false); setLocationPickerVisible(true); }} style={[styles.locationTool, { backgroundColor: readingTheme.surface }]}><Text style={styles.locationButtonText}>在地图上选择 / 搜索</Text></Pressable>{locationStatus ? <Text numberOfLines={2} style={[styles.locationCoordinate, { color: readingTheme.secondary }]}>{locationStatus}</Text> : latitude != null && longitude != null ? <Text numberOfLines={1} style={[styles.locationCoordinate, { color: readingTheme.secondary }]}>{latitude.toFixed(5)}, {longitude.toFixed(5)}{locationAccuracy != null ? ` · 约 ±${Math.round(locationAccuracy)} 米` : ''}</Text> : <Text style={[styles.locationCoordinate, { color: readingTheme.secondary }]}>还没有坐标，地点不会出现在足迹地图</Text>}</View>{suggestions.locations.filter((item) => !locationName.trim() || item.toLocaleLowerCase().includes(locationName.trim().toLocaleLowerCase())).slice(0, 4).length ? <View style={styles.suggestionArea}><Text style={[styles.suggestionLabel, { color: readingTheme.secondary }]}>常用地点</Text><View style={styles.suggestionRow}>{suggestions.locations.filter((item) => !locationName.trim() || item.toLocaleLowerCase().includes(locationName.trim().toLocaleLowerCase())).slice(0, 4).map((item) => <Pressable key={item} onPress={() => { locationRequestRef.current += 1; addressRequestRef.current += 1; setLocationName(item); setLatitude(null); setLongitude(null); setLocationAccuracy(null); setLocationStatus(''); }} style={[styles.suggestionChip, { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={styles.suggestionText}>⌖ {item}</Text></Pressable>)}</View></View> : null}</View> : null}
+        {activeMeta === 'location' ? <View style={[styles.metaEditor, { backgroundColor: readingTheme.background }]}><Text style={[styles.metaEditorLabel, { color: readingTheme.secondary }]}>地点显示名称</Text><View style={styles.locationRow}><TextInput maxLength={100} value={locationName} onChangeText={(value) => { locationRequestRef.current += 1; addressRequestRef.current += 1; setLocationName(value); setLocationStatus(''); setLocating(false); }} placeholder="例如：学校、家、咖啡店" placeholderTextColor={readingTheme.secondary} style={[styles.locationInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><Pressable accessibilityLabel="使用当前位置" disabled={locating} onPress={() => void fillCurrentLocation()} style={[styles.locationButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.locationButtonText}>{locating ? '获取坐标…' : '⌖ 自动定位'}</Text></Pressable></View><View style={styles.locationTools}><Pressable onPress={() => { locationRequestRef.current += 1; addressRequestRef.current += 1; setLocating(false); setLocationPickerVisible(true); }} style={[styles.locationTool, { backgroundColor: readingTheme.surface }]}><Text style={styles.locationButtonText}>在地图上选择 / 搜索</Text></Pressable>{locationStatus ? <Text numberOfLines={2} style={[styles.locationCoordinate, { color: readingTheme.secondary }]}>{locationStatus}</Text> : latitude != null && longitude != null ? <Text numberOfLines={1} style={[styles.locationCoordinate, { color: readingTheme.secondary }]}>{latitude.toFixed(5)}, {longitude.toFixed(5)}{locationAccuracy != null ? ` · 约 ±${Math.round(locationAccuracy)} 米` : ''}</Text> : <Text style={[styles.locationCoordinate, { color: readingTheme.secondary }]}>还没有坐标，地点不会出现在足迹地图</Text>}</View>{suggestions.locations.filter((item) => !locationName.trim() || item.toLocaleLowerCase().includes(locationName.trim().toLocaleLowerCase())).slice(0, 4).length ? <View style={styles.suggestionArea}><Text style={[styles.suggestionLabel, { color: readingTheme.secondary }]}>常用地点</Text><View style={styles.suggestionRow}>{suggestions.locations.filter((item) => !locationName.trim() || item.toLocaleLowerCase().includes(locationName.trim().toLocaleLowerCase())).slice(0, 4).map((item) => <Pressable key={item} onPress={() => { locationRequestRef.current += 1; addressRequestRef.current += 1; setLocationName(item); setLocationAddress(''); setLatitude(null); setLongitude(null); setLocationAccuracy(null); setLocationStatus(''); }} style={[styles.suggestionChip, { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={styles.suggestionText}>⌖ {item}</Text></Pressable>)}</View></View> : null}</View> : null}
         {activeMeta === 'tags' ? <View style={[styles.metaEditor, styles.tagEditor, { backgroundColor: readingTheme.background }]}>
           {tags.length ? <View style={styles.selectedTagRow}>{tags.map((tag) => <Pressable accessibilityLabel={`移除标签 ${tag}`} key={tag} onPress={() => setTags((current) => current.filter((item) => item !== tag))} style={[styles.tagChip, { backgroundColor: readingTheme.surface }]}><Text style={styles.tagChipText}>#{tag}　×</Text></Pressable>)}</View> : null}
           {tags.length < 5 ? <View style={[styles.tagInputRow, { backgroundColor: readingTheme.surface }]}><TextInput value={tagValue} onChangeText={changeTagValue} onBlur={() => addTag()} onSubmitEditing={() => addTag()} returnKeyType="done" blurOnSubmit placeholder="输入标签名称" placeholderTextColor={readingTheme.secondary} style={[styles.tagInput, { color: readingTheme.text }]} />{tagValue.trim() ? <Pressable accessibilityLabel="添加标签" hitSlop={6} onPress={() => addTag()} style={styles.tagAddButton}><Text style={styles.tagAddText}>添加</Text></Pressable> : null}</View> : null}
           {tags.length < 5 && suggestions.tags.filter((item) => !tags.includes(item) && (!tagValue.trim() || item.toLocaleLowerCase().includes(tagValue.trim().toLocaleLowerCase()))).slice(0, 4).length ? <View style={styles.suggestionArea}><Text style={[styles.suggestionLabel, { color: readingTheme.secondary }]}>常用标签</Text><View style={styles.suggestionRow}>{suggestions.tags.filter((item) => !tags.includes(item) && (!tagValue.trim() || item.toLocaleLowerCase().includes(tagValue.trim().toLocaleLowerCase()))).slice(0, 4).map((item) => <Pressable key={item} onPress={() => addTag(item)} style={[styles.suggestionChip, { backgroundColor: readingTheme.surface }]}><Text style={styles.suggestionText}>#{item}</Text></Pressable>)}</View></View> : null}
         </View> : null}
         </View>
-        <View style={styles.editorMeta}>{!isEditing && activeDraftId ? <Text style={[styles.draft, { color: readingTheme.secondary }]}>已自动保存到草稿箱</Text> : <View />}<Text style={[styles.counter, { color: readingTheme.secondary }]}>{content.length}/10000</Text></View>
+        <View style={styles.editorMeta}>{!isEditing && draftStatus !== 'idle'
+          ? <Text style={[styles.draft, { color: draftStatus === 'error' ? colors.danger : readingTheme.secondary }]}>
+            {draftStatus === 'saving' ? '正在保存草稿…' : draftStatus === 'saved' ? '草稿已保存' : '草稿保存失败，请稍后重试'}
+          </Text>
+          : <View />}<Text style={[styles.counter, { color: readingTheme.secondary }]}>{content.length}/10000</Text></View>
       </ScrollView>
     </KeyboardAvoidingView>
     <AppDialog visible={imageMenuVisible} title="添加图片或视频" message="拍照会打开系统相机，可在相机中切换照片或视频模式。" onClose={() => setImageMenuVisible(false)} actions={[{ label: '相册', onPress: () => { setImageMenuVisible(false); void chooseFromLibrary(); } }, { label: '拍照', onPress: () => { setImageMenuVisible(false); void openCamera(); } }]} />
     <AppDialog visible={exitConfirmationVisible} title="退出编辑？" message="尚未保存的修改会丢失。" onClose={() => setExitConfirmationVisible(false)} actions={[{ label: '继续编辑', onPress: () => setExitConfirmationVisible(false) }, { label: '退出', tone: 'danger', onPress: () => { setExitConfirmationVisible(false); images.filter((image) => image.draftOwned).forEach((image) => { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); }); leaveComposer(); } }]} />
     <AppDialog visible={Boolean(locationDialog)} title={locationDialog?.title ?? ''} message={locationDialog?.message} onClose={() => setLocationDialog(null)} actions={locationDialog?.settings ? [{ label: '稍后处理', onPress: () => setLocationDialog(null) }, { label: '打开设置', tone: 'primary', onPress: () => { setLocationDialog(null); void Linking.openSettings(); } }] : [{ label: '知道了', tone: 'primary', onPress: () => setLocationDialog(null) }]} />
-    {locationPickerVisible ? <LocationPickerModal visible name={locationName} latitude={latitude} longitude={longitude} accuracy={locationAccuracy} onClose={() => setLocationPickerVisible(false)} onApply={(value) => { setLocationName(value.name); setLatitude(value.latitude); setLongitude(value.longitude); setLocationAccuracy(null); setLocationCoordinateChanged(true); setLocationPickerVisible(false); }} /> : null}
+    {locationPickerVisible ? <LocationPickerModal visible name={locationName} latitude={latitude} longitude={longitude} accuracy={locationAccuracy} onClose={() => setLocationPickerVisible(false)} onApply={(value) => { setLocationName(value.name); setLocationAddress(value.address); setLatitude(value.latitude); setLongitude(value.longitude); setLocationAccuracy(null); setLocationCoordinateChanged(true); setLocationPickerVisible(false); }} /> : null}
     <Modal visible={templatePickerVisible} transparent animationType="fade" onRequestClose={() => setTemplatePickerVisible(false)}>
       <Pressable accessibilityRole="button" accessibilityLabel="关闭模板选择" onPress={() => setTemplatePickerVisible(false)} style={styles.templateOverlay}>
         <Pressable onPress={(event) => event.stopPropagation()} style={[styles.templateCard, { backgroundColor: readingTheme.background }]}>

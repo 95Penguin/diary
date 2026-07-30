@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { clusterFootprintPlaces, groupFootprintPlaces, initialFootprintCamera, summarizeFootprintPlace } from '../src/utils/footprint.ts';
+import { clusterFootprintPlaces, groupFootprintPlaces, groupFootprintRegions, initialFootprintCamera, summarizeFootprintPlace } from '../src/utils/footprint.ts';
 
 test('footprint groups repeated visits and keeps recent entries first', () => {
   const places = groupFootprintPlaces([
@@ -22,6 +22,24 @@ test('footprint clusters at low zoom and separates at street zoom', () => {
   assert.equal(clusterFootprintPlaces(places, 4).length, 1);
   assert.equal(clusterFootprintPlaces(places, 14).length, 2);
   assert.ok(initialFootprintCamera(places).zoom > 3);
+});
+
+test('a single footprint opens at neighborhood-level zoom', () => {
+  const places = groupFootprintPlaces([
+    { id: '1', content: '看书', occurredAt: '2026-07-01T01:00:00.000Z', locationName: '图书馆', latitude: 39.96, longitude: 116.36 },
+  ]);
+  assert.equal(initialFootprintCamera(places).zoom, 14);
+});
+
+test('footprint regions keep nearby campus buildings together at every map zoom', () => {
+  const places = groupFootprintPlaces([
+    { id: '1', content: '看书', occurredAt: '2026-07-01T01:00:00.000Z', locationName: '图书馆', latitude: 39.9627, longitude: 116.3607 },
+    { id: '2', content: '回宿舍', occurredAt: '2026-07-02T01:00:00.000Z', locationName: '学十公寓', latitude: 39.9642, longitude: 116.3622 },
+    { id: '3', content: '旅行', occurredAt: '2026-07-03T01:00:00.000Z', locationName: '颐和园', latitude: 39.9999, longitude: 116.2755 },
+  ]);
+  const regions = groupFootprintRegions(places);
+  assert.equal(regions.length, 2);
+  assert.equal(regions.find((region) => region.places.length === 2)?.places.length, 2);
 });
 
 test('footprint place summary counts visits and distinct local dates', () => {

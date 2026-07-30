@@ -102,7 +102,7 @@ export default function AboutScreen() {
       `高德 Android 地图密钥：${mapsKeyConfigured ? '已注入' : '未检测到'}`,
       ...(locationDiagnostics ? ['', formatLocationDiagnostics(locationDiagnostics)] : []),
       '',
-      '启动耗时：',
+      '启动性能：',
       formatStartupMetrics(),
       '',
       formatAppErrorLog(errorLog),
@@ -204,7 +204,7 @@ export default function AboutScreen() {
         <Text style={styles.inlineButtonText}>{packageCopied ? '包名已复制' : '复制应用包名'}</Text>
       </Pressable>
 
-      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>本次启动耗时</Text>
+      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>启动性能</Text>
       <View style={[styles.card, { backgroundColor: readingTheme.surface }]}>
         <InfoRow label="数据库初始化" value={startupMetrics.database == null ? '尚未完成' : `${startupMetrics.database} 毫秒`} />
         <InfoRow label="偏好设置读取" value={startupMetrics.preferences == null ? '尚未完成' : `${startupMetrics.preferences} 毫秒`} />

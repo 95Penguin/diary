@@ -5,9 +5,24 @@ import { MapType, MapView, reGeocode, searchPOI, type MapViewRef, type POI } fro
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { gcj02ToWgs84, wgs84ToGcj02 } from '@/utils/china-coordinates';
+import { rankNearbyPois } from '@/utils/location-poi';
 import { GaodeMapPrivacyGate } from '@/components/gaode-map-privacy-gate';
 
 type Coordinate = { latitude: number; longitude: number };
+
+function fullPoiAddress(poi: POI) {
+  const candidates = [poi.provinceName, poi.cityName, poi.adName, poi.address]
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part));
+  const parts: string[] = [];
+  for (const candidate of candidates) {
+    if (parts.some((part) => part === candidate || part.includes(candidate))) continue;
+    const containedIndex = parts.findIndex((part) => candidate.includes(part));
+    if (containedIndex >= 0) parts[containedIndex] = candidate;
+    else parts.push(candidate);
+  }
+  return parts.join('') || poi.name;
+}
 
 export function LocationPickerModal({ visible, name, latitude, longitude, accuracy, onClose, onApply }: {
   visible: boolean;
@@ -48,7 +63,7 @@ export function LocationPickerModal({ visible, name, latitude, longitude, accura
   }
 
   function choosePoi(result: POI) {
-    setResolvedAddress(result.address || result.name);
+    setResolvedAddress(fullPoiAddress(result));
     setDisplayName(result.name);
     setQuery(result.name);
     moveTo(result.location);
@@ -60,13 +75,14 @@ export function LocationPickerModal({ visible, name, latitude, longitude, accura
     setMessage('');
     try {
       const results = await searchPOI({ keyword: query.trim(), center: coordinate, sortByDistance: true, pageSize: 10, pageNum: 1 });
-      const result = results.pois[0];
+      const ranked = rankNearbyPois(results.pois, query);
+      const result = ranked[0];
       if (!result) {
         setPoiResults([]);
         setMessage('没有找到这个地点，可以输入更完整的地址或直接填写坐标。');
         return;
       }
-      setPoiResults(results.pois.slice(0, 8));
+      setPoiResults(ranked.slice(0, 8));
       choosePoi(result);
     } catch {
       setMessage('地点搜索暂时不可用，可以在地图上点选或直接填写坐标。');
@@ -79,8 +95,9 @@ export function LocationPickerModal({ visible, name, latitude, longitude, accura
     moveTo(next);
     try {
       const result = await reGeocode({ location: next, radius: 200 });
-      setPoiResults(result.pois.slice(0, 8));
-      const resolved = result.pois[0]?.name || result.formattedAddress;
+      const ranked = rankNearbyPois(result.pois);
+      setPoiResults(ranked.slice(0, 8));
+      const resolved = ranked[0]?.name || result.formattedAddress;
       if (resolved) {
         setResolvedAddress(result.formattedAddress || resolved);
         setDisplayName(resolved);

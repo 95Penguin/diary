@@ -1,7 +1,7 @@
 {
   "name": "shishi-mobile",
   "main": "expo-router/entry",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "dependencies": {
     "@expo-google-fonts/noto-sans-sc": "^0.4.3",
     "@expo-google-fonts/noto-serif-sc": "^0.4.3",
@@ -63,6 +63,7 @@
     "version:check": "node --experimental-strip-types scripts/check-version.mjs",
     "build:android:development": "npx eas-cli build --platform android --profile development",
     "build:android:preview": "npx eas-cli build --platform android --profile preview",
+    "build:android:personal": "npx eas-cli build --platform android --profile personal",
     "build:android:production": "npx eas-cli build --platform android --profile production"
   },
   "expo": {

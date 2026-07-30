@@ -48,6 +48,45 @@ export function clusterFootprintPlaces(places: FootprintPlace[], zoom: number) {
   }));
 }
 
+function distanceMeters(first: Pick<FootprintPlace, 'latitude' | 'longitude'>, second: Pick<FootprintPlace, 'latitude' | 'longitude'>) {
+  const latitude = (first.latitude + second.latitude) / 2;
+  const latitudeDistance = (first.latitude - second.latitude) * 111_320;
+  const longitudeDistance = (first.longitude - second.longitude) * 111_320 * Math.cos(latitude * Math.PI / 180);
+  return Math.hypot(latitudeDistance, longitudeDistance);
+}
+
+export function groupFootprintRegions(places: FootprintPlace[], radiusMeters = 500) {
+  const remaining = new Set(places.map((_, index) => index));
+  const regions: FootprintCluster[] = [];
+  while (remaining.size) {
+    const seed = remaining.values().next().value as number;
+    const memberIndexes = [seed];
+    remaining.delete(seed);
+    for (let cursor = 0; cursor < memberIndexes.length; cursor += 1) {
+      const member = places[memberIndexes[cursor]];
+      for (const candidateIndex of [...remaining]) {
+        if (distanceMeters(member, places[candidateIndex]) <= radiusMeters) {
+          memberIndexes.push(candidateIndex);
+          remaining.delete(candidateIndex);
+        }
+      }
+    }
+    const members = memberIndexes.map((index) => places[index]);
+    regions.push({
+      id: `region:${members.map((place) => place.id).sort().join('|')}`,
+      latitude: members.reduce((sum, place) => sum + place.latitude, 0) / members.length,
+      longitude: members.reduce((sum, place) => sum + place.longitude, 0) / members.length,
+      places: members,
+    });
+  }
+  return regions.sort((left, right) => {
+    const latest = (region: FootprintCluster) => region.places
+      .flatMap((place) => place.entries)
+      .reduce((value, entry) => value > entry.occurredAt ? value : entry.occurredAt, '');
+    return latest(right).localeCompare(latest(left));
+  });
+}
+
 export function summarizeFootprintPlace(place: FootprintPlace): FootprintPlaceSummary {
   const occurredAt = place.entries.map((entry) => entry.occurredAt).sort();
   return {
@@ -60,6 +99,7 @@ export function summarizeFootprintPlace(place: FootprintPlace): FootprintPlaceSu
 
 export function initialFootprintCamera(places: FootprintPlace[]) {
   if (!places.length) return { latitude: 35.8, longitude: 104.2, zoom: 3.5 };
+  if (places.length === 1) return { latitude: places[0].latitude, longitude: places[0].longitude, zoom: 14 };
   const latitude = places.reduce((sum, item) => sum + item.latitude, 0) / places.length;
   const longitude = places.reduce((sum, item) => sum + item.longitude, 0) / places.length;
   const latitudeSpan = Math.max(...places.map((item) => item.latitude)) - Math.min(...places.map((item) => item.latitude));

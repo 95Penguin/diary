@@ -256,15 +256,10 @@ export default function SummariesScreen() {
 
           {period === 'year' ? (
             <>
-              <Text style={[styles.sectionTitle, { color: readingTheme.text }]}>全年足迹</Text>
+              <Text style={[styles.sectionTitle, { color: readingTheme.text }]}>全年记录</Text>
               <YearHeatmap data={heatmap} year={new Date(overview.current.range.start).getFullYear()} />
             </>
           ) : null}
-
-          <View style={[styles.exportHint, { borderColor: readingTheme.border }]}>
-            <Text style={[styles.exportHintTitle, { color: readingTheme.text }]}>保存这份总结</Text>
-            <Text style={[styles.exportHintText, { color: readingTheme.secondary }]}>导出为图片将在后续版本加入。</Text>
-          </View>
         </ScrollView>
       ) : null}
     </SafeAreaView>

@@ -43,6 +43,7 @@ export default function BackupScreen() {
   const [message, setMessage] = useState('');
   const [mediaBytes, setMediaBytes] = useState(0);
   const [operationProgress, setOperationProgress] = useState<OperationProgress>(null);
+  const [advancedVisible, setAdvancedVisible] = useState(false);
 
   const load = useCallback(async () => {
     const [nextStats, exportedAt, storage] = await Promise.all([getJournalStats(db), getLastExportAt(db), getJournalMediaStorageUsage()]);
@@ -304,53 +305,53 @@ export default function BackupScreen() {
         </View>
       </View>
 
-      <View style={[styles.explanation, { backgroundColor: readingTheme.surface }]}>
-        <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>完整备份</Text>
-        <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>记录数据保存为独立 JSON，图片、视频和封面按文件存放，避免 Base64 额外增加约三分之一体积。</Text>
-        <View style={[styles.notice, { backgroundColor: readingTheme.background }]}><Text style={[styles.noticeText, { color: readingTheme.secondary }]}>仍兼容以前导出的 JSON 备份；视频较多时导出和恢复需要更长时间。</Text></View>
-      </View>
-      <Pressable onPress={() => router.push('/readable-export' as Href)} style={({ pressed }) => [styles.readableCard, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View style={styles.directoryCopy}><Text style={[styles.explanationTitle, { color: readingTheme.text }]}>可阅读导出</Text><Text style={[styles.explanationText, { color: readingTheme.secondary }]}>导出 Markdown / HTML，用于阅读、编辑或打印；不能代替完整备份</Text></View><Text style={styles.readableArrow}>›</Text>
-      </Pressable>
-
-      <View style={[styles.directoryCard, { borderColor: readingTheme.border }]}>
-        <View style={styles.directoryCopy}>
-          <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>固定备份目录</Text>
-          <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>
-            {preferences.backupDirectoryUri ? `已连接：${preferences.backupDirectoryLabel ?? '系统目录'} · 自动保留最近 5 份` : '选择手机文件夹或系统文件管理器中的网盘目录'}
-          </Text>
-        </View>
-        <Pressable onPress={() => void selectBackupDirectory()} style={({ pressed }) => [styles.directorySelect, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-          <Text style={styles.directorySelectText}>{preferences.backupDirectoryUri ? '更换' : '选择'}</Text>
-        </Pressable>
-      </View>
-      <Pressable accessibilityRole="switch" accessibilityState={{ checked: preferences.automaticBackupEnabled }} onPress={() => void toggleAutomaticBackup()} style={[styles.autoBackupRow, { backgroundColor: readingTheme.surface }]}>
-        <View style={styles.directoryCopy}>
-          <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>每日自动备份</Text>
-          <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>
-            {preferences.lastAutomaticBackupAt
-              ? `最近自动备份：${formatShortDateTime(preferences.lastAutomaticBackupAt)}`
-              : '打开应用时检查，满 24 小时后备份并保留最近 5 份'}
-          </Text>
-        </View>
-        <View style={[styles.switchTrack, preferences.automaticBackupEnabled && styles.switchTrackActive]}>
-          <View style={[styles.switchThumb, preferences.automaticBackupEnabled && styles.switchThumbActive]} />
-        </View>
-      </Pressable>
-      <Pressable disabled={exporting} onPress={() => void saveToSelectedDirectory()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
-        {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>{preferences.backupDirectoryUri ? '备份到固定目录' : '选择目录并备份'}</Text>}
-      </Pressable>
       <Pressable disabled={exporting} onPress={() => void exportZip()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
-        <Text style={styles.exportText}>通过其他应用导出 ZIP</Text>
+        {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>立即备份 ZIP</Text>}
       </Pressable>
       <Pressable disabled={importing} onPress={() => void chooseBackup()} style={({ pressed }) => [styles.importButton, pressed && styles.pressed]}><Text style={styles.importText}>从 ZIP 或 JSON 恢复</Text></Pressable>
-      <Pressable disabled={exporting || importing} onPress={() => void checkBackupHealth()} style={({ pressed }) => [styles.checkButton, { borderColor: readingTheme.border }, pressed && styles.pressed]}><Text style={[styles.checkText, { color: readingTheme.secondary }]}>检查一个 ZIP 备份</Text></Pressable>
+      <Pressable accessibilityState={{ expanded: advancedVisible }} onPress={() => setAdvancedVisible((value) => !value)} style={[styles.advancedToggle, { borderColor: readingTheme.border }]}>
+        <Text style={[styles.advancedToggleText, { color: readingTheme.secondary }]}>更多备份选项</Text>
+        <Text style={styles.advancedArrow}>{advancedVisible ? '⌃' : '⌄'}</Text>
+      </Pressable>
+      {advancedVisible ? <View style={styles.advancedArea}>
+        <View style={[styles.explanation, { backgroundColor: readingTheme.surface }]}>
+          <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>完整备份说明</Text>
+          <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>ZIP 会保存记录、个人资料、设置和本地媒体；仍兼容以前导出的 JSON 备份。</Text>
+        </View>
+        <Pressable onPress={() => router.push('/readable-export' as Href)} style={({ pressed }) => [styles.readableCard, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+          <View style={styles.directoryCopy}><Text style={[styles.explanationTitle, { color: readingTheme.text }]}>可阅读导出</Text><Text style={[styles.explanationText, { color: readingTheme.secondary }]}>生成 Markdown / HTML，用于阅读或打印</Text></View><Text style={styles.readableArrow}>›</Text>
+        </Pressable>
+        <View style={[styles.directoryCard, { borderColor: readingTheme.border }]}>
+          <View style={styles.directoryCopy}>
+            <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>固定备份目录</Text>
+            <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>
+              {preferences.backupDirectoryUri ? `已连接：${preferences.backupDirectoryLabel ?? '系统目录'} · 保留最近 5 份` : '选择手机文件夹或系统文件管理器中的网盘目录'}
+            </Text>
+          </View>
+          <Pressable onPress={() => void selectBackupDirectory()} style={({ pressed }) => [styles.directorySelect, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+            <Text style={styles.directorySelectText}>{preferences.backupDirectoryUri ? '更换' : '选择'}</Text>
+          </Pressable>
+        </View>
+        <Pressable accessibilityRole="switch" accessibilityState={{ checked: preferences.automaticBackupEnabled }} onPress={() => void toggleAutomaticBackup()} style={[styles.autoBackupRow, { backgroundColor: readingTheme.surface }]}>
+          <View style={styles.directoryCopy}>
+            <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>每日自动备份</Text>
+            <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>
+              {preferences.lastAutomaticBackupAt ? `最近自动备份：${formatShortDateTime(preferences.lastAutomaticBackupAt)}` : '打开应用时检查，并自动保留最近 5 份'}
+            </Text>
+          </View>
+          <View style={[styles.switchTrack, preferences.automaticBackupEnabled && styles.switchTrackActive]}><View style={[styles.switchThumb, preferences.automaticBackupEnabled && styles.switchThumbActive]} /></View>
+        </Pressable>
+        <Pressable disabled={exporting} onPress={() => void saveToSelectedDirectory()} style={({ pressed }) => [styles.directoryBackupButton, (pressed || exporting) && styles.pressed]}>
+          <Text style={styles.directoryBackupText}>{preferences.backupDirectoryUri ? '备份到固定目录' : '选择目录并备份'}</Text>
+        </Pressable>
+        <Pressable disabled={exporting || importing} onPress={() => void checkBackupHealth()} style={({ pressed }) => [styles.checkButton, { borderColor: readingTheme.border }, pressed && styles.pressed]}><Text style={[styles.checkText, { color: readingTheme.secondary }]}>检查一个 ZIP 备份</Text></Pressable>
+        <Text style={styles.hint}>固定目录备份仅在 Android 可用；网盘未出现在目录选择器中时，请使用上方“立即备份 ZIP”。</Text>
+      </View> : null}
       {operationProgress ? <View style={styles.progressArea}>
         <View style={[styles.progressTrack, { backgroundColor: readingTheme.surface }]}><View style={[styles.progressFill, { width: `${Math.round(operationProgress.value * 100)}%` }]} /></View>
         <Text style={[styles.progressLabel, { color: readingTheme.secondary }]}>{operationProgress.label}</Text>
       </View> : null}
       {message ? <Text style={[styles.message, message.includes('失败') && styles.error]}>{message}</Text> : null}
-      <Text style={styles.hint}>固定目录备份仅在 Android 可用；如果网盘未出现在系统目录选择器中，请使用“通过其他应用导出 ZIP”。</Text>
     </ScrollView>
     <Modal visible={Boolean(pendingBackup)} transparent animationType="fade" onRequestClose={() => { setPendingBackup(null); setPendingZipUri(null); }}>
       <Pressable onPress={() => { setPendingBackup(null); setPendingZipUri(null); }} style={styles.overlay}>
@@ -389,7 +390,10 @@ const styles = StyleSheet.create({
   healthUnknown: { backgroundColor: colors.textFaint },
   healthText: { flex: 1, marginTop: 0 },
   explanation: { marginTop: spacing.lg, padding: spacing.lg, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted },
-  readableCard: { minHeight: 70, flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, padding: spacing.lg, borderRadius: radii.lg }, readableArrow: { marginLeft: spacing.md, color: colors.primary, fontSize: 22 },
+  advancedToggle: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth },
+  advancedToggleText: { fontSize: 11, fontWeight: '600' }, advancedArrow: { color: colors.primary, fontSize: 13 },
+  advancedArea: { paddingBottom: spacing.sm },
+  readableCard: { minHeight: 60, flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, padding: spacing.md, borderRadius: radii.md }, readableArrow: { marginLeft: spacing.md, color: colors.primary, fontSize: 20 },
   explanationTitle: { color: colors.text, fontSize: 13, fontWeight: '600' }, explanationText: { marginTop: spacing.sm, color: colors.textSecondary, fontSize: 11, lineHeight: 18 },
   notice: { marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: '#F7EFE2' }, noticeText: { color: '#816E4F', fontSize: 11, lineHeight: 17 },
   directoryCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg },
@@ -403,6 +407,7 @@ const styles = StyleSheet.create({
   switchThumbActive: { alignSelf: 'flex-end' },
   exportButton: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, pressed: { opacity: 0.62 }, exportText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   importButton: { height: 42, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, importText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
+  directoryBackupButton: { height: 40, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, directoryBackupText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
   checkButton: { height: 38, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.pill },
   checkText: { fontSize: 11, fontWeight: '600' },
   message: { marginTop: spacing.md, color: colors.primary, fontSize: 11, textAlign: 'center' }, error: { color: colors.danger },
