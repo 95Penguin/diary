@@ -135,6 +135,7 @@ function AppStack() {
             <Stack.Screen name="about" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="metadata" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="content-management" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="templates" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="batch-manage" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="readable-export" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="location-health" options={{ animation: 'slide_from_right' }} />

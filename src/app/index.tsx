@@ -15,6 +15,7 @@ import {
   cleanupExpiredTrash,
   deleteEntry,
   getDraftCount,
+  getEntry,
   getCalendarOrder,
   listCalendarMonthCounts,
   listEntriesForDate,
@@ -46,9 +47,17 @@ export default function HomeScreen() {
   const [draftCount, setDraftCount] = useState(0);
   const [quickHintVisible, setQuickHintVisible] = useState(false);
   const cleanupStarted = useRef(false);
+  const pendingDetailEntryId = useRef<string | null>(null);
+  const [entryRefresh, setEntryRefresh] = useState<{ id: string; revision: number } | null>(null);
 
   const refresh = useCallback(async () => {
-    setRefreshKey((value) => value + 1);
+    const returningEntryId = pendingDetailEntryId.current;
+    pendingDetailEntryId.current = null;
+    if (returningEntryId) {
+      setEntryRefresh((current) => ({ id: returningEntryId, revision: (current?.revision ?? 0) + 1 }));
+    } else {
+      setRefreshKey((value) => value + 1);
+    }
     void getDraftCount(db).then(setDraftCount);
     if (!cleanupStarted.current) {
       cleanupStarted.current = true;
@@ -81,6 +90,11 @@ export default function HomeScreen() {
     setActionEntry(entry);
   }, []);
 
+  const openEntry = useCallback((entry: Entry) => {
+    pendingDetailEntryId.current = entry.id;
+    router.push({ pathname: '/entry/[id]', params: { id: entry.id } });
+  }, []);
+
   async function deleteSelectedEntry() {
     if (!actionEntry) return;
     try {
@@ -102,8 +116,8 @@ export default function HomeScreen() {
       </View>
 
       <View style={styles.content}>
-        <View accessibilityElementsHidden={view !== 'timeline'} importantForAccessibility={view === 'timeline' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'timeline' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'timeline' && styles.hiddenPane]}><Timeline refreshKey={refreshKey} onLongPress={openEntryActions} /></View>
-        <View accessibilityElementsHidden={view !== 'calendar'} importantForAccessibility={view === 'calendar' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'calendar' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'calendar' && styles.hiddenPane]}><CalendarView refreshKey={refreshKey} selected={selectedDate} onSelect={setSelectedDate} onLongPress={openEntryActions} /></View>
+        <View accessibilityElementsHidden={view !== 'timeline'} importantForAccessibility={view === 'timeline' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'timeline' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'timeline' && styles.hiddenPane]}><Timeline refreshKey={refreshKey} entryRefresh={entryRefresh} onOpen={openEntry} onLongPress={openEntryActions} /></View>
+        <View accessibilityElementsHidden={view !== 'calendar'} importantForAccessibility={view === 'calendar' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'calendar' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'calendar' && styles.hiddenPane]}><CalendarView refreshKey={refreshKey} entryRefresh={entryRefresh} selected={selectedDate} onSelect={setSelectedDate} onOpen={openEntry} onLongPress={openEntryActions} /></View>
       </View>
 
       {quickHintVisible ? <Pressable accessibilityRole="button" accessibilityLabel="知道了" onPress={dismissQuickHint} style={[styles.quickHint, { backgroundColor: readingTheme.surface }]}><Text style={[styles.quickHintText, { color: readingTheme.secondary }]}>长按“＋”可以直接进入快速记录</Text><Text style={styles.quickHintClose}>知道了</Text></Pressable> : null}
@@ -121,7 +135,7 @@ type ActiveFilterKind = Exclude<FilterKind, 'none'>;
 const PAGE_SIZE = 30;
 const EMPTY_FILTER_OPTIONS: EntryFilterOptions = { locations: [], tags: [], moods: [], weather: [] };
 
-function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress: (entry: Entry) => void }) {
+function Timeline({ refreshKey, entryRefresh, onOpen, onLongPress }: { refreshKey: number; entryRefresh: { id: string; revision: number } | null; onOpen: (entry: Entry) => void; onLongPress: (entry: Entry) => void }) {
   const db = useSQLiteContext();
   const { readingTheme } = useAppPreferences();
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -165,6 +179,24 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
   useEffect(() => {
     if (refreshKey > 0) void loadFirstPage();
   }, [loadFirstPage, refreshKey]);
+
+  useEffect(() => {
+    if (!entryRefresh) return;
+    let active = true;
+    void getEntry(db, entryRefresh.id).then((updated) => {
+      if (!active) return;
+      setEntries((current) => {
+        const existingIndex = current.findIndex((item) => item.id === entryRefresh.id);
+        if (existingIndex < 0) return current;
+        if (!updated) return current.filter((item) => item.id !== entryRefresh.id);
+        const next = [...current];
+        next[existingIndex] = updated;
+        next.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+        return next;
+      });
+    }).catch(() => { /* Keep the existing card when a detail refresh fails. */ });
+    return () => { active = false; };
+  }, [db, entryRefresh]);
 
   const loadMore = useCallback(async () => {
     if (!hasMore || !cursor || loading || loadingMore) return;
@@ -240,7 +272,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
       sections={groups}
       keyExtractor={(entry) => entry.id}
       renderSectionHeader={({ section }) => <View style={[styles.dayHeader, { backgroundColor: readingTheme.background }]}><Text style={[styles.dayTitle, { color: readingTheme.text }]}>{section.label}</Text><Text style={[styles.weekday, { color: readingTheme.secondary }]}>{section.weekday}</Text></View>}
-      renderItem={({ item }) => <EntryCard entry={item} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: item.id } })} onLongPress={() => onLongPress(item)} />}
+      renderItem={({ item }) => <EntryCard entry={item} onPress={() => onOpen(item)} onLongPress={() => onLongPress(item)} />}
       ListEmptyComponent={<EmptyState title={!activeFilterCount ? '从此刻开始' : '没有相关记录'} description={!activeFilterCount ? '写下第一条记录，把日子慢慢收好。' : '减少一个筛选条件试试。'} />}
       contentContainerStyle={styles.timeline}
       showsVerticalScrollIndicator={false}
@@ -264,7 +296,7 @@ function Timeline({ refreshKey, onLongPress }: { refreshKey: number; onLongPress
   </View>;
 }
 
-function CalendarViewComponent({ refreshKey, selected, onSelect, onLongPress }: { refreshKey: number; selected: string; onSelect: (date: string) => void; onLongPress: (entry: Entry) => void }) {
+function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, onOpen, onLongPress }: { refreshKey: number; entryRefresh: { id: string; revision: number } | null; selected: string; onSelect: (date: string) => void; onOpen: (entry: Entry) => void; onLongPress: (entry: Entry) => void }) {
   const db = useSQLiteContext();
   const { readingTheme } = useAppPreferences();
   const now = useMemo(() => new Date(), []);
@@ -294,6 +326,20 @@ function CalendarViewComponent({ refreshKey, selected, onSelect, onLongPress }: 
     });
     return () => { active = false; };
   }, [db, refreshKey, selected]);
+  useEffect(() => {
+    if (!entryRefresh) return;
+    let active = true;
+    void getEntry(db, entryRefresh.id).then((updated) => {
+      if (!active) return;
+      setSelectedEntries((current) => {
+        if (!current.some((item) => item.id === entryRefresh.id)) return current;
+        return updated && dateKey(updated.occurredAt) === selected
+          ? current.map((item) => item.id === entryRefresh.id ? updated : item)
+          : current.filter((item) => item.id !== entryRefresh.id);
+      });
+    }).catch(() => { /* Keep the existing card when a detail refresh fails. */ });
+    return () => { active = false; };
+  }, [db, entryRefresh, selected]);
   const cells = useMemo(() => {
     const firstWeekday = (month.getDay() + 6) % 7;
     const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
@@ -352,7 +398,7 @@ function CalendarViewComponent({ refreshKey, selected, onSelect, onLongPress }: 
   return <FlatList
     data={orderedSelectedEntries}
     keyExtractor={(entry) => entry.id}
-    renderItem={({ item }) => <EntryCard entry={item} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: item.id } })} onLongPress={() => onLongPress(item)} />}
+    renderItem={({ item }) => <EntryCard entry={item} onPress={() => onOpen(item)} onLongPress={() => onLongPress(item)} />}
     ListHeaderComponent={calendarHeader}
     ListEmptyComponent={dateLoading ? <ActivityIndicator style={styles.pageLoader} color={colors.primary} /> : <EmptyState title="这一天还没有记录" description="可以修改日期，补记发生过的事情。" />}
     contentContainerStyle={styles.calendar}

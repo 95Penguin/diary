@@ -9,6 +9,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
 import { createDraftId, createEntryWithDetails, deleteDraft, getDraft, getEntry, getLocationPageDetail, isNewFootprintLocation, listEntryFilterOptions, saveDraft, saveLocationDetail, updateEntryWithDetails, type EntryFilterOptions } from '@/database/journal-repository';
+import { listJournalTemplates } from '@/database/template-repository';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatShortDateTime, occurrenceTimeForDate, parseLocalDateTime, toLocalDateTimeInput } from '@/utils/date';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
@@ -67,6 +68,7 @@ export default function ComposeScreen() {
   const [locationCoordinateChanged, setLocationCoordinateChanged] = useState(false);
   const [locationPickerVisible, setLocationPickerVisible] = useState(false);
   const [templatePickerVisible, setTemplatePickerVisible] = useState(false);
+  const [journalTemplates, setJournalTemplates] = useState<JournalTemplate[]>(JOURNAL_TEMPLATES);
   const [locating, setLocating] = useState(false);
   const [locationStatus, setLocationStatus] = useState('');
   const [originalTags, setOriginalTags] = useState<string[]>([]);
@@ -140,7 +142,12 @@ export default function ComposeScreen() {
   }
 
   function applyTemplate(template: JournalTemplate) {
-    changeContent(applyJournalTemplate(content, template));
+    const next = applyJournalTemplate(content, template);
+    if (next.length > 10000) {
+      showToast(`正文最多 10000 字，当前还可加入 ${Math.max(0, 10000 - content.length)} 字`);
+      return;
+    }
+    changeContent(next);
     setTemplatePickerVisible(false);
     showToast(content.trim() ? `已在正文后追加“${template.title}”` : `已使用“${template.title}”`);
     requestAnimationFrame(() => inputRef.current?.focus());
@@ -155,6 +162,7 @@ export default function ComposeScreen() {
 
   useEffect(() => {
     void listEntryFilterOptions(db).then(setSuggestions).catch(() => { /* Suggestions are optional. */ });
+    void listJournalTemplates(db).then(setJournalTemplates).catch(() => { /* System templates remain available. */ });
   }, [db]);
 
   useEffect(() => {
@@ -590,7 +598,7 @@ export default function ComposeScreen() {
           <Text style={[styles.templateTitle, { color: readingTheme.text }]}>选择一个写作模板</Text>
           <Text style={[styles.templateHint, { color: readingTheme.secondary }]}>{content.trim() ? '模板会追加在已有正文后，不会覆盖现在的内容。' : '选好后仍可以自由修改所有文字。'}</Text>
           <ScrollView style={styles.templateList} showsVerticalScrollIndicator={false}>
-            {JOURNAL_TEMPLATES.map((template) => <Pressable key={template.id} onPress={() => applyTemplate(template)} style={({ pressed }) => [styles.templateItem, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+            {journalTemplates.map((template) => <Pressable key={template.id} onPress={() => applyTemplate(template)} style={({ pressed }) => [styles.templateItem, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
               <View style={styles.templateLeaf}><Text style={styles.templateLeafText}>⌁</Text></View>
               <View style={styles.templateCopy}><Text style={[styles.templateItemTitle, { color: readingTheme.text }]}>{template.title}</Text><Text style={[styles.templateDescription, { color: readingTheme.secondary }]}>{template.description}</Text></View>
               <Text style={styles.templateArrow}>›</Text>

@@ -1,5 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, EntryVersion, FollowUp, FollowUpImage, FootprintEntry, ImportResult, JournalBackup, JournalMediaType, JournalStats, PendingFootprintEntry, PendingLocationGroup, SearchResult } from '@/domain/journal';
+import { getJournalTemplateSettings, saveJournalTemplateSettings } from './template-repository.ts';
+import { mergeJournalTemplateSettings } from '../utils/journal-templates.ts';
 import { findLocationDuplicates, type LocationDuplicateSuggestion } from '../utils/location-duplicates.ts';
 
 type EntryRow = { id: string; content: string; occurred_at: string; created_at: string; updated_at: string; mood: string | null; weather: string | null; favorited_at: string | null; location_name: string | null; latitude: number | null; longitude: number | null };
@@ -1135,6 +1137,7 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
   );
   const suppressed = await db.getAllAsync<{ entry_id: string }>('SELECT entry_id FROM memory_suppressed_entries');
   const metadataCatalog = await getMetadataCatalog(db);
+  const journalTemplates = await getJournalTemplateSettings(db);
   const preferencesRow = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'app-preferences'");
   let appPreferences: JournalBackup['appPreferences'];
   if (preferencesRow) {
@@ -1188,6 +1191,7 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
       latitude: version.latitude, longitude: version.longitude, tags: parseJsonArray<string>(version.tags_json), createdAt: version.created_at })),
     suppressedMemoryEntryIds: suppressed.map((item) => item.entry_id),
     metadataCatalog,
+    journalTemplates,
     appPreferences,
   };
 }
@@ -1321,6 +1325,10 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
         locationDetails: { ...backup.metadataCatalog.locationDetails, ...current.locationDetails },
       };
       await saveMetadataCatalog(txn, restored);
+    }
+    if (backup.journalTemplates) {
+      const currentTemplates = await getJournalTemplateSettings(txn);
+      await saveJournalTemplateSettings(txn, mergeJournalTemplateSettings(currentTemplates, backup.journalTemplates));
     }
   });
   return result;

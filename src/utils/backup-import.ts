@@ -1,4 +1,5 @@
 import type { JournalBackup } from '@/domain/journal';
+import { parseJournalTemplateSettings } from './journal-templates.ts';
 
 function isString(value: unknown): value is string { return typeof value === 'string'; }
 function isNullableString(value: unknown): value is string | null { return value === null || isString(value); }
@@ -48,6 +49,13 @@ export function parseJournalBackup(contents: string): JournalBackup {
   const validVersions = backup.versions === undefined || (Array.isArray(backup.versions) && backup.versions.every((item) => item && isString(item.id) && isString(item.entryId) && isString(item.content) && isString(item.occurredAt) && isString(item.createdAt) && Array.isArray(item.tags)));
   const validSuppressed = backup.suppressedMemoryEntryIds === undefined || (Array.isArray(backup.suppressedMemoryEntryIds) && backup.suppressedMemoryEntryIds.every(isString));
   const validMetadataCatalog = isMetadataCatalog(backup.metadataCatalog);
+  const validJournalTemplates = backup.journalTemplates === undefined || (() => {
+    const parsed = parseJournalTemplateSettings(backup.journalTemplates);
+    const source = backup.journalTemplates;
+    return Boolean(source) && typeof source === 'object'
+      && Object.keys(parsed.systemOverrides).length === Object.keys(source.systemOverrides ?? {}).length
+      && parsed.custom.length === (Array.isArray(source.custom) ? source.custom.length : -1);
+  })();
   const preferences = backup.appPreferences;
   const validAppPreferences = preferences === undefined || (
     isString(preferences.nickname)
@@ -65,7 +73,7 @@ export function parseJournalBackup(contents: string): JournalBackup {
     && (preferences.locationPrivacyMode === undefined || ['precise', 'approximate', 'nameOnly', 'ask'].includes(preferences.locationPrivacyMode))
     && (preferences.exportLocationMode === undefined || ['include', 'hidden'].includes(preferences.exportLocationMode))
   );
-  if (!validEntries || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validMetadataCatalog || !validAppPreferences) throw new Error('invalid-backup');
+  if (!validEntries || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validMetadataCatalog || !validJournalTemplates || !validAppPreferences) throw new Error('invalid-backup');
 
   const entries = backup.entries as JournalBackup['entries'];
   const followUps = backup.followUps as JournalBackup['followUps'];

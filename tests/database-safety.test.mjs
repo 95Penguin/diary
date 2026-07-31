@@ -29,6 +29,7 @@ import {
   restoreEntry,
 } from '../src/database/journal-repository.ts';
 import { DATABASE_VERSION, migrateDatabase } from '../src/database/migrate.ts';
+import { getJournalTemplateSettings, saveJournalTemplate } from '../src/database/template-repository.ts';
 import { createTestDatabase } from './sqlite-test-adapter.mjs';
 
 function backupFixture() {
@@ -239,6 +240,8 @@ test('backup v11 preserves location details and portable app preferences', async
       backupDirectoryUri: 'content://device-only',
     }),
   );
+  await saveJournalTemplate(sourceDb, 'daily-review', { title: '我的复盘', description: '自定义系统模板', content: '今天：' });
+  await saveJournalTemplate(sourceDb, null, { title: '周复盘', description: '每周使用', content: '本周：' });
 
   const backup = await createJournalExport(sourceDb);
   assert.equal(backup.version, 11);
@@ -246,11 +249,16 @@ test('backup v11 preserves location details and portable app preferences', async
   assert.equal(backup.appPreferences.avatarLocalUri, 'file:///avatar.png');
   assert.equal(backup.appPreferences.readingTheme, 'green');
   assert.equal('backupDirectoryUri' in backup.appPreferences, false);
+  assert.equal(backup.journalTemplates.systemOverrides['daily-review'].title, '我的复盘');
+  assert.equal(backup.journalTemplates.custom[0].title, '周复盘');
   await importJournalBackup(restoredDb, backup);
   const detail = await getLocationPageDetail(restoredDb, '北京');
   assert.equal(detail.address, '北京市海淀区');
   assert.equal(detail.category, '学校');
   assert.equal(detail.favorite, true);
+  const restoredTemplates = await getJournalTemplateSettings(restoredDb);
+  assert.equal(restoredTemplates.systemOverrides['daily-review'].content, '今天：');
+  assert.equal(restoredTemplates.custom[0].title, '周复盘');
 });
 
 test('timeline combines time-independent tag, location and mood filters', async (t) => {

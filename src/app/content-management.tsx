@@ -5,6 +5,7 @@ import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 
 const items: { title: string; description: string; route: Href }[] = [
+  { title: '模板管理', description: '创建自己的模板，或修改系统模板', route: '/templates' as Href },
   { title: '地点与标签管理', description: '地点合并、别名、置顶，以及标签整理', route: '/metadata' as Href },
   { title: '地点隐私与体检', description: '管理坐标隐私，并检查地点数据质量', route: '/location-health' as Href },
   { title: '批量整理', description: '批量修改标签、地点、收藏或移入回收站', route: '/batch-manage' as Href },

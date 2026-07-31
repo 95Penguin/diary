@@ -1,3 +1,5 @@
+import type { JournalTemplateSettings } from '@/utils/journal-templates';
+
 export type JournalMediaType = 'image' | 'video' | 'livePhoto';
 export type FollowUpImage = { id: string; followUpId: string; uri: string; width: number; height: number; sortOrder: number; mediaType: JournalMediaType; pairedVideoUri: string | null; duration: number | null; thumbnailUri: string | null };
 export type FollowUp = { id: string; entryId: string; content: string; createdAt: string; updatedAt: string; images: FollowUpImage[] };
@@ -25,6 +27,7 @@ export type JournalBackup = {
   tags: { entryId: string; label: string; sortOrder: number }[];
   versions?: { id: string; entryId: string; content: string; occurredAt: string; mood: string | null; weather: string | null; locationName: string | null; latitude: number | null; longitude: number | null; tags: string[]; createdAt: string }[];
   suppressedMemoryEntryIds?: string[];
+  journalTemplates?: JournalTemplateSettings;
   metadataCatalog?: {
     tags: string[];
     locations: string[];

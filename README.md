@@ -9,9 +9,10 @@
 
 ## 当前能力
 
-- 记录：正文、图片与视频、发生时间、心情、天气、地点、标签和日记模板
-- 时间轴：按日期分组，支持搜索、筛选、收藏、草稿和记录详情
-- 日历与回忆：按日期回看，随机拾起记录并生成时光总结
+- 记录：正文、图片与视频、发生时间、心情、天气、地点、标签和可自定义日记模板
+- 模板：创建、编辑和删除个人模板；系统模板支持修改与恢复默认，并随完整备份迁移
+- 时间轴：按日期分组，支持搜索、筛选、收藏、草稿和记录详情；详情返回时保留原浏览位置
+- 日历与回忆：按日期回看、随机拾起记录、生成时光总结，并按年份查看年度足迹热力图
 - 后续：为已有记录补充带独立时间的内容
 - 批量管理：批量修改标签、地点、收藏状态或移入回收站
 - 标签与地点：新增、重命名、合并、删除和常用项管理
@@ -61,7 +62,12 @@ npm run version:check
 npx tsc --noEmit
 npm run lint
 npm run test:data
+npx expo-doctor
 ```
+
+当前项目固定使用 Expo SDK 57；依赖版本以 `expo-doctor` 的兼容性检查结果为准。
+补丁依赖可以更新，但发布 `v1.0.5` 时不要修改 `package.json`、`app.json` 中的
+应用版本号，也不要改动 Android `versionCode` 7 或 iOS `buildNumber` 6。
 
 ## 高德地图配置
 
@@ -107,14 +113,20 @@ npm run build:android:preview
 
 ## 提交与发布
 
-提交当前版本代码：
+确认上面的检查全部通过后，提交当前版本代码：
 
 ```bash
-git add README.md src/app/backup.tsx src/app/footprint-map.tsx src/app/index.tsx \
-  'src/app/location/[name].tsx' src/app/summaries.tsx \
-  src/components/location-picker-modal.tsx
-git commit -m "release: prepare v1.0.5"
+git status --short
+git add -A
+git commit -m "feat: complete v1.0.5 journal experience"
 git push origin main
+```
+
+构建两个 APK：
+
+```bash
+npm run build:android:personal
+npm run build:android:preview
 ```
 
 确认两个 APK 已下载到 `Downloads` 并按上面的名称保存后，创建 GitHub Release：
@@ -137,6 +149,35 @@ gh release upload v1.0.5 \
   --repo 95Penguin/diary
 ```
 
+检查 Release 是否已经存在：
+
+```bash
+gh release view v1.0.5 --repo 95Penguin/diary
+```
+
+`v1.0.5` tag 或 Release 已存在时不要再次运行 `gh release create`，使用
+`gh release upload ... --clobber` 替换同名 APK：
+
+```bash
+gh release upload v1.0.5 \
+  /Users/95penguin/Downloads/shishi-v1.0.5-personal-arm64.apk \
+  /Users/95penguin/Downloads/shishi-v1.0.5-preview-universal.apk \
+  --repo 95Penguin/diary \
+  --clobber
+```
+
+## 从浮华录迁移
+
+仓库提供了本地转换脚本，可将“浮华录”的完整 JSON 与媒体目录转换为拾时可恢复的
+ZIP。脚本不会修改原备份，默认读取仓库同级的 `浮华录` 目录：
+
+```bash
+node scripts/convert-fuhualu-backup.mjs
+```
+
+生成文件为 `浮华录/拾时导入备份.zip`。在拾时的“设置 → 备份与恢复”中选择该
+ZIP 并执行合并恢复；正式导入前仍建议先导出一份拾时当前数据。
+
 ## 数据说明
 
 数据库文件名为 `shishi.db`。记录时间以 ISO 8601 UTC 字符串保存，界面按设备
@@ -144,3 +185,7 @@ gh release upload v1.0.5 \
 
 删除采用软删除，并在回收站保留 30 天。升级或覆盖安装前仍建议先导出完整 ZIP
 备份；卸载应用会清除应用沙盒内尚未导出的本地数据。
+
+完整备份包含记录、后续、媒体、标签、编辑历史、地点目录、个人资料、显示设置和
+自定义模板。恢复采用合并策略；同 ID 记录依据更新时间处理，模板冲突优先保留本机
+版本，避免覆盖本机尚未导出的修改。

@@ -131,6 +131,15 @@ test('accepts portable profile and settings in v11 and rejects invalid values', 
   assert.throws(() => parseJournalBackup(JSON.stringify(backup)), /invalid-backup/);
 });
 
+test('rejects duplicate or system-colliding custom template ids', () => {
+  const item = { id: 'same', source: 'custom', title: '模板', description: '', content: '内容：' };
+  const duplicate = { ...validBackup(), version: 11, journalTemplates: { systemOverrides: {}, custom: [item, { ...item }] } };
+  assert.throws(() => parseJournalBackup(JSON.stringify(duplicate)), /invalid-backup/);
+
+  const collision = { ...validBackup(), version: 11, journalTemplates: { systemOverrides: {}, custom: [{ ...item, id: 'daily-review' }] } };
+  assert.throws(() => parseJournalBackup(JSON.stringify(collision)), /invalid-backup/);
+});
+
 test('accepts archive only when every referenced media file is present', () => {
   const backup = parseJournalBackup(JSON.stringify(validBackup()));
   const files = {
