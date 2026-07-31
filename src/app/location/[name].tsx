@@ -8,7 +8,7 @@ import { MediaThumbnail } from '@/components/media-view';
 import { LocationPickerModal } from '@/components/location-picker-modal';
 import { AppDialog } from '@/components/app-dialog';
 import { showAppDialog } from '@/components/app-dialog-host';
-import { clearCoordinatesForLocation, getLocationPageDetail, renameLocationEverywhere, updateLocationCoordinates, updateLocationPreferences, type LocationCategory, type LocationPageDetail } from '@/database/journal-repository';
+import { clearCoordinatesForLocation, getLocationPageDetail, renameLocationEverywhere, updateLocationCoordinates, updateLocationPreferences, type LocationPageDetail } from '@/database/journal-repository';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { applyLocationPrivacy, type CoordinatePrivacyChoice } from '@/utils/location-privacy';
@@ -16,8 +16,6 @@ import { applyLocationPrivacy, type CoordinatePrivacyChoice } from '@/utils/loca
 function formatDay(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(value));
 }
-const CATEGORIES: LocationCategory[] = ['家', '学校', '工作', '旅行', '常去', '想再去'];
-
 export default function LocationDetailScreen() {
   const db = useSQLiteContext();
   const { preferences, readingTheme, readingFontFamily } = useAppPreferences();
@@ -71,13 +69,6 @@ export default function LocationDetailScreen() {
     await updateLocationPreferences(db, detail.name, { favorite });
   }
 
-  async function chooseCategory(category: LocationCategory) {
-    if (!detail) return;
-    const next = detail.category === category ? null : category;
-    setDetail({ ...detail, category: next });
-    await updateLocationPreferences(db, detail.name, { category: next });
-  }
-
   async function confirmCoordinateUpdate() {
     if (!detail || !pendingCoordinate) return;
     let choice: CoordinatePrivacyChoice = 'precise';
@@ -124,7 +115,6 @@ export default function LocationDetailScreen() {
         <View style={styles.nameRow}><Text style={[styles.name, { color: readingTheme.text }]}>{detail.name}</Text><Pressable accessibilityLabel={detail.favorite ? '取消收藏地点' : '收藏地点'} onPress={() => void toggleFavorite()} style={[styles.favorite, { backgroundColor: readingTheme.surface }]}><Text style={styles.favoriteText}>{detail.favorite ? '★ 已收藏' : '☆ 收藏'}</Text></Pressable></View>
         <Text selectable style={[styles.address, { color: readingTheme.secondary }]}>{detail.address || `${detail.latitude.toFixed(5)}, ${detail.longitude.toFixed(5)}`}</Text>
         <Pressable onPress={() => setPickerVisible(true)} style={[styles.correctLocation, { backgroundColor: readingTheme.surface }]}><Text style={styles.correctLocationText}>⌖ 修正地点位置</Text><Text style={[styles.correctLocationHint, { color: readingTheme.secondary }]}>同步更新 {detail.entries.length} 条同名记录</Text></Pressable>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categories}>{CATEGORIES.map((item) => <Pressable key={item} onPress={() => void chooseCategory(item)} style={[styles.category, { backgroundColor: detail.category === item ? colors.primary : readingTheme.surface }]}><Text style={[styles.categoryText, detail.category === item && styles.categoryTextActive]}>{item}</Text></Pressable>)}</ScrollView>
       </View>
       <View style={[styles.stats, { backgroundColor: readingTheme.surface }]}>
         <View style={styles.stat}><Text style={styles.statValue}>{stats.visits}</Text><Text style={[styles.statLabel, { color: readingTheme.secondary }]}>到访次数</Text></View>
@@ -163,7 +153,7 @@ export default function LocationDetailScreen() {
       </Pressable>
     </Modal>
     {pickerVisible ? <LocationPickerModal visible name={detail.name} latitude={detail.latitude} longitude={detail.longitude} accuracy={null} onClose={() => setPickerVisible(false)} onApply={(value) => { setPickerVisible(false); setPendingCoordinate({ address: value.address, latitude: value.latitude, longitude: value.longitude }); }} /> : null}
-    <AppDialog visible={Boolean(pendingCoordinate)} title="更新这个地点的位置？" message={pendingCoordinate ? `将把“${detail.name}”的 ${detail.entries.length} 条记录统一移动到新坐标。地点分类、收藏和记录正文不会改变。` : ''} onClose={() => setPendingCoordinate(null)} actions={[{ label: '取消', onPress: () => setPendingCoordinate(null) }, { label: '确认更新', tone: 'primary', onPress: confirmCoordinateUpdate }]} />
+    <AppDialog visible={Boolean(pendingCoordinate)} title="更新这个地点的位置？" message={pendingCoordinate ? `将把“${detail.name}”的 ${detail.entries.length} 条记录统一移动到新坐标。收藏状态和记录正文不会改变。` : ''} onClose={() => setPendingCoordinate(null)} actions={[{ label: '取消', onPress: () => setPendingCoordinate(null) }, { label: '确认更新', tone: 'primary', onPress: confirmCoordinateUpdate }]} />
   </SafeAreaView>;
 }
 
@@ -173,11 +163,10 @@ const styles = StyleSheet.create({
   back: { color: colors.primary, fontSize: 13 }, headerTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 }, edit: { color: colors.primary, fontSize: 12, fontWeight: '700' },
   scroll: { paddingBottom: spacing.xxxl }, hero: { paddingHorizontal: spacing.xl, paddingTop: spacing.xxl, paddingBottom: spacing.lg },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md }, name: { flex: 1, fontFamily: fonts.serif, fontSize: 24, lineHeight: 34, fontWeight: '600' }, address: { marginTop: spacing.xs, fontSize: 11, lineHeight: 18 },
-  favorite: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill }, favoriteText: { color: colors.primary, fontSize: 9, fontWeight: '700' },
-  correctLocation: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.md }, correctLocationText: { color: colors.primary, fontSize: 10, fontWeight: '700' }, correctLocationHint: { fontSize: 8 },
-  categories: { gap: spacing.xs, paddingTop: spacing.sm }, category: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill }, categoryText: { color: colors.primary, fontSize: 9, fontWeight: '600' }, categoryTextActive: { color: '#FFFFFF' },
+  favorite: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill }, favoriteText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
+  correctLocation: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.md }, correctLocationText: { color: colors.primary, fontSize: 10, fontWeight: '700' }, correctLocationHint: { fontSize: 9 },
   stats: { flexDirection: 'row', marginHorizontal: spacing.xl, paddingVertical: spacing.md, borderRadius: radii.lg },
-  stat: { flex: 1, alignItems: 'center', paddingHorizontal: 2 }, statValue: { color: colors.primary, fontSize: 10, fontWeight: '700', textAlign: 'center' }, statLabel: { marginTop: 4, fontSize: 8 },
+  stat: { flex: 1, alignItems: 'center', paddingHorizontal: 2 }, statValue: { color: colors.primary, fontSize: 10, fontWeight: '700', textAlign: 'center' }, statLabel: { marginTop: 4, fontSize: 9 },
   section: { marginTop: spacing.xxl }, sectionHeading: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', paddingHorizontal: spacing.xl, marginBottom: spacing.md },
   sectionTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, sectionCount: { fontSize: 10 },
   gallery: { paddingHorizontal: spacing.xl, gap: spacing.sm }, photo: { width: 112, height: 112, borderRadius: radii.md },

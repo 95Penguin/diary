@@ -311,7 +311,7 @@ export default function BackupScreen() {
       <Pressable disabled={importing} onPress={() => void chooseBackup()} style={({ pressed }) => [styles.importButton, pressed && styles.pressed]}><Text style={styles.importText}>从 ZIP 或 JSON 恢复</Text></Pressable>
       <Pressable accessibilityState={{ expanded: advancedVisible }} onPress={() => setAdvancedVisible((value) => !value)} style={[styles.advancedToggle, { borderColor: readingTheme.border }]}>
         <Text style={[styles.advancedToggleText, { color: readingTheme.secondary }]}>更多备份选项</Text>
-        <Text style={styles.advancedArrow}>{advancedVisible ? '⌃' : '⌄'}</Text>
+        <View style={[styles.advancedChevron, advancedVisible && styles.advancedChevronOpen]} />
       </Pressable>
       {advancedVisible ? <View style={styles.advancedArea}>
         <View style={[styles.explanation, { backgroundColor: readingTheme.surface }]}>
@@ -391,7 +391,9 @@ const styles = StyleSheet.create({
   healthText: { flex: 1, marginTop: 0 },
   explanation: { marginTop: spacing.lg, padding: spacing.lg, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted },
   advancedToggle: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth },
-  advancedToggleText: { fontSize: 11, fontWeight: '600' }, advancedArrow: { color: colors.primary, fontSize: 13 },
+  advancedToggleText: { fontSize: 11, fontWeight: '600' },
+  advancedChevron: { width: 7, height: 7, marginTop: -3, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] },
+  advancedChevronOpen: { marginTop: 4, transform: [{ rotate: '-135deg' }] },
   advancedArea: { paddingBottom: spacing.sm },
   readableCard: { minHeight: 60, flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, padding: spacing.md, borderRadius: radii.md }, readableArrow: { marginLeft: spacing.md, color: colors.primary, fontSize: 20 },
   explanationTitle: { color: colors.text, fontSize: 13, fontWeight: '600' }, explanationText: { marginTop: spacing.sm, color: colors.textSecondary, fontSize: 11, lineHeight: 18 },

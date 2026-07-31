@@ -1,56 +1,39 @@
 # 拾时 Mobile
 
-拾时是一款本地优先的时间记录应用，用来记下此刻，并在未来重新拾起它。
+拾时是一款本地优先的生活记录应用，用来记下此刻，并在未来重新拾起它。
 
-当前应用版本为 `1.0.3`，Android 与 iOS 包名均为
-`com.penguin95.shishi`。版本号、数据库基线和 EAS 构建流程见
-[docs/versioning.md](docs/versioning.md)。准备生成安装包前，请按
-[构建前真机检查](docs/prebuild-device-checklist.md)完整走一遍关键流程。
+当前版本为 `1.0.5`，Android 应用包名为 `com.penguin95.shishi`，Android
+`versionCode` 为 `7`。版本规则与数据库基线见
+[docs/versioning.md](docs/versioning.md)，构建前建议按
+[构建前真机检查](docs/prebuild-device-checklist.md)完成一次关键流程验收。
 
 ## 当前能力
 
-- 记录此刻：正文、图片与视频、发生时间、心情、天气、地点和标签
-- 时间轴：按日期分组、搜索、组合筛选、收藏和记录详情
+- 记录：正文、图片与视频、发生时间、心情、天气、地点、标签和日记模板
+- 时间轴：按日期分组，支持搜索、筛选、收藏、草稿和记录详情
+- 日历与回忆：按日期回看，随机拾起记录并生成时光总结
 - 后续：为已有记录补充带独立时间的内容
-- 日历：按日期查看当天记录
-- 回忆：随机拾起、近况回顾、年度足迹和时光总结
-- 足迹地图：按年份查看带坐标的地点，支持缩放、聚合和跳转相关记录
-- 内容管理：管理标签与地点，支持手动新增、重命名、删除和置顶
-- 快捷项：最多置顶 6 个标签和 4 个地点，在记录页优先展示
-- 地点记录：支持手动输入、历史地点联想和主动定位
-- 草稿：新建记录时自动保存和恢复
-- 数据与隐私：回收站、ZIP 备份与恢复、备份提醒和应用锁
-- 个性化：头像、昵称、个性签名、背景主题和正文字体
-- 关于与诊断：版本、数据库状态、最近备份时间和可复制诊断信息
-- SQLite：本地持久化、WAL、外键、索引和版本迁移
+- 批量管理：批量修改标签、地点、收藏状态或移入回收站
+- 标签与地点：新增、重命名、合并、删除和常用项管理
+- 地点记录：自动定位、地图选点、地点搜索、历史地点和精简显示名称
+- 足迹地图：高德地图、叶子标记、区域聚合、时间筛选、地点列表与详情
+- 地点整理：旧记录补点、相近地点检查、地点别名与坐标隐私处理
+- 备份与恢复：完整 ZIP 备份、恢复预览、完整性检查和备份提醒
+- 阅读导出：按时间范围生成 Markdown 或 HTML 文件
+- 个性化：头像、昵称、个性签名、背景主题、字号和内置正文字体
+- 隐私与诊断：应用锁、本地脱敏错误日志、定位诊断和诊断信息导出
+- 本地存储：SQLite、WAL、外键、索引、版本迁移和 30 天回收站
 
-## 待实现
+## 产品边界
 
-### 点亮地图（基础版已完成）
+拾时目前以个人自用、轻量记录和尽量低成本为目标：
 
-回忆页面已经提供可以拖动、放大和缩小的足迹地图，让保存过坐标的地点逐渐被“点亮”。
+- 数据默认只保存在设备本地，不依赖账号或云端服务
+- 定位只在用户主动记录或选点时使用，不进行后台轨迹追踪
+- 足迹地图用于大致回看去过的区域，不替代专业地图或导航应用
+- 暂不加入社交、连续轨迹、自动停留识别和复杂旅行规划
 
-基础版包含：
-
-- 根据记录中保存的经纬度显示到访地点标记
-- 支持地图拖动、缩放和放大
-- 缩小时聚合相邻地点，放大后显示具体地点
-- 点击地点查看到访日期和关联记录
-- 按年份筛选足迹
-- 提示缺少坐标、需要重新定位补充的记录
-- 所有足迹数据默认只保存在本地，不进行后台持续定位
-
-后续可选：
-
-- 按城市或省份填充区域颜色，实现真正的行政区“点亮”
-- 地点相册、常去地点和年度地图总结
-- 旅行路线和“计划去”地点
-
-暂不计划在首版加入后台轨迹与自动停留识别，以控制定位权限、耗电和隐私风险。
-
-Android 足迹地图使用高德地图 SDK。构建地图版本前需要提供
-`AMAP_ANDROID_API_KEY` 环境变量，并在高德控制台为 Key 绑定应用包名和
-发布证书 SHA-1；API Key 不应写入仓库。
+`1.0.5` 之后优先处理稳定性、兼容性和界面细节，暂不继续扩展新功能。
 
 ## 技术栈
 
@@ -59,28 +42,105 @@ Android 足迹地图使用高德地图 SDK。构建地图版本前需要提供
 - TypeScript
 - Expo Router
 - Expo SQLite
+- 高德 Android 地图 SDK
 
-## 运行
+## 本地运行
 
 ```bash
 npm install
 npm start
 ```
 
-涉及应用锁、通知、压缩、分享等原生能力，完整调试请使用 Expo Development
-Build 或重新构建 APK；Expo Go 仅适合部分界面和基础流程调试。
+应用锁、通知、压缩、分享、内置字体和地图均涉及原生能力。完整调试请使用
+Development Build 或重新构建 APK；Expo Go 只适合部分页面与基础流程。
 
-## 检查
+## 构建前检查
 
 ```bash
+npm run version:check
 npx tsc --noEmit
 npm run lint
 npm run test:data
-npm run version:check
+```
+
+## 高德地图配置
+
+Android 地图构建需要在 EAS 的 `preview` 环境中配置
+`AMAP_ANDROID_API_KEY`。密钥不要写入仓库，也不要出现在截图或日志中。
+
+检查变量是否存在：
+
+```bash
+npx eas-cli env:list preview
+```
+
+高德控制台中的 Android Key 还需要与以下信息匹配：
+
+- PackageName：`com.penguin95.shishi`
+- 发布版安全码 SHA-1：当前 EAS Android 发布证书的 SHA-1
+
+修改密钥、包名、证书、原生字体或地图 SDK 后，必须重新构建 APK，OTA 更新
+不能替换这些原生配置。
+
+## 构建两种 Android APK
+
+个人版只包含 `arm64-v8a`，体积较小，适合当前主流 Android 真机自用：
+
+```bash
+npm run build:android:personal
+```
+
+通用预览版包含更多 Android CPU 架构，文件较大，但兼容范围更广：
+
+```bash
+npm run build:android:preview
+```
+
+两个构建都使用 EAS `preview` 环境并生成 APK。它们的包名和版本号相同，不能
+作为两个独立应用共存；在同一手机安装第二个通常会覆盖升级第一个。日常自用优先
+安装 personal 版，preview 版可作为兼容性备用包发布。
+
+构建完成后从 EAS 结果页分别下载并建议重命名为：
+
+- `shishi-v1.0.5-personal-arm64.apk`
+- `shishi-v1.0.5-preview-universal.apk`
+
+## 提交与发布
+
+提交当前版本代码：
+
+```bash
+git add README.md src/app/backup.tsx src/app/footprint-map.tsx src/app/index.tsx \
+  'src/app/location/[name].tsx' src/app/summaries.tsx \
+  src/components/location-picker-modal.tsx
+git commit -m "release: prepare v1.0.5"
+git push origin main
+```
+
+确认两个 APK 已下载到 `Downloads` 并按上面的名称保存后，创建 GitHub Release：
+
+```bash
+gh release create v1.0.5 \
+  /Users/95penguin/Downloads/shishi-v1.0.5-personal-arm64.apk \
+  /Users/95penguin/Downloads/shishi-v1.0.5-preview-universal.apk \
+  --repo 95Penguin/diary \
+  --title "拾时 v1.0.5" \
+  --generate-notes
+```
+
+如果 Release 已经创建，只需要补传文件：
+
+```bash
+gh release upload v1.0.5 \
+  /Users/95penguin/Downloads/shishi-v1.0.5-personal-arm64.apk \
+  /Users/95penguin/Downloads/shishi-v1.0.5-preview-universal.apk \
+  --repo 95Penguin/diary
 ```
 
 ## 数据说明
 
-数据库文件名为 `shishi.db`。记录时间以 ISO 8601 UTC 字符串保存，界面按设备当前时区展示。事情发生时间和真正写入时间分别保存，不会互相覆盖。
+数据库文件名为 `shishi.db`。记录时间以 ISO 8601 UTC 字符串保存，界面按设备
+当前时区展示；事情发生时间和真正写入时间分别保存，不会互相覆盖。
 
-删除采用软删除，并在回收站中保留 30 天。应用采用本地优先设计，当前不包含账号和云端同步；备份文件由用户主动导出和保管。
+删除采用软删除，并在回收站保留 30 天。升级或覆盖安装前仍建议先导出完整 ZIP
+备份；卸载应用会清除应用沙盒内尚未导出的本地数据。

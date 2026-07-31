@@ -253,7 +253,7 @@ export default function FootprintMapScreen() {
       <View style={styles.summaryRow}>
         <Pressable onPress={() => setRangePickerVisible(true)} style={[styles.rangeButton, { backgroundColor: readingTheme.surface }]}>
           <Text style={styles.rangeButtonText}>{rangeLabel}</Text>
-          <Text style={styles.rangeButtonArrow}>⌄</Text>
+          <View style={styles.rangeButtonChevron} />
         </Pressable>
         <Text style={[styles.summaryText, { color: readingTheme.secondary }]}>{regions.length} 片足迹 · {visibleEntries.length} 段时光</Text>
       </View>
@@ -273,7 +273,7 @@ export default function FootprintMapScreen() {
           const preference = locationPreferences[place.name];
           return <Pressable key={place.id} onPress={() => router.push(`/location/${encodeURIComponent(place.name)}` as Href)} style={[styles.placeListRow, { backgroundColor: readingTheme.surface }]}>
             <View style={styles.placeListIcon}><Text style={styles.placeListLeaf}>{preference?.favorite ? '★' : '🍃'}</Text></View>
-            <View style={styles.placeListCopy}><View style={styles.placeListNameRow}><Text numberOfLines={1} style={[styles.placeListName, { color: readingTheme.text }]}>{place.name}</Text>{preference?.category ? <Text style={styles.placeListCategory}>{preference.category}</Text> : null}</View><Text style={[styles.placeListMeta, { color: readingTheme.secondary }]}>{place.entries.length} 次到访 · 最近 {shortDate(place.entries[0].occurredAt)}</Text></View>
+            <View style={styles.placeListCopy}><View style={styles.placeListNameRow}><Text numberOfLines={1} style={[styles.placeListName, { color: readingTheme.text }]}>{place.name}</Text></View><Text style={[styles.placeListMeta, { color: readingTheme.secondary }]}>{place.entries.length} 次到访 · 最近 {shortDate(place.entries[0].occurredAt)}</Text></View>
             <Text style={styles.placeListArrow}>›</Text>
           </Pressable>;
         })}
@@ -326,10 +326,11 @@ export default function FootprintMapScreen() {
             zIndex={moments}
             onMarkerPress={() => chooseRegion(region.id)}
           >
-            <View style={[styles.memoryMarker, { width: leafSize + 12, height: leafSize + 12 }, active && styles.memoryMarkerActive]}>
-              <View style={[styles.memoryLeaf, { width: leafSize, height: leafSize }, active && styles.memoryLeafActive]}>
+            <View style={[styles.memoryMarker, { width: leafSize + 8, height: leafSize + 8 }, active && styles.memoryMarkerActive]}>
+              <View style={[styles.memoryLeaf, { width: leafSize * 1.18, height: leafSize * 0.72 }, active && styles.memoryLeafActive]}>
                 <View style={styles.memoryLeafVein} />
               </View>
+              <View style={styles.memoryLeafStem} />
             </View>
           </Marker>;
         })}
@@ -347,20 +348,20 @@ export default function FootprintMapScreen() {
           <Text style={styles.mapLoadingText}>正在加载地图…</Text>
         </>}
       </View> : null}
-      <Pressable accessibilityLabel="显示全部足迹" onPress={resetCamera} style={styles.resetButton}><Text style={styles.resetText}>全部足迹</Text></Pressable>
+      <Pressable accessibilityLabel="显示全部足迹" hitSlop={8} onPress={resetCamera} style={styles.resetButton}><Text style={styles.resetText}>全部足迹</Text></Pressable>
     </View> : !places.length ? <View style={[styles.empty, { backgroundColor: readingTheme.surface }]}>
       <Text style={[styles.emptyTitle, { color: readingTheme.text }]}>还没有可点亮的地点</Text>
       <Text style={[styles.emptyText, { color: readingTheme.secondary }]}>记录时使用自动定位，保存坐标后就会出现在这里。</Text>
     </View> : null}
 
     {selectedRegion && selectedRegionEntries.length ? <View style={[styles.placeCard, { backgroundColor: readingTheme.background, borderColor: readingTheme.border }]}>
-      <View style={styles.placeHeader}><View style={styles.placeHeading}><Text numberOfLines={1} style={[styles.placeName, { color: readingTheme.text }]}>{selectedRegion.places.length === 1 ? selectedRegion.places[0].name : '一片熟悉的地方'}</Text><Text style={[styles.placeMeta, { color: readingTheme.secondary }]}>这片区域留下了 {selectedRegionEntries.length} 段时光</Text></View><Pressable hitSlop={10} onPress={() => setSelectedRegion(null)}><Text style={[styles.close, { color: readingTheme.secondary }]}>×</Text></Pressable></View>
+      <View style={styles.placeHeader}><View style={styles.placeHeading}><Text numberOfLines={1} style={[styles.placeName, { color: readingTheme.text }]}>{selectedRegion.places.length === 1 ? selectedRegion.places[0].name : '一片熟悉的地方'}</Text><Text style={[styles.placeMeta, { color: readingTheme.secondary }]}>{selectedRegion.places.length > 1 ? `${selectedRegion.places.length} 个地点 · ${selectedRegionEntries.length} 段时光` : `${selectedRegionEntries.length} 次到访 · 最近 ${shortDate(selectedRegionEntries[0].occurredAt)}`}</Text></View><Pressable hitSlop={10} onPress={() => setSelectedRegion(null)}><Text style={[styles.close, { color: readingTheme.secondary }]}>×</Text></Pressable></View>
       {selectedRegion.places.length > 1 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.regionPlaces}>
-        {selectedRegion.places.slice(0, 5).map((place) => <Pressable key={place.id} onPress={() => router.push(`/location/${encodeURIComponent(place.name)}` as Href)} style={[styles.regionPlace, { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={styles.regionPlaceText}>{place.name}</Text></Pressable>)}
+        {selectedRegion.places.slice(0, 5).map((place) => <Pressable key={place.id} hitSlop={6} onPress={() => router.push(`/location/${encodeURIComponent(place.name)}` as Href)} style={[styles.regionPlace, { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={styles.regionPlaceText}>{place.name}</Text></Pressable>)}
       </ScrollView> : null}
       <Pressable onPress={() => router.push({ pathname: '/entry/[id]', params: { id: selectedRegionEntries[0].id } })} style={[styles.latestEntry, { backgroundColor: readingTheme.surface }]}>
         <Text style={styles.entryDate}>最近一次 · {shortDate(selectedRegionEntries[0].occurredAt)}</Text>
-        <Text numberOfLines={2} style={[styles.latestEntryText, { color: readingTheme.text, fontFamily: readingFontFamily }]}>{selectedRegionEntries[0].content || '一段没有文字的时光'}</Text>
+        <Text numberOfLines={1} style={[styles.latestEntryText, { color: readingTheme.text, fontFamily: readingFontFamily }]}>{selectedRegionEntries[0].content || '一段没有文字的时光'}</Text>
       </Pressable>
       {selectedRegion.places.length === 1 ? <Pressable onPress={() => router.push(`/location/${encodeURIComponent(selectedRegion.places[0].name)}` as Href)} style={styles.placeDetailButton}><Text style={styles.placeDetailText}>查看这里的记录 ›</Text></Pressable> : null}
     </View> : null}
@@ -373,7 +374,7 @@ export default function FootprintMapScreen() {
       >
         <View style={styles.pendingHeading}><Text style={styles.pendingTitle}>{missingCoordinates} 条记录等待点亮</Text><Text style={[styles.pendingHint, { color: readingTheme.secondary }]}>已有地点名称，但还缺少地图坐标</Text></View>
         <Pressable disabled={backfilling} onPress={(event) => { event.stopPropagation(); setBackfillConfirmationVisible(true); }} style={styles.backfillButton}><Text style={styles.backfillText}>{backfilling ? '补全中…' : '智能补点'}</Text></Pressable>
-        <Text style={styles.pendingArrow}>{pendingVisible ? '⌃' : '⌄'}</Text>
+        <View style={[styles.pendingChevron, pendingVisible && styles.pendingChevronOpen]} />
       </Pressable>
       {pendingVisible ? <View style={[styles.pendingList, { backgroundColor: readingTheme.background, borderColor: readingTheme.border }]}>
         {pendingEntries.map((entry) => <Pressable
@@ -397,7 +398,7 @@ export default function FootprintMapScreen() {
           <Pressable onPress={() => chooseYear(null)} style={[styles.rangeChoice, !selectedYear && !selectedMonth && !customRange && styles.rangeChoiceActive, { borderBottomColor: readingTheme.border }]}><Text style={[styles.rangeChoiceText, { color: readingTheme.text }]}>全部时间</Text><Text style={styles.rangeChoiceMark}>{!selectedYear && !selectedMonth && !customRange ? '✓' : ''}</Text></Pressable>
           <Pressable onPress={() => chooseYear(new Date().getFullYear())} style={[styles.rangeChoice, selectedYear === new Date().getFullYear() && styles.rangeChoiceActive, { borderBottomColor: readingTheme.border }]}><Text style={[styles.rangeChoiceText, { color: readingTheme.text }]}>今年</Text><Text style={styles.rangeChoiceMark}>{selectedYear === new Date().getFullYear() ? '✓' : ''}</Text></Pressable>
           <Pressable onPress={() => chooseMonth(localDateKey(new Date().toISOString()).slice(0, 7))} style={[styles.rangeChoice, selectedMonth === localDateKey(new Date().toISOString()).slice(0, 7) && styles.rangeChoiceActive, { borderBottomColor: readingTheme.border }]}><Text style={[styles.rangeChoiceText, { color: readingTheme.text }]}>本月</Text><Text style={styles.rangeChoiceMark}>{selectedMonth === localDateKey(new Date().toISOString()).slice(0, 7) ? '✓' : ''}</Text></Pressable>
-          <Pressable onPress={() => { setRangePickerVisible(false); setRangeStart(customRange?.start ?? ''); setRangeEnd(customRange?.end ?? ''); setRangeEditorVisible(true); }} style={styles.rangeChoice}><Text style={[styles.rangeChoiceText, { color: readingTheme.text }]}>自定义日期</Text><Text style={styles.rangeChoiceMark}>›</Text></Pressable>
+          <Pressable onPress={() => { setRangePickerVisible(false); setRangeStart(customRange?.start ?? ''); setRangeEnd(customRange?.end ?? ''); setRangeEditorVisible(true); }} style={[styles.rangeChoice, styles.rangeChoiceLast]}><Text style={[styles.rangeChoiceText, { color: readingTheme.text }]}>自定义日期</Text><View style={styles.rangeChoiceChevron} /></Pressable>
         </View>
       </Pressable></Pressable>
     </Modal>
@@ -423,7 +424,8 @@ const styles = StyleSheet.create({
   summary: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: spacing.sm },
   summaryRow: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
   rangeButton: { minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.md, borderRadius: radii.pill },
-  rangeButtonText: { color: colors.primary, fontSize: 11, fontWeight: '700' }, rangeButtonArrow: { color: colors.primary, fontSize: 12 },
+  rangeButtonText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
+  rangeButtonChevron: { width: 6, height: 6, marginTop: -3, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] },
   summaryText: { flexShrink: 1, fontSize: 11, textAlign: 'right' },
   mapShell: { flex: 1, overflow: 'hidden', marginHorizontal: spacing.md, borderRadius: radii.lg, backgroundColor: colors.primarySoft },
   listShell: { flex: 1 }, placeSearch: { height: 42, marginHorizontal: spacing.xl, paddingHorizontal: spacing.md, borderRadius: radii.pill, fontSize: 11 },
@@ -433,7 +435,7 @@ const styles = StyleSheet.create({
   placeList: { gap: spacing.sm, paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl }, placeListRow: { minHeight: 60, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radii.md },
   placeListIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: colors.primarySoft }, placeListLeaf: { color: colors.primary, fontSize: 17 },
   placeListCopy: { flex: 1, minWidth: 0, paddingHorizontal: spacing.md }, placeListNameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, placeListName: { flexShrink: 1, fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' },
-  placeListCategory: { overflow: 'hidden', paddingHorizontal: 7, paddingVertical: 2, borderRadius: radii.pill, backgroundColor: colors.primarySoft, color: colors.primary, fontSize: 11, fontWeight: '700' }, placeListMeta: { marginTop: 4, fontSize: 11 }, placeListArrow: { color: colors.primary, fontSize: 18 }, noPlaces: { paddingTop: spacing.xxl, textAlign: 'center', fontSize: 12 },
+  placeListMeta: { marginTop: 4, fontSize: 11 }, placeListArrow: { color: colors.primary, fontSize: 18 }, noPlaces: { paddingTop: spacing.xxl, textAlign: 'center', fontSize: 12 },
   mapLoading: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xxl, backgroundColor: colors.primarySoft },
   mapLoadingTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, textAlign: 'center' },
   mapLoadingText: { marginTop: spacing.sm, color: colors.textSecondary, fontSize: 11, lineHeight: 18, textAlign: 'center' },
@@ -441,30 +443,33 @@ const styles = StyleSheet.create({
   retryButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary },
   retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   listFallbackButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill }, listFallbackText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
-  memoryMarker: { alignItems: 'center', justifyContent: 'center', borderRadius: 24, backgroundColor: '#FFFFFFC7', elevation: 2 },
+  memoryMarker: { alignItems: 'center', justifyContent: 'center', borderRadius: 24, backgroundColor: '#FFFFFFB8', elevation: 2 },
   memoryMarkerActive: { backgroundColor: '#FFFFFFF2', elevation: 4 },
-  memoryLeaf: { overflow: 'hidden', borderTopLeftRadius: 4, borderTopRightRadius: 18, borderBottomRightRadius: 4, borderBottomLeftRadius: 18, backgroundColor: '#7FA593', transform: [{ rotate: '-35deg' }] },
+  memoryLeaf: { overflow: 'hidden', borderTopLeftRadius: 3, borderTopRightRadius: 24, borderBottomRightRadius: 3, borderBottomLeftRadius: 24, backgroundColor: '#7FA593', transform: [{ rotate: '-28deg' }] },
   memoryLeafActive: { backgroundColor: colors.primary, transform: [{ rotate: '-28deg' }, { scale: 1.08 }] },
-  memoryLeafVein: { position: 'absolute', left: '46%', top: '14%', width: 1.5, height: '75%', borderRadius: 1, backgroundColor: '#DDEBE5CC', transform: [{ rotate: '42deg' }] },
+  memoryLeafVein: { position: 'absolute', left: '15%', top: '46%', width: '70%', height: 1.25, borderRadius: 1, backgroundColor: '#DDEBE5CC' },
+  memoryLeafStem: { position: 'absolute', left: '18%', bottom: '17%', width: 7, height: 1.5, borderRadius: 1, backgroundColor: '#7FA593', transform: [{ rotate: '-28deg' }] },
   resetButton: { position: 'absolute', right: spacing.md, bottom: spacing.md, minHeight: 32, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: '#FFFFFFEE', elevation: 3, shadowColor: '#000000', shadowOpacity: 0.1, shadowRadius: 5, shadowOffset: { width: 0, height: 2 } }, resetText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', margin: spacing.xl, padding: spacing.xxl, borderRadius: radii.lg }, emptyTitle: { fontFamily: fonts.serif, fontSize: 18 }, emptyText: { marginTop: spacing.sm, fontSize: 11, lineHeight: 18, textAlign: 'center' },
-  placeCard: { marginHorizontal: spacing.md, marginTop: spacing.sm, paddingHorizontal: spacing.md, paddingTop: spacing.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg }, placeHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingBottom: spacing.sm }, placeHeading: { flex: 1, paddingRight: spacing.md }, placeName: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, placeMeta: { marginTop: 3, fontSize: 11 }, close: { minWidth: 40, minHeight: 40, paddingLeft: spacing.md, fontSize: 22, lineHeight: 40 },
-  regionPlaces: { gap: spacing.xs, paddingBottom: spacing.sm }, regionPlace: { maxWidth: 150, minHeight: 28, justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radii.pill }, regionPlaceText: { color: colors.primary, fontSize: 10, fontWeight: '600' },
-  latestEntry: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radii.md }, entryDate: { color: colors.primary, fontSize: 11, fontWeight: '700' }, latestEntryText: { marginTop: 4, fontSize: 12, lineHeight: 18 },
-  placeDetailButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center' }, placeDetailText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
+  placeCard: { marginHorizontal: spacing.md, marginTop: spacing.xs, paddingHorizontal: spacing.md, paddingTop: spacing.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg }, placeHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingBottom: spacing.xs }, placeHeading: { flex: 1, paddingRight: spacing.md }, placeName: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '600' }, placeMeta: { marginTop: 2, fontSize: 10 }, close: { minWidth: 36, minHeight: 36, paddingLeft: spacing.md, fontSize: 20, lineHeight: 36 },
+  regionPlaces: { gap: spacing.xs, paddingBottom: spacing.xs }, regionPlace: { maxWidth: 145, minHeight: 26, justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radii.pill }, regionPlaceText: { color: colors.primary, fontSize: 9, fontWeight: '600' },
+  latestEntry: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radii.md }, entryDate: { color: colors.primary, fontSize: 10, fontWeight: '700' }, latestEntryText: { marginTop: 3, fontSize: 11, lineHeight: 17 },
+  placeDetailButton: { minHeight: 38, alignItems: 'center', justifyContent: 'center' }, placeDetailText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   pendingArea: { paddingHorizontal: spacing.md, paddingTop: spacing.sm },
   pendingToggle: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md },
   pendingHeading: { flex: 1, minWidth: 0 },
   pendingTitle: { color: colors.primary, fontSize: 12, fontWeight: '700' }, pendingHint: { marginTop: 2, fontSize: 11 },
   backfillButton: { minHeight: 36, justifyContent: 'center', marginLeft: spacing.sm, paddingHorizontal: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, backfillText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
-  pendingArrow: { color: colors.primary, fontSize: 16 },
+  pendingChevron: { width: 7, height: 7, marginLeft: spacing.sm, marginTop: -3, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] },
+  pendingChevronOpen: { marginTop: 4, transform: [{ rotate: '-135deg' }] },
   pendingList: { marginTop: spacing.xs, paddingHorizontal: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.md },
   pendingRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth },
   pendingCopy: { flex: 1, paddingRight: spacing.md }, pendingLocation: { fontSize: 12, fontWeight: '600' }, pendingContent: { marginTop: 2, fontSize: 11 },
   pendingAction: { color: colors.primary, fontSize: 11, fontWeight: '700' }, pendingMore: { paddingVertical: spacing.md, fontSize: 11, textAlign: 'center' },
   overlay: { flex: 1, justifyContent: 'center', padding: spacing.xl, backgroundColor: '#00000055' }, rangePicker: { paddingHorizontal: spacing.xl, paddingTop: spacing.xl, paddingBottom: spacing.sm, borderRadius: radii.lg }, rangeEditor: { padding: spacing.xl, borderRadius: radii.lg },
   rangeTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, rangeHint: { marginTop: spacing.xs, fontSize: 11 },
-  rangeChoices: { marginTop: spacing.md }, rangeChoice: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth }, rangeChoiceActive: { opacity: 1 }, rangeChoiceText: { fontSize: 13 }, rangeChoiceMark: { color: colors.primary, fontSize: 15, fontWeight: '700' },
+  rangeChoices: { marginTop: spacing.md }, rangeChoice: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth }, rangeChoiceLast: { borderBottomWidth: 0 }, rangeChoiceActive: { opacity: 1 }, rangeChoiceText: { fontSize: 13 }, rangeChoiceMark: { color: colors.primary, fontSize: 15, fontWeight: '700' },
+  rangeChoiceChevron: { width: 7, height: 7, marginRight: 3, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '-45deg' }] },
   rangeInputs: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.lg }, rangeInput: { flex: 1, height: 44, paddingHorizontal: spacing.sm, borderRadius: radii.md, fontSize: 12 }, rangeDash: { fontSize: 11 },
   rangeActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.xl, marginTop: spacing.xl }, rangeCancel: { fontSize: 11 }, rangeSave: { color: colors.primary, fontSize: 11, fontWeight: '700' },
 });
