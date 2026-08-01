@@ -435,7 +435,7 @@ const styles = StyleSheet.create({
   placeList: { gap: spacing.sm, paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl }, placeListRow: { minHeight: 60, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radii.md },
   placeListIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: colors.primarySoft }, placeListLeaf: { color: colors.primary, fontSize: 17 },
   placeListCopy: { flex: 1, minWidth: 0, paddingHorizontal: spacing.md }, placeListNameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, placeListName: { flexShrink: 1, fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' },
-  placeListMeta: { marginTop: 4, fontSize: 11 }, placeListArrow: { color: colors.primary, fontSize: 18 }, noPlaces: { paddingTop: spacing.xxl, textAlign: 'center', fontSize: 12 },
+  placeListMeta: { marginTop: 1, fontSize: 11 }, placeListArrow: { color: colors.primary, fontSize: 18 }, noPlaces: { paddingTop: spacing.xxl, textAlign: 'center', fontSize: 12 },
   mapLoading: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xxl, backgroundColor: colors.primarySoft },
   mapLoadingTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, textAlign: 'center' },
   mapLoadingText: { marginTop: spacing.sm, color: colors.textSecondary, fontSize: 11, lineHeight: 18, textAlign: 'center' },

@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { SymbolView } from 'expo-symbols';
 import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -196,12 +197,12 @@ export default function SummariesScreen() {
       </View>
 
       <View style={styles.periodNavigation}>
-        <Pressable accessibilityLabel="上一周期" disabled={!hasPrevious} hitSlop={10} onPress={() => movePeriod(-1)}>
-          <Text style={[styles.periodArrow, !hasPrevious && styles.periodArrowDisabled]}>‹</Text>
+        <Pressable accessibilityLabel="上一周期" disabled={!hasPrevious} hitSlop={10} onPress={() => movePeriod(-1)} style={[styles.periodArrowButton, !hasPrevious && styles.periodArrowDisabled]}>
+          <SymbolView name={{ ios: 'chevron.left', android: 'chevron_left', web: 'chevron_left' }} size={22} tintColor={colors.primary} />
         </Pressable>
-        <Pressable accessibilityLabel={period === 'year' ? '选择回顾年份' : undefined} disabled={period !== 'year'} onPress={() => setYearPickerVisible(true)} style={styles.periodTitleButton}><Text style={[styles.periodTitle, { color: readingTheme.text }]}>{overview ? formatRange(period, overview.current.range.start, overview.current.range.end) : ' '}{period === 'year' ? '⌄' : ''}</Text></Pressable>
-        <Pressable accessibilityLabel="下一周期" disabled={!hasNext} hitSlop={10} onPress={() => movePeriod(1)}>
-          <Text style={[styles.periodArrow, !hasNext && styles.periodArrowDisabled]}>›</Text>
+        <Pressable accessibilityLabel={period === 'year' ? '选择回顾年份' : undefined} disabled={period !== 'year'} onPress={() => setYearPickerVisible(true)} style={styles.periodTitleButton}><Text style={[styles.periodTitle, { color: readingTheme.text }]}>{overview ? formatRange(period, overview.current.range.start, overview.current.range.end) : ' '}</Text>{period === 'year' ? <SymbolView name={{ ios: 'chevron.down', android: 'keyboard_arrow_down', web: 'keyboard_arrow_down' }} size={15} tintColor={readingTheme.text} /> : null}</Pressable>
+        <Pressable accessibilityLabel="下一周期" disabled={!hasNext} hitSlop={10} onPress={() => movePeriod(1)} style={[styles.periodArrowButton, !hasNext && styles.periodArrowDisabled]}>
+          <SymbolView name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }} size={22} tintColor={colors.primary} />
         </Pressable>
       </View>
 
@@ -505,10 +506,10 @@ const styles = StyleSheet.create({
   segmentText: { fontSize: 11, fontWeight: '600' },
   segmentTextActive: { color: '#FFFFFF', fontWeight: '700' },
   periodNavigation: { height: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xxl },
-  periodArrow: { color: colors.primary, fontSize: 26, lineHeight: 30 },
+  periodArrowButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   periodArrowDisabled: { opacity: 0.22 },
   periodTitle: { fontFamily: fonts.serif, fontSize: 15, fontWeight: '600' },
-  periodTitleButton: { minWidth: 120, minHeight: 36, alignItems: 'center', justifyContent: 'center' },
+  periodTitleButton: { minWidth: 120, minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3 },
   loader: { marginTop: 100 },
   scroll: { paddingHorizontal: spacing.xl, paddingBottom: 36 },
   hero: { padding: spacing.md, borderRadius: radii.lg },
