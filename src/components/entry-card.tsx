@@ -7,7 +7,7 @@ import { useAppPreferences } from '@/preferences/app-preferences';
 import { MediaThumbnail } from '@/components/media-view';
 
 export function EntryCard({ entry, onPress, onLongPress }: { entry: Entry; onPress: () => void; onLongPress?: () => void }) {
-  const { fontScale, readingFontFamily, readingTheme } = useAppPreferences();
+  const { fontScale, readingBodyStyle, readingFontFamily, readingTheme } = useAppPreferences();
   const latest = entry.followUps.at(-1);
   return (
     <Pressable accessibilityRole="button" accessibilityHint={onLongPress ? '长按可编辑或删除' : undefined} delayLongPress={450} onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
@@ -16,7 +16,7 @@ export function EntryCard({ entry, onPress, onLongPress }: { entry: Entry; onPre
         <View style={styles.meta}><Text style={styles.time}>{formatTime(entry.occurredAt)}</Text><View style={styles.badges}>{entry.mood || entry.weather ? <Text style={[styles.mood, { color: readingTheme.secondary }]}>{[entry.mood, entry.weather].filter(Boolean).join(' · ')}</Text> : null}{entry.favoritedAt ? <SymbolView name={{ ios: 'bookmark.fill', android: 'bookmark', web: 'bookmark' }} size={14} tintColor={colors.primary} /> : null}</View></View>
         <View style={styles.summary}>
           {entry.images[0] ? <MediaThumbnail media={entry.images[0]} allowRuntimeVideoPoster style={styles.thumbnail} /> : null}
-          <Text numberOfLines={entry.images.length ? 3 : 5} style={[styles.body, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 23 * fontScale }]}>{entry.content}</Text>
+          <Text numberOfLines={entry.images.length ? 3 : 5} style={[styles.body, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 23 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>{entry.content}</Text>
         </View>
         {entry.locationName ? <Text numberOfLines={1} style={[styles.location, { color: readingTheme.secondary }]}>⌖ {entry.locationName}</Text> : null}
         {latest ? (

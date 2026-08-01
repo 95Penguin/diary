@@ -4,6 +4,12 @@ export type JournalMediaType = 'image' | 'video' | 'livePhoto';
 export type FollowUpImage = { id: string; followUpId: string; uri: string; width: number; height: number; sortOrder: number; mediaType: JournalMediaType; pairedVideoUri: string | null; duration: number | null; thumbnailUri: string | null };
 export type FollowUp = { id: string; entryId: string; content: string; createdAt: string; updatedAt: string; images: FollowUpImage[] };
 export type EntryImage = { id: string; entryId: string; uri: string; width: number; height: number; sortOrder: number; mediaType: JournalMediaType; pairedVideoUri: string | null; duration: number | null; thumbnailUri: string | null };
+export type LibraryMedia = {
+  id: string; entryId: string; source: 'entry' | 'followUp'; sourceId: string;
+  uri: string; width: number; height: number; sortOrder: number; mediaType: JournalMediaType;
+  pairedVideoUri: string | null; duration: number | null; thumbnailUri: string | null;
+  occurredAt: string; attachedAt: string; entryContent: string;
+};
 export type Entry = {
   id: string; content: string; occurredAt: string; createdAt: string; updatedAt: string;
   mood: string | null; weather: string | null; favoritedAt: string | null; locationName: string | null; latitude: number | null; longitude: number | null;
@@ -19,11 +25,14 @@ export type FootprintEntry = { id: string; content: string; occurredAt: string; 
 export type PendingFootprintEntry = Pick<FootprintEntry, 'id' | 'content' | 'occurredAt' | 'locationName'>;
 export type PendingLocationGroup = { locationName: string; count: number };
 export type JournalBackup = {
-  format: 'shishi-journal'; version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11; exportedAt: string; timezone: string;
+  format: 'shishi-journal'; version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13; exportedAt: string; timezone: string;
   entries: { id: string; content: string; occurredAt: string; createdAt: string; updatedAt: string; deletedAt: string | null; mood?: string | null; weather?: string | null; favoritedAt?: string | null; locationName?: string | null; latitude?: number | null; longitude?: number | null }[];
   followUps: { id: string; entryId: string; content: string; createdAt: string; updatedAt: string; deletedAt: string | null }[];
   images: { id: string; entryId: string; localUri: string; width: number; height: number; sortOrder: number; createdAt: string; mediaType?: JournalMediaType; pairedVideoLocalUri?: string | null; duration?: number | null; thumbnailLocalUri?: string | null; dataBase64?: string | null; mimeType?: string | null; pairedVideoDataBase64?: string | null; pairedVideoMimeType?: string | null; thumbnailDataBase64?: string | null; thumbnailMimeType?: string | null }[];
   followUpImages?: { id: string; followUpId: string; localUri: string; width: number; height: number; sortOrder: number; createdAt: string; mediaType?: JournalMediaType; pairedVideoLocalUri?: string | null; duration?: number | null; thumbnailLocalUri?: string | null; dataBase64?: string | null; mimeType?: string | null; pairedVideoDataBase64?: string | null; pairedVideoMimeType?: string | null; thumbnailDataBase64?: string | null; thumbnailMimeType?: string | null }[];
+  timeCapsules?: { id: string; title: string; content: string; openAt: string; openedAt: string | null; createdAt: string; updatedAt: string; deletedAt: string | null; notificationEnabled: boolean }[];
+  timeCapsuleReplies?: { id: string; capsuleId: string; content: string; createdAt: string; updatedAt: string }[];
+  timeCapsuleImages?: { id: string; capsuleId: string; localUri: string; width: number; height: number; sortOrder: number; createdAt: string; mediaType?: JournalMediaType; pairedVideoLocalUri?: string | null; duration?: number | null; thumbnailLocalUri?: string | null; dataBase64?: string | null; mimeType?: string | null; pairedVideoDataBase64?: string | null; pairedVideoMimeType?: string | null; thumbnailDataBase64?: string | null; thumbnailMimeType?: string | null }[];
   tags: { entryId: string; label: string; sortOrder: number }[];
   versions?: { id: string; entryId: string; content: string; occurredAt: string; mood: string | null; weather: string | null; locationName: string | null; latitude: number | null; longitude: number | null; tags: string[]; createdAt: string }[];
   suppressedMemoryEntryIds?: string[];
@@ -49,8 +58,9 @@ export type JournalBackup = {
     avatarMimeType?: string | null;
     themeMode: 'system' | 'light' | 'dark';
     fontSize: 'verySmall' | 'small' | 'standard' | 'large' | 'veryLarge';
-    readingTheme: 'cream' | 'white' | 'warm' | 'green' | 'blue' | 'pink' | 'red' | 'lavender' | 'gray' | 'night';
+    readingTheme: 'cream' | 'white' | 'warm' | 'green' | 'cyan' | 'blue' | 'pink' | 'red' | 'lavender' | 'gray' | 'night';
     readingFont: 'serif' | 'sans' | 'light' | 'mono' | 'system';
+    readingComfort?: 'compact' | 'comfortable' | 'spacious';
     appLockEnabled: boolean;
     appLockDelaySeconds: 0 | 60 | 300;
     backupReminderDays: 0 | 7 | 14 | 30;

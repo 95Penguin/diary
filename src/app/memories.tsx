@@ -12,6 +12,7 @@ import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
 import { showAppDialog } from '@/components/app-dialog-host';
 import { MediaThumbnail } from '@/components/media-view';
+import { pickRandomMemoryId } from '@/utils/memory-shuffle';
 
 type MemoryMode = 'random' | 'today' | 'month' | 'yearWeek' | 'tag';
 const modes: { value: MemoryMode; label: string }[] = [
@@ -32,7 +33,7 @@ function formatDate(value: string) { return new Intl.DateTimeFormat('zh-CN', { y
 
 export default function MemoriesScreen() {
   const db = useSQLiteContext();
-  const { readingTheme, readingFontFamily, fontScale } = useAppPreferences();
+  const { readingTheme, readingBodyStyle, readingFontFamily, fontScale } = useAppPreferences();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [suppressed, setSuppressed] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -40,10 +41,12 @@ export default function MemoriesScreen() {
   const [modePickerVisible, setModePickerVisible] = useState(false);
   const [yearPickerVisible, setYearPickerVisible] = useState(false);
   const modeButtonRef = useRef<View>(null);
+  const yearListRef = useRef<ScrollView>(null);
   const [modeAnchor, setModeAnchor] = useState<{ x: number; y: number; width: number; height: number }>({ x: spacing.xl, y: 0, width: 96, height: 32 });
   const [hideConfirmationVisible, setHideConfirmationVisible] = useState(false);
   const [tag, setTag] = useState<string | null>(null);
-  const [shuffle, setShuffle] = useState(() => Math.floor(Math.random() * 1_000_000));
+  const [pickedId, setPickedId] = useState<string | null>(null);
+  const pickedIdRef = useRef<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear());
   const currentYearRef = useRef(now.getFullYear());
@@ -84,7 +87,20 @@ export default function MemoriesScreen() {
     }
     return tag ? available.filter((entry) => entry.tags.includes(tag)) : [];
   }, [entries, mode, now, suppressed, tag]);
-  const picked = candidates.length ? candidates[Math.abs(shuffle) % candidates.length] : null;
+  const candidateIds = useMemo(() => candidates.map((entry) => entry.id), [candidates]);
+  const picked = candidates.find((entry) => entry.id === pickedId) ?? null;
+
+  useEffect(() => {
+    const nextId = pickRandomMemoryId(candidateIds, pickedIdRef.current);
+    pickedIdRef.current = nextId;
+    setPickedId(nextId);
+  }, [candidateIds]);
+
+  function pickNext() {
+    const nextId = pickRandomMemoryId(candidateIds, pickedIdRef.current);
+    pickedIdRef.current = nextId;
+    setPickedId(nextId);
+  }
 
   const weekEntries = useMemo(() => { const start = startOfDay(now); start.setDate(start.getDate() - 6); return entries.filter((entry) => localDate(entry.occurredAt) >= start); }, [entries, now]);
   const monthEntries = useMemo(() => entries.filter((entry) => { const date = localDate(entry.occurredAt); return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth(); }), [entries, now]);
@@ -111,7 +127,7 @@ export default function MemoriesScreen() {
     try {
       await suppressMemoryEntry(db, picked.id);
       setSuppressed((current) => new Set(current).add(picked.id));
-      setShuffle((value) => value + 1);
+      pickNext();
     } catch { await showAppDialog({ title: '操作失败', message: '暂时无法隐藏这条记录。' }); }
   }
 
@@ -130,17 +146,17 @@ export default function MemoriesScreen() {
 
   if (loading) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><ActivityIndicator color={colors.primary} style={styles.loader} /></SafeAreaView>;
   return <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
-    <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable onPress={() => router.back()} hitSlop={12}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>拾起一刻</Text><View style={styles.headerSpace} /></View>
+    <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" onPress={() => router.back()} hitSlop={12}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>拾起一刻</Text><View style={styles.headerSpace} /></View>
     <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-      <View style={styles.modeRow}><Pressable ref={modeButtonRef} accessibilityLabel="选择拾取方式" onPress={openModePicker} style={[styles.modeButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.modeButtonText}>{modeLabel}</Text><View style={[styles.modeChevron, modePickerVisible && styles.modeChevronOpen]} /></Pressable><Text style={[styles.candidateCount, { color: readingTheme.secondary }]}>{candidates.length ? `${candidates.length} 条可拾起` : '暂无记录'}</Text><Pressable accessibilityLabel="再拾一条" onPress={() => setShuffle((value) => value + 1)} style={styles.shuffleButton}><SymbolView name={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }} size={17} tintColor="#FFFFFF" /></Pressable></View>
-      {mode === 'tag' ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagRow}>{tags.map((item) => <Pressable key={item} onPress={() => { setTag(item); setShuffle(Math.floor(Math.random() * 1_000_000)); }} style={[styles.tagChip, { backgroundColor: tag === item ? colors.primary : readingTheme.surface }]}><Text style={[styles.tagText, { color: tag === item ? '#FFFFFF' : readingTheme.secondary }, tag === item && styles.tagTextActive]}>#{item}</Text></Pressable>)}</ScrollView> : null}
+      <View style={styles.modeRow}><Pressable ref={modeButtonRef} accessibilityLabel="选择拾取方式" onPress={openModePicker} style={[styles.modeButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.modeButtonText}>{modeLabel}</Text><View style={[styles.modeChevron, modePickerVisible && styles.modeChevronOpen]} /></Pressable><Text style={[styles.candidateCount, { color: readingTheme.secondary }]}>{candidates.length ? `${candidates.length} 条可拾起` : '暂无记录'}</Text><Pressable accessibilityLabel="再拾一条" onPress={pickNext} style={styles.shuffleButton}><SymbolView name={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }} size={17} tintColor="#FFFFFF" /></Pressable></View>
+      {mode === 'tag' ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagRow}>{tags.map((item) => <Pressable key={item} onPress={() => setTag(item)} style={[styles.tagChip, { backgroundColor: tag === item ? colors.primary : readingTheme.surface }]}><Text style={[styles.tagText, { color: tag === item ? '#FFFFFF' : readingTheme.secondary }, tag === item && styles.tagTextActive]}>#{item}</Text></Pressable>)}</ScrollView> : null}
 
       {picked ? <View style={[styles.memoryCard, { backgroundColor: readingTheme.surface }]}>
         <View style={styles.memoryHeader}><Text style={styles.memoryDate}>{formatDate(picked.occurredAt)}</Text><Pressable accessibilityLabel="回忆操作" onPress={confirmHidePicked} hitSlop={10}><Text style={[styles.memoryMenu, { color: readingTheme.secondary }]}>•••</Text></Pressable></View>
         <Pressable onPress={() => router.push({ pathname: '/entry/[id]', params: { id: picked.id } })} style={[styles.memoryBody, !picked.images.length && styles.memoryBodyWithoutImage]}>
           <MemoryThumbnails images={picked.images} />
           <View style={styles.memoryText}>
-            <Text numberOfLines={5} style={[styles.memoryContent, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 23 * fontScale }]}>{picked.content}</Text>
+            <Text numberOfLines={5} style={[styles.memoryContent, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 23 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>{picked.content}</Text>
             {picked.mood || picked.weather ? <Text style={[styles.meta, { color: readingTheme.secondary }]}>{[picked.mood, picked.weather].filter(Boolean).join(' · ')}</Text> : null}
           </View>
         </Pressable>
@@ -158,6 +174,30 @@ export default function MemoriesScreen() {
         <View style={styles.summaryCopy}>
           <Text style={styles.summaryLinkTitle}>时光总结</Text>
           <Text style={[styles.summaryLinkDescription, { color: readingTheme.secondary }]}>查看周、月与年度记录趋势</Text>
+        </View>
+        <Text style={styles.summaryLinkArrow}>›</Text>
+      </Pressable>
+      <Pressable
+        accessibilityLabel="查看年度回顾"
+        onPress={() => router.push({ pathname: '/summaries', params: { period: 'year' } })}
+        style={({ pressed }) => [styles.summaryLink, { backgroundColor: readingTheme.surface }, pressed && styles.summaryLinkPressed]}
+      >
+        <View style={styles.summaryIcon}><SymbolView name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }} size={18} tintColor={colors.primary} /></View>
+        <View style={styles.summaryCopy}>
+          <Text style={styles.summaryLinkTitle}>年度回顾</Text>
+          <Text style={[styles.summaryLinkDescription, { color: readingTheme.secondary }]}>看看一年的轮廓与代表时刻</Text>
+        </View>
+        <Text style={styles.summaryLinkArrow}>›</Text>
+      </Pressable>
+      <Pressable
+        accessibilityLabel="查看时间胶囊"
+        onPress={() => router.push('/time-capsules' as Href)}
+        style={({ pressed }) => [styles.summaryLink, { backgroundColor: readingTheme.surface }, pressed && styles.summaryLinkPressed]}
+      >
+        <View style={styles.summaryIcon}><SymbolView name={{ ios: 'lock', android: 'lock', web: 'lock' }} size={18} tintColor={colors.primary} /></View>
+        <View style={styles.summaryCopy}>
+          <Text style={styles.summaryLinkTitle}>时间胶囊</Text>
+          <Text style={[styles.summaryLinkDescription, { color: readingTheme.secondary }]}>给未来的自己留下一些话</Text>
         </View>
         <Text style={styles.summaryLinkArrow}>›</Text>
       </Pressable>
@@ -180,8 +220,8 @@ export default function MemoriesScreen() {
       </View>
       <Heatmap entries={entries} year={footprintYear} />
     </ScrollView>
-    <Modal visible={modePickerVisible} transparent animationType="fade" onRequestClose={() => setModePickerVisible(false)}><Pressable onPress={() => setModePickerVisible(false)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.modePicker, { backgroundColor: readingTheme.background, left: modeAnchor.x, top: modeAnchor.y + modeAnchor.height + 2, minWidth: Math.max(modeAnchor.width, 132) }]}>{modes.map((item) => <Pressable accessibilityRole="menuitem" key={item.value} onPress={() => { setMode(item.value); setShuffle(Math.floor(Math.random() * 1_000_000)); setModePickerVisible(false); }} style={({ pressed }) => [styles.pickerItem, pressed && { backgroundColor: readingTheme.surface }]}><Text style={[styles.pickerItemText, { color: mode === item.value ? colors.primary : readingTheme.text }, mode === item.value && styles.pickerItemActive]}>{item.label}</Text>{mode === item.value ? <Text style={styles.check}>✓</Text> : null}</Pressable>)}</Pressable></Pressable></Modal>
-    <Modal visible={yearPickerVisible} transparent animationType="fade" onRequestClose={() => setYearPickerVisible(false)}><Pressable accessibilityLabel="关闭年份选择" onPress={() => setYearPickerVisible(false)} style={styles.yearOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.yearPicker, { backgroundColor: readingTheme.background }]}><Text style={[styles.yearPickerTitle, { color: readingTheme.text }]}>选择足迹年份</Text><ScrollView style={styles.yearList} showsVerticalScrollIndicator={false}>{[...footprintYears].reverse().map((year) => { const count = footprintYearData.counts.get(year) ?? 0; const active = year === footprintYear; return <Pressable accessibilityRole="menuitem" key={year} onPress={() => { setSelectedYear(year); setYearPickerVisible(false); }} style={[styles.yearPickerItem, { borderBottomColor: readingTheme.border }, active && { backgroundColor: readingTheme.surface }]}><View><Text style={[styles.yearPickerItemTitle, { color: active ? colors.primary : readingTheme.text }]}>{year} 年</Text><Text style={[styles.yearPickerItemCount, { color: readingTheme.secondary }]}>{count ? `${count} 条记录` : '这一年还没有记录'}</Text></View>{active ? <Text style={styles.check}>✓</Text> : null}</Pressable>; })}</ScrollView><Pressable onPress={() => setYearPickerVisible(false)} style={styles.yearPickerCancel}><Text style={[styles.yearPickerCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable></Pressable></Pressable></Modal>
+    <Modal visible={modePickerVisible} transparent animationType="fade" onRequestClose={() => setModePickerVisible(false)}><Pressable onPress={() => setModePickerVisible(false)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.modePicker, { backgroundColor: readingTheme.background, left: modeAnchor.x, top: modeAnchor.y + modeAnchor.height + 2, minWidth: Math.max(modeAnchor.width, 132) }]}>{modes.map((item) => <Pressable accessibilityRole="menuitem" key={item.value} onPress={() => { setMode(item.value); setModePickerVisible(false); }} style={({ pressed }) => [styles.pickerItem, pressed && { backgroundColor: readingTheme.surface }]}><Text style={[styles.pickerItemText, { color: mode === item.value ? colors.primary : readingTheme.text }, mode === item.value && styles.pickerItemActive]}>{item.label}</Text>{mode === item.value ? <Text style={styles.check}>✓</Text> : null}</Pressable>)}</Pressable></Pressable></Modal>
+    <Modal visible={yearPickerVisible} transparent animationType="fade" onRequestClose={() => setYearPickerVisible(false)} onShow={() => { const index = [...footprintYears].reverse().indexOf(footprintYear); requestAnimationFrame(() => yearListRef.current?.scrollTo({ y: Math.max(0, index * 58), animated: false })); }}><Pressable accessibilityLabel="关闭年份选择" onPress={() => setYearPickerVisible(false)} style={styles.yearOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.yearPicker, { backgroundColor: readingTheme.background }]}><Text style={[styles.yearPickerTitle, { color: readingTheme.text }]}>选择足迹年份</Text><ScrollView ref={yearListRef} style={styles.yearList} showsVerticalScrollIndicator>{[...footprintYears].reverse().map((year) => { const count = footprintYearData.counts.get(year) ?? 0; const active = year === footprintYear; return <Pressable accessibilityRole="menuitem" key={year} onPress={() => { setSelectedYear(year); setYearPickerVisible(false); }} style={[styles.yearPickerItem, { borderBottomColor: readingTheme.border }, active && { backgroundColor: readingTheme.surface }]}><View><Text style={[styles.yearPickerItemTitle, { color: active ? colors.primary : readingTheme.text }]}>{year} 年</Text><Text style={[styles.yearPickerItemCount, { color: readingTheme.secondary }]}>{count ? `${count} 条记录` : '这一年还没有记录'}</Text></View>{active ? <Text style={styles.check}>✓</Text> : null}</Pressable>; })}</ScrollView><Pressable onPress={() => setYearPickerVisible(false)} style={styles.yearPickerCancel}><Text style={[styles.yearPickerCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable></Pressable></Pressable></Modal>
     <AppDialog visible={hideConfirmationVisible} title="不再推荐这条记录？" message="它仍会保留在时间轴中，只是不再出现在“拾起一刻”。" onClose={() => setHideConfirmationVisible(false)} actions={[{ label: '取消', onPress: () => setHideConfirmationVisible(false) }, { label: '不再推荐', tone: 'danger', onPress: async () => { setHideConfirmationVisible(false); await hidePicked(); } }]} />
   </SafeAreaView>;
 }

@@ -1,5 +1,5 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, EntryVersion, FollowUp, FollowUpImage, FootprintEntry, ImportResult, JournalBackup, JournalMediaType, JournalStats, PendingFootprintEntry, PendingLocationGroup, SearchResult } from '@/domain/journal';
+import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, EntryVersion, FollowUp, FollowUpImage, FootprintEntry, ImportResult, JournalBackup, JournalMediaType, JournalStats, LibraryMedia, PendingFootprintEntry, PendingLocationGroup, SearchResult } from '@/domain/journal';
 import { getJournalTemplateSettings, saveJournalTemplateSettings } from './template-repository.ts';
 import { mergeJournalTemplateSettings } from '../utils/journal-templates.ts';
 import { findLocationDuplicates, type LocationDuplicateSuggestion } from '../utils/location-duplicates.ts';
@@ -116,6 +116,37 @@ export async function listEntries(db: SQLiteDatabase, query = ''): Promise<Entry
      WHERE ${where} ORDER BY e.occurred_at DESC, e.created_at DESC`, params,
   );
   return attachFollowUps(db, rows);
+}
+
+export async function listJournalMedia(db: SQLiteDatabase): Promise<LibraryMedia[]> {
+  const rows = await db.getAllAsync<{
+    id: string; entry_id: string; source: 'entry' | 'followUp'; source_id: string;
+    uri: string; width: number; height: number; sort_order: number; media_type: JournalMediaType;
+    paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null;
+    occurred_at: string; attached_at: string; entry_content: string;
+  }>(`
+    SELECT i.id, i.entry_id, 'entry' AS source, i.entry_id AS source_id,
+      i.uri, i.width, i.height, i.sort_order, i.media_type, i.paired_video_uri, i.duration, i.thumbnail_uri,
+      e.occurred_at, i.created_at AS attached_at, e.content AS entry_content
+    FROM entry_images i
+    INNER JOIN entries e ON e.id = i.entry_id
+    WHERE e.deleted_at IS NULL
+    UNION ALL
+    SELECT i.id, f.entry_id, 'followUp' AS source, i.follow_up_id AS source_id,
+      i.uri, i.width, i.height, i.sort_order, i.media_type, i.paired_video_uri, i.duration, i.thumbnail_uri,
+      e.occurred_at, i.created_at AS attached_at, e.content AS entry_content
+    FROM follow_up_images i
+    INNER JOIN follow_ups f ON f.id = i.follow_up_id
+    INNER JOIN entries e ON e.id = f.entry_id
+    WHERE f.deleted_at IS NULL AND e.deleted_at IS NULL
+    ORDER BY occurred_at DESC, attached_at DESC, sort_order ASC
+  `);
+  return rows.map((row) => ({
+    id: row.id, entryId: row.entry_id, source: row.source, sourceId: row.source_id,
+    uri: row.uri, width: row.width, height: row.height, sortOrder: row.sort_order, mediaType: row.media_type,
+    pairedVideoUri: row.paired_video_uri, duration: row.duration, thumbnailUri: row.thumbnail_uri,
+    occurredAt: row.occurred_at, attachedAt: row.attached_at, entryContent: row.entry_content,
+  }));
 }
 
 function startOfLocalDay(date: Date) {
@@ -1136,6 +1167,9 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
      FROM entry_versions ORDER BY entry_id, created_at ASC`,
   );
   const suppressed = await db.getAllAsync<{ entry_id: string }>('SELECT entry_id FROM memory_suppressed_entries');
+  const capsules = await db.getAllAsync<{ id: string; title: string; content: string; open_at: string; opened_at: string | null; created_at: string; updated_at: string; deleted_at: string | null; notification_enabled: number }>('SELECT id, title, content, open_at, opened_at, created_at, updated_at, deleted_at, notification_enabled FROM time_capsules ORDER BY created_at ASC');
+  const capsuleReplies = await db.getAllAsync<{ id: string; capsule_id: string; content: string; created_at: string; updated_at: string }>('SELECT id, capsule_id, content, created_at, updated_at FROM time_capsule_replies ORDER BY created_at ASC');
+  const capsuleImages = await db.getAllAsync<{ id: string; capsule_id: string; uri: string; width: number; height: number; sort_order: number; created_at: string; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null }>('SELECT id, capsule_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri FROM time_capsule_images ORDER BY capsule_id, sort_order ASC');
   const metadataCatalog = await getMetadataCatalog(db);
   const journalTemplates = await getJournalTemplateSettings(db);
   const preferencesRow = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'app-preferences'");
@@ -1149,8 +1183,9 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
         avatarLocalUri: typeof stored.avatarUri === 'string' ? stored.avatarUri : null,
         themeMode: stored.themeMode === 'light' || stored.themeMode === 'dark' ? stored.themeMode : 'system',
         fontSize: stored.fontSize === 'verySmall' || stored.fontSize === 'small' || stored.fontSize === 'large' || stored.fontSize === 'veryLarge' ? stored.fontSize : 'standard',
-        readingTheme: stored.readingTheme === 'white' || stored.readingTheme === 'warm' || stored.readingTheme === 'green' || stored.readingTheme === 'blue' || stored.readingTheme === 'pink' || stored.readingTheme === 'red' || stored.readingTheme === 'lavender' || stored.readingTheme === 'gray' || stored.readingTheme === 'night' ? stored.readingTheme : 'cream',
+        readingTheme: stored.readingTheme === 'white' || stored.readingTheme === 'warm' || stored.readingTheme === 'green' || stored.readingTheme === 'cyan' || stored.readingTheme === 'blue' || stored.readingTheme === 'pink' || stored.readingTheme === 'red' || stored.readingTheme === 'lavender' || stored.readingTheme === 'gray' || stored.readingTheme === 'night' ? stored.readingTheme : 'cream',
         readingFont: stored.readingFont === 'sans' || stored.readingFont === 'light' || stored.readingFont === 'mono' || stored.readingFont === 'system' ? stored.readingFont : 'serif',
+        readingComfort: stored.readingComfort === 'compact' || stored.readingComfort === 'spacious' ? stored.readingComfort : 'comfortable',
         appLockEnabled: stored.appLockEnabled === true,
         appLockDelaySeconds: stored.appLockDelaySeconds === 60 || stored.appLockDelaySeconds === 300 ? stored.appLockDelaySeconds : 0,
         backupReminderDays: stored.backupReminderDays === 7 || stored.backupReminderDays === 14 || stored.backupReminderDays === 30 ? stored.backupReminderDays : 0,
@@ -1163,7 +1198,7 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
   }
   return {
     format: 'shishi-journal',
-    version: 11,
+    version: 13,
     exportedAt: new Date().toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     entries: entries.map((entry) => ({
@@ -1190,6 +1225,9 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
       occurredAt: version.occurred_at, mood: version.mood, weather: version.weather, locationName: version.location_name,
       latitude: version.latitude, longitude: version.longitude, tags: parseJsonArray<string>(version.tags_json), createdAt: version.created_at })),
     suppressedMemoryEntryIds: suppressed.map((item) => item.entry_id),
+    timeCapsules: capsules.map((item) => ({ id: item.id, title: item.title, content: item.content, openAt: item.open_at, openedAt: item.opened_at, createdAt: item.created_at, updatedAt: item.updated_at, deletedAt: item.deleted_at, notificationEnabled: item.notification_enabled === 1 })),
+    timeCapsuleReplies: capsuleReplies.map((item) => ({ id: item.id, capsuleId: item.capsule_id, content: item.content, createdAt: item.created_at, updatedAt: item.updated_at })),
+    timeCapsuleImages: capsuleImages.map((item) => ({ id: item.id, capsuleId: item.capsule_id, localUri: item.uri, width: item.width, height: item.height, sortOrder: item.sort_order, createdAt: item.created_at, mediaType: item.media_type, pairedVideoLocalUri: item.paired_video_uri, duration: item.duration, thumbnailLocalUri: item.thumbnail_uri })),
     metadataCatalog,
     journalTemplates,
     appPreferences,
@@ -1314,6 +1352,21 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
       if (parent) await txn.runAsync(
         'INSERT OR IGNORE INTO memory_suppressed_entries (entry_id, suppressed_at) VALUES (?, ?)', entryId, new Date().toISOString(),
       );
+    }
+    for (const capsule of backup.timeCapsules ?? []) {
+      const existing = await txn.getFirstAsync<{ updated_at: string }>('SELECT updated_at FROM time_capsules WHERE id = ?', capsule.id);
+      if (!existing) await txn.runAsync('INSERT INTO time_capsules (id, title, content, open_at, opened_at, created_at, updated_at, deleted_at, notification_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', capsule.id, capsule.title, capsule.content, capsule.openAt, capsule.openedAt, capsule.createdAt, capsule.updatedAt, capsule.deletedAt, capsule.notificationEnabled ? 1 : 0);
+      else if (capsule.updatedAt > existing.updated_at) await txn.runAsync('UPDATE time_capsules SET title = ?, content = ?, open_at = ?, opened_at = ?, updated_at = ?, deleted_at = ?, notification_enabled = ? WHERE id = ?', capsule.title, capsule.content, capsule.openAt, capsule.openedAt, capsule.updatedAt, capsule.deletedAt, capsule.notificationEnabled ? 1 : 0, capsule.id);
+    }
+    for (const reply of backup.timeCapsuleReplies ?? []) {
+      const parent = await txn.getFirstAsync<{ id: string }>('SELECT id FROM time_capsules WHERE id = ?', reply.capsuleId);
+      if (parent) await txn.runAsync('INSERT INTO time_capsule_replies (id, capsule_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at', reply.id, reply.capsuleId, reply.content, reply.createdAt, reply.updatedAt);
+    }
+    for (const image of backup.timeCapsuleImages ?? []) {
+      const parent = await txn.getFirstAsync<{ id: string }>('SELECT id FROM time_capsules WHERE id = ?', image.capsuleId);
+      if (!parent || !image.localUri) continue;
+      await txn.runAsync(`INSERT INTO time_capsule_images (id, capsule_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET uri = excluded.uri, width = excluded.width, height = excluded.height, sort_order = excluded.sort_order, media_type = excluded.media_type, paired_video_uri = excluded.paired_video_uri, duration = excluded.duration, thumbnail_uri = excluded.thumbnail_uri`, image.id, image.capsuleId, image.localUri, image.width, image.height, image.sortOrder, image.createdAt, image.mediaType ?? 'image', image.pairedVideoLocalUri ?? null, image.duration ?? null, image.thumbnailLocalUri ?? null);
     }
     if (backup.metadataCatalog) {
       const current = await getMetadataCatalog(txn);
@@ -1492,7 +1545,10 @@ export async function listReferencedMediaUris(db: SQLiteDatabase): Promise<strin
      UNION SELECT thumbnail_uri AS uri FROM entry_images
      UNION SELECT uri FROM follow_up_images
      UNION SELECT paired_video_uri AS uri FROM follow_up_images
-     UNION SELECT thumbnail_uri AS uri FROM follow_up_images`,
+     UNION SELECT thumbnail_uri AS uri FROM follow_up_images
+     UNION SELECT uri FROM time_capsule_images
+     UNION SELECT paired_video_uri AS uri FROM time_capsule_images
+     UNION SELECT thumbnail_uri AS uri FROM time_capsule_images`,
   );
   rows.forEach(({ uri }) => { if (uri) referenced.add(uri); });
 

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { SymbolView } from 'expo-symbols';
@@ -15,6 +15,7 @@ import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatFullDate, formatShortDateTime } from '@/utils/date';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
+import { countJournalCharacters } from '@/utils/text';
 import { AppDialog } from '@/components/app-dialog';
 import { showAppDialog } from '@/components/app-dialog-host';
 import { DraggableMediaItem } from '@/components/draggable-media-item';
@@ -26,8 +27,8 @@ type PendingMedia = JournalMedia & { width: number; height: number; fileName?: s
 
 export default function EntryDetailScreen() {
   const db = useSQLiteContext();
-  const { fontScale, readingFontFamily, readingTheme } = useAppPreferences();
-  const { id, lit } = useLocalSearchParams<{ id: string; lit?: string }>();
+  const { fontScale, readingBodyStyle, readingFontFamily, readingTheme } = useAppPreferences();
+  const { id, lit, saved } = useLocalSearchParams<{ id: string; lit?: string; saved?: string }>();
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
   const [followUp, setFollowUp] = useState('');
@@ -42,6 +43,14 @@ export default function EntryDetailScreen() {
   const [mediaMenuVisible, setMediaMenuVisible] = useState(false);
   const [entryMenuVisible, setEntryMenuVisible] = useState(false);
   const [followUpOrder, setFollowUpOrder] = useState<'asc' | 'desc'>('asc');
+  const [savedVisible, setSavedVisible] = useState(saved === '1' && !lit);
+
+  useEffect(() => {
+    if (!savedVisible) return;
+    router.setParams({ saved: '' });
+    const timer = setTimeout(() => setSavedVisible(false), 1500);
+    return () => clearTimeout(timer);
+  }, [savedVisible]);
   const [compressionStatus, setCompressionStatus] = useState<string | null>(null);
   const [litLocation, setLitLocation] = useState(lit ?? '');
 
@@ -207,9 +216,10 @@ export default function EntryDetailScreen() {
   return <SafeAreaView edges={['top', 'bottom']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" onPress={leaveDetail} hitSlop={12}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>这一刻</Text><View style={styles.headerActions}><Pressable accessibilityLabel={entry.favoritedAt ? '取消收藏' : '收藏'} onPress={() => void toggleFavorite()} hitSlop={12} style={styles.favoriteButton}><SymbolView name={{ ios: entry.favoritedAt ? 'bookmark.fill' : 'bookmark', android: entry.favoritedAt ? 'bookmark' : 'bookmark_border', web: entry.favoritedAt ? 'bookmark' : 'bookmark_border' }} size={19} tintColor={entry.favoritedAt ? colors.primary : readingTheme.secondary} /></Pressable><Pressable accessibilityLabel="记录操作" onPress={openEntryMenu} hitSlop={12}><Text style={[styles.menu, { color: readingTheme.secondary }]}>•••</Text></Pressable></View></View>
+      {savedVisible ? <View accessibilityLiveRegion="polite" pointerEvents="none" style={styles.savedToast}><Text style={styles.savedToastText}>✓ 已保存</Text></View> : null}
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <Text style={styles.date}>{formatFullDate(entry.occurredAt)}</Text>
-        <Text style={[styles.content, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale }]}>{entry.content}</Text>
+        <Text style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>{entry.content}</Text>
         {entry.images.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.imageStrip}>
           {entry.images.map((image, index) => <Pressable accessibilityLabel={`查看媒体 ${index + 1}`} key={image.id} onPress={() => openImagePreview(entry.images, index)}><MediaThumbnail media={image} allowRuntimeVideoPoster style={styles.detailImage} /></Pressable>)}
         </ScrollView> : null}
@@ -219,14 +229,14 @@ export default function EntryDetailScreen() {
           {entry.locationName ? <Text numberOfLines={1} style={[styles.metaItem, styles.locationItem, { backgroundColor: readingTheme.surface, color: readingTheme.secondary }]}>⌖ {entry.locationName}</Text> : null}
           {entry.tags.map((tag) => <Text key={tag} style={[styles.metaItem, { backgroundColor: readingTheme.surface, color: readingTheme.secondary }]}>#{tag}</Text>)}
         </View> : null}
-        {entry.createdAt !== entry.occurredAt ? <Text style={[styles.created, { color: readingTheme.secondary }]}>记录于 {formatShortDateTime(entry.createdAt)}</Text> : null}
+        <View style={styles.createdRow}>{entry.createdAt !== entry.occurredAt ? <Text style={[styles.created, { color: readingTheme.secondary }]}>记录于 {formatShortDateTime(entry.createdAt)}</Text> : <View />}<Text accessibilityLabel={`正文 ${countJournalCharacters(entry.content)} 字`} style={[styles.created, { color: readingTheme.secondary }]}>{countJournalCharacters(entry.content)} 字</Text></View>
         <View style={[styles.divider, { backgroundColor: readingTheme.border }]} />
         <View style={styles.followUpHeading}><Text style={[styles.followUpTitle, { color: readingTheme.text }]}>后续</Text><View style={styles.followUpHeadingRight}><Text style={[styles.count, { color: readingTheme.secondary }]}>{entry.followUps.length} 条</Text>{entry.followUps.length > 1 ? <Pressable hitSlop={8} onPress={() => void toggleFollowUpOrder()} style={[styles.orderButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.orderText}>{followUpOrder === 'asc' ? '正序' : '倒序'}</Text><View style={styles.orderChevron} /></Pressable> : null}</View></View>
         {entry.followUps.length ? [...entry.followUps].sort((a, b) => followUpOrder === 'asc' ? a.createdAt.localeCompare(b.createdAt) : b.createdAt.localeCompare(a.createdAt)).map((item) => <View key={item.id} style={styles.followUpItem}>
           <View style={styles.rail}><View style={[styles.dot, { backgroundColor: readingTheme.background }]} /><View style={[styles.line, { backgroundColor: readingTheme.border }]} /></View>
           <View style={styles.followUpBody}>
             <View style={styles.followUpMeta}><Text style={[styles.followUpTime, { color: readingTheme.secondary }]}>{formatShortDateTime(item.createdAt)}</Text><Pressable accessibilityLabel="后续操作" hitSlop={10} onPress={() => openFollowUpMenu(item)}><Text style={[styles.followUpMenu, { color: readingTheme.secondary }]}>•••</Text></Pressable></View>
-            <Text style={[styles.followUpText, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 22 * fontScale }]}>{item.content}</Text>
+            <Text style={[styles.followUpText, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 22 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>{item.content}</Text>
             {item.images.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.followUpImageRow}>{item.images.map((image, index) => <Pressable key={image.id} onPress={() => openImagePreview(item.images, index)}><MediaThumbnail media={image} allowRuntimeVideoPoster style={styles.followUpImage} /></Pressable>)}</ScrollView> : null}
           </View>
         </View>) : <Text style={[styles.empty, { color: readingTheme.secondary }]}>后来发生了什么？可以随时回来补充。</Text>}
@@ -265,7 +275,7 @@ export default function EntryDetailScreen() {
           <Pressable accessibilityLabel="关闭图片" onPress={() => setPreviewIndex(null)} hitSlop={12} style={styles.previewCloseButton}><Text style={styles.previewClose}>×</Text></Pressable>
         </GestureHandlerRootView>
       </Modal>
-      <EntryActionModal visible={entryMenuVisible} onClose={() => setEntryMenuVisible(false)} onEdit={editEntry} onDelete={deleteCurrentEntry} onHistory={() => { setEntryMenuVisible(false); router.push({ pathname: '/history/[id]', params: { id: entry.id } }); }} />
+      <EntryActionModal visible={entryMenuVisible} onClose={() => setEntryMenuVisible(false)} onEdit={editEntry} onDelete={deleteCurrentEntry} onHistory={() => { setEntryMenuVisible(false); router.push({ pathname: '/history/[id]', params: { id: entry.id } }); }} onShare={() => { setEntryMenuVisible(false); router.push(`/share-card?id=${encodeURIComponent(entry.id)}` as Href); }} />
       <AppDialog visible={Boolean(litLocation)} title="🍃 新地点已点亮" message={`你在“${litLocation}”留下了第一条足迹。`} onClose={() => setLitLocation('')} actions={[{ label: '继续记录', onPress: () => setLitLocation('') }, { label: '查看地图', tone: 'primary', onPress: () => { setLitLocation(''); router.push('/footprint-map' as Href); } }]} />
       <AppDialog visible={mediaMenuVisible} title="添加图片或视频" message="最多添加 5 个；拍照会打开系统相机，可切换照片或视频模式。" onClose={() => setMediaMenuVisible(false)} actions={[{ label: '相册', onPress: () => { setMediaMenuVisible(false); void pickFollowUpImages(); } }, { label: '拍照', onPress: () => { setMediaMenuVisible(false); void captureFollowUpMedia(); } }]} />
       <AppDialog visible={Boolean(followUpAction)} title={confirmingFollowUpDelete ? '删除这条后续？' : '后续操作'} message={confirmingFollowUpDelete ? '删除后将无法恢复。' : undefined} onClose={() => { setFollowUpAction(null); setConfirmingFollowUpDelete(false); }} actions={confirmingFollowUpDelete ? [{ label: '取消', onPress: () => setConfirmingFollowUpDelete(false) }, { label: '删除', tone: 'danger', onPress: async () => { if (!followUpAction) return; try { const images = await deleteFollowUp(db, followUpAction.id); images.forEach(deleteJournalImage); setFollowUpAction(null); setConfirmingFollowUpDelete(false); await load(); } catch { await showAppDialog({ title: '删除失败', message: '这条后续暂时无法删除，请稍后重试。' }); } } }] : [{ label: '编辑', tone: 'primary', onPress: () => { if (!followUpAction) return; setEditingFollowUp(followUpAction); setEditValue(followUpAction.content); setFollowUpAction(null); } }, { label: '删除', tone: 'danger', onPress: () => setConfirmingFollowUpDelete(true) }]} />
@@ -276,9 +286,10 @@ export default function EntryDetailScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background }, flex: { flex: 1 },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  savedToast: { position: 'absolute', top: 62, zIndex: 20, alignSelf: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.text }, savedToastText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   back: { color: colors.primary, fontSize: 13 }, headerTitle: { fontFamily: fonts.serif, fontSize: 16, lineHeight: 24, fontWeight: '600', includeFontPadding: false }, headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg }, favoriteButton: { width: 28, height: 36, alignItems: 'center', justifyContent: 'center' }, menu: { color: colors.textSecondary, letterSpacing: 2 },
   scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.xl },
-  date: { color: colors.primary, fontSize: 11, fontWeight: '700' }, content: { marginTop: spacing.md, color: colors.text, fontFamily: fonts.serif, fontSize: 17, lineHeight: 27, includeFontPadding: false }, metaSummary: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs, marginTop: spacing.md }, metaItem: { overflow: 'hidden', paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill, color: colors.textSecondary, fontSize: 10 }, locationItem: { maxWidth: '100%' },
+  date: { color: colors.primary, fontSize: 11, fontWeight: '700' }, content: { marginTop: spacing.md, color: colors.text, fontFamily: fonts.serif, fontSize: 17, lineHeight: 27, includeFontPadding: false }, metaSummary: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs, marginTop: spacing.md }, metaItem: { overflow: 'hidden', paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill, color: colors.textSecondary, fontSize: 10 }, locationItem: { maxWidth: '100%' }, createdRow: { minHeight: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   imageStrip: { gap: spacing.sm, paddingTop: spacing.md }, detailImage: { width: 112, height: 112, borderRadius: radii.md, backgroundColor: 'transparent' },
   created: { marginTop: spacing.md, color: colors.textFaint, fontSize: 10 }, divider: { height: StyleSheet.hairlineWidth, marginTop: spacing.md, marginBottom: spacing.sm, backgroundColor: colors.border },
   followUpHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs }, followUpTitle: { fontFamily: fonts.serif, fontSize: 17, lineHeight: 26, fontWeight: '600', includeFontPadding: false }, followUpHeadingRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, count: { color: colors.textFaint, fontSize: 10 },

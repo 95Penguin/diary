@@ -119,8 +119,9 @@ test('accepts portable profile and settings in v11 and rejects invalid values', 
       avatarLocalUri: 'profile/avatar.png',
       themeMode: 'system',
       fontSize: 'large',
-      readingTheme: 'green',
+      readingTheme: 'cyan',
       readingFont: 'serif',
+      readingComfort: 'comfortable',
       appLockEnabled: true,
       appLockDelaySeconds: 60,
       backupReminderDays: 14,
@@ -128,6 +129,9 @@ test('accepts portable profile and settings in v11 and rejects invalid values', 
   };
   assert.deepEqual(parseJournalBackup(JSON.stringify(backup)), backup);
   backup.appPreferences.fontSize = 'huge';
+  assert.throws(() => parseJournalBackup(JSON.stringify(backup)), /invalid-backup/);
+  backup.appPreferences.fontSize = 'large';
+  backup.appPreferences.readingComfort = 'crowded';
   assert.throws(() => parseJournalBackup(JSON.stringify(backup)), /invalid-backup/);
 });
 
@@ -151,6 +155,21 @@ test('accepts archive only when every referenced media file is present', () => {
   delete files['media/entries/image-1/thumbnail.jpg'];
   assert.throws(() => validateArchiveMediaReferences(backup, files), /missing-backup-media/);
 });
+
+test('validates time capsule media relationships and archive files', () => {
+  const backup = { ...validBackup(), version: 13, timeCapsules: [{ id: 'capsule-1', title: '未来', content: '正文', openAt: '2027-01-01T00:00:00.000Z', openedAt: null, createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z', deletedAt: null, notificationEnabled: true }], timeCapsuleImages: [{ id: 'capsule-image-1', capsuleId: 'capsule-1', localUri: 'media/time-capsules/capsule-image-1/primary.jpg', width: 800, height: 600, sortOrder: 0, createdAt: '2026-08-01T00:00:00.000Z', mediaType: 'image' }] };
+  assert.deepEqual(parseJournalBackup(JSON.stringify(backup)), backup);
+  assert.throws(() => validateArchiveMediaReferences(backup, {}), /missing-backup-media/);
+  assert.doesNotThrow(() => validateArchiveMediaReferences(backup, {
+    'media/entries/image-1/primary.mp4': new Uint8Array([1]),
+    'media/entries/image-1/thumbnail.jpg': new Uint8Array([1]),
+    'media/follow-ups/follow-up-image-1/primary.jpg': new Uint8Array([1]),
+    'media/time-capsules/capsule-image-1/primary.jpg': new Uint8Array([1]),
+  }));
+  backup.timeCapsuleImages[0].capsuleId = 'missing';
+  assert.throws(() => parseJournalBackup(JSON.stringify(backup)), /invalid-backup/);
+});
+
 
 test('requires a referenced profile avatar to exist in the archive', () => {
   const backup = parseJournalBackup(JSON.stringify({

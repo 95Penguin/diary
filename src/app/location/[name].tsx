@@ -18,7 +18,7 @@ function formatDay(value: string) {
 }
 export default function LocationDetailScreen() {
   const db = useSQLiteContext();
-  const { preferences, readingTheme, readingFontFamily } = useAppPreferences();
+  const { preferences, readingTheme, readingBodyStyle, readingFontFamily } = useAppPreferences();
   const { name } = useLocalSearchParams<{ name: string }>();
   const locationName = typeof name === 'string' ? name : '';
   const [detail, setDetail] = useState<LocationPageDetail | null>(null);
@@ -135,7 +135,7 @@ export default function LocationDetailScreen() {
         <View style={[styles.entries, { borderColor: readingTheme.border }]}>
           {detail.entries.map((entry, index) => <Pressable key={entry.id} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} style={[styles.entry, index > 0 && { borderTopColor: readingTheme.border, borderTopWidth: StyleSheet.hairlineWidth }]}>
             <View style={styles.timeline}><Text style={styles.dot}>•</Text><Text style={styles.date}>{formatDay(entry.occurredAt)}</Text></View>
-            <Text numberOfLines={3} style={[styles.content, { color: readingTheme.text, fontFamily: readingFontFamily }]}>{entry.content || '一条没有文字的记录'}</Text>
+            <Text numberOfLines={3} style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, lineHeight: 21 * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>{entry.content || '一条没有文字的记录'}</Text>
             <Text style={styles.arrow}>›</Text>
           </Pressable>)}
         </View>

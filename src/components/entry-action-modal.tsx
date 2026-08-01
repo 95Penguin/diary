@@ -4,12 +4,13 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { useAppPreferences } from '@/preferences/app-preferences';
 
-export function EntryActionModal({ visible, onClose, onEdit, onDelete, onHistory }: { visible: boolean; onClose: () => void; onEdit: () => void; onDelete: () => void | Promise<void>; onHistory?: () => void }) {
+export function EntryActionModal({ visible, onClose, onEdit, onDelete, onHistory, onShare }: { visible: boolean; onClose: () => void; onEdit: () => void; onDelete: () => void | Promise<void>; onHistory?: () => void; onShare?: () => void }) {
   const { readingTheme } = useAppPreferences();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   function close() { setConfirmingDelete(false); onClose(); }
   function edit() { setConfirmingDelete(false); onEdit(); }
   function history() { setConfirmingDelete(false); onHistory?.(); }
+  function share() { setConfirmingDelete(false); onShare?.(); }
   async function remove() { await onDelete(); setConfirmingDelete(false); }
 
   return <Modal visible={visible} transparent animationType="fade" onRequestClose={close}>
@@ -18,6 +19,7 @@ export function EntryActionModal({ visible, onClose, onEdit, onDelete, onHistory
         <Text style={[styles.title, { color: readingTheme.text }]}>{confirmingDelete ? '将这条记录移入回收站？' : '记录操作'}</Text>
         {confirmingDelete ? <Text style={[styles.message, { color: readingTheme.secondary }]}>记录会移入回收站，并保留 30 天</Text> : null}
         {!confirmingDelete && onHistory ? <Pressable onPress={history} style={({ pressed }) => [styles.historyButton, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><Text style={[styles.historyText, { color: readingTheme.secondary }]}>编辑历史</Text><Text style={styles.historyArrow}>›</Text></Pressable> : null}
+        {!confirmingDelete && onShare ? <Pressable onPress={share} style={({ pressed }) => [styles.historyButton, styles.secondaryAction, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><Text style={[styles.historyText, { color: readingTheme.secondary }]}>生成分享卡片</Text><Text style={styles.historyArrow}>›</Text></Pressable> : null}
         <View style={styles.buttons}>
           {confirmingDelete ? <>
             <Pressable onPress={() => setConfirmingDelete(false)} style={({ pressed }) => [styles.button, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable>
@@ -39,6 +41,7 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontFamily: fonts.serif, fontSize: 18, lineHeight: 26, fontWeight: '600', textAlign: 'center', includeFontPadding: false },
   message: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 11, textAlign: 'center' },
   historyButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, historyText: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' }, historyArrow: { color: colors.primary, fontSize: 20 },
+  secondaryAction: { marginTop: spacing.sm },
   buttons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xl }, button: { flex: 1, minHeight: 46, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xs, paddingVertical: spacing.sm, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, pressed: { opacity: 0.58 },
   primaryText: { color: colors.primary, fontSize: 13, fontWeight: '700', textAlign: 'center' }, dangerText: { flexShrink: 1, color: colors.danger, fontSize: 12, fontWeight: '700', textAlign: 'center' }, cancel: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm }, cancelText: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
 });

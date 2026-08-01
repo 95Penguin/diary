@@ -20,6 +20,7 @@ import { setBackupReminder } from '@/utils/backup-reminder';
 import { chooseBackupDirectory, saveBackupToDirectory } from '@/utils/backup-directory';
 import { AUTOMATIC_BACKUP_RETENTION } from '@/utils/automatic-backup';
 import { recordAppError } from '@/utils/app-error-log';
+import { syncTimeCapsuleNotifications } from '@/utils/time-capsule-notifications';
 
 const EMPTY_STATS: JournalStats = { entries: 0, followUps: 0, images: 0, deleted: 0 };
 type OperationProgress = { label: string; value: number } | null;
@@ -251,6 +252,7 @@ export default function BackupScreen() {
           fontSize: restoredPreferences.fontSize,
           readingTheme: restoredPreferences.readingTheme,
           readingFont: restoredPreferences.readingFont,
+          readingComfort: restoredPreferences.readingComfort ?? 'comfortable',
           appLockEnabled: restoredPreferences.appLockEnabled,
           appLockDelaySeconds: restoredPreferences.appLockDelaySeconds,
           backupReminderDays: restoredPreferences.backupReminderDays,
@@ -262,6 +264,7 @@ export default function BackupScreen() {
       setPendingBackup(null);
       setPendingZipUri(null);
       await load();
+      await syncTimeCapsuleNotifications(db).catch(() => undefined);
       const created = result.createdEntries + result.createdFollowUps;
       const updated = result.updatedEntries + result.updatedFollowUps;
       setOperationProgress({ label: '恢复已完成', value: 1 });
@@ -281,7 +284,7 @@ export default function BackupScreen() {
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}>
-      <Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable>
+      <Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable>
       <Text style={[styles.title, { color: readingTheme.text }]}>备份与导出</Text><View style={styles.headerSpace} />
     </View>
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -304,6 +307,8 @@ export default function BackupScreen() {
           </Text>
         </View>
       </View>
+
+      <Pressable onPress={() => router.push('/data-health' as Href)} style={({ pressed }) => [styles.healthCheckLink, { borderColor: readingTheme.border }, pressed && styles.pressed]}><View><Text style={[styles.healthCheckTitle, { color: readingTheme.text }]}>检查手机里的当前数据</Text><Text style={[styles.healthCheckText, { color: readingTheme.secondary }]}>数据库、媒体文件、回收站与备份状态</Text></View><Text style={styles.readableArrow}>›</Text></Pressable>
 
       <Pressable disabled={exporting} onPress={() => void exportZip()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
         {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>立即备份 ZIP</Text>}
@@ -381,6 +386,7 @@ const styles = StyleSheet.create({
   back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 },
   content: { padding: spacing.xl, paddingBottom: spacing.xxxl },
   summary: { padding: spacing.lg, borderRadius: radii.lg, backgroundColor: colors.primarySoft },
+  healthCheckLink: { minHeight: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.md, paddingHorizontal: spacing.lg, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.md }, healthCheckTitle: { fontSize: 12, fontWeight: '700' }, healthCheckText: { marginTop: 2, fontSize: 10 },
   summaryTitle: { color: colors.primary, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, summaryCount: { marginTop: spacing.sm, color: colors.text, fontSize: 12 }, lastExport: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 11 },
   healthRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm },
   healthDot: { width: 7, height: 7, marginRight: 6, borderRadius: 4 },

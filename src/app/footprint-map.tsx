@@ -27,7 +27,7 @@ function localDateKey(value: string) {
 
 export default function FootprintMapScreen() {
   const db = useSQLiteContext();
-  const { preferences, readingTheme, readingFontFamily } = useAppPreferences();
+  const { preferences, readingTheme, readingBodyStyle, readingFontFamily } = useAppPreferences();
   const mapRef = useRef<MapViewRef>(null);
   const [entries, setEntries] = useState<FootprintEntry[]>([]);
   const [missingCoordinates, setMissingCoordinates] = useState(0);
@@ -361,7 +361,7 @@ export default function FootprintMapScreen() {
       </ScrollView> : null}
       <Pressable onPress={() => router.push({ pathname: '/entry/[id]', params: { id: selectedRegionEntries[0].id } })} style={[styles.latestEntry, { backgroundColor: readingTheme.surface }]}>
         <Text style={styles.entryDate}>最近一次 · {shortDate(selectedRegionEntries[0].occurredAt)}</Text>
-        <Text numberOfLines={1} style={[styles.latestEntryText, { color: readingTheme.text, fontFamily: readingFontFamily }]}>{selectedRegionEntries[0].content || '一段没有文字的时光'}</Text>
+        <Text numberOfLines={1} style={[styles.latestEntryText, { color: readingBodyStyle.color, fontFamily: readingFontFamily, letterSpacing: readingBodyStyle.letterSpacing }]}>{selectedRegionEntries[0].content || '一段没有文字的时光'}</Text>
       </Pressable>
       {selectedRegion.places.length === 1 ? <Pressable onPress={() => router.push(`/location/${encodeURIComponent(selectedRegion.places[0].name)}` as Href)} style={styles.placeDetailButton}><Text style={styles.placeDetailText}>查看这里的记录 ›</Text></Pressable> : null}
     </View> : null}

@@ -14,7 +14,7 @@ const items: { title: string; description: string; route: Href }[] = [
 export default function ContentManagementScreen() {
   const { readingTheme } = useAppPreferences();
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
-    <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>内容管理</Text><View style={styles.space} /></View>
+    <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>内容管理</Text><View style={styles.space} /></View>
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={[styles.hint, { color: readingTheme.secondary }]}>批量修改或清理历史坐标前，建议先导出一份完整 ZIP 备份。</Text>
       <View style={styles.items}>{items.map((item) => <Pressable key={item.title} onPress={() => router.push(item.route)} style={({ pressed }) => [styles.item, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><View style={styles.copy}><Text style={[styles.itemTitle, { color: readingTheme.text }]}>{item.title}</Text><Text style={[styles.description, { color: readingTheme.secondary }]}>{item.description}</Text></View><Text style={styles.arrow}>›</Text></Pressable>)}</View>

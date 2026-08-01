@@ -39,6 +39,16 @@ export type StatisticsHeatmapDay = {
   count: number;
 };
 
+export type StatisticsYearOption = { year: number; count: number };
+export type AnnualReviewMoment = {
+  id: string;
+  label: '年初一刻' | '影像最多' | '最长记录';
+  content: string;
+  occurredAt: string;
+  characters: number;
+  media: number;
+};
+
 export type StatisticsHighlights = {
   totalCharacters: number;
   latestWritingTime: string | null;
@@ -413,4 +423,53 @@ export async function getStatisticsYearHeatmap(
     key,
     count: counts.get(key) ?? 0,
   }));
+}
+
+export async function getStatisticsYearOptions(db: SQLiteDatabase): Promise<StatisticsYearOption[]> {
+  const rows = await db.getAllAsync<{ year: string; count: number }>(
+    `SELECT strftime('%Y', e.occurred_at, 'localtime') AS year, COUNT(*) AS count
+     FROM entries e WHERE e.deleted_at IS NULL
+     GROUP BY year ORDER BY year ASC`,
+  );
+  const counts = new Map(rows.map((row) => [Number(row.year), Number(row.count)]));
+  const currentYear = new Date().getFullYear();
+  const recordedYears = [...counts.keys()].filter(Number.isFinite);
+  const first = Math.min(currentYear, ...recordedYears);
+  const last = Math.max(currentYear, ...recordedYears);
+  return Array.from({ length: last - first + 1 }, (_, index) => {
+    const year = first + index;
+    return { year, count: counts.get(year) ?? 0 };
+  });
+}
+
+export async function getAnnualReviewMoments(
+  db: SQLiteDatabase,
+  anchor: Date = new Date(),
+): Promise<AnnualReviewMoment[]> {
+  const range = getStatisticsRange('year', anchor);
+  const rows = await db.getAllAsync<{
+    id: string; content: string; occurredAt: string; characters: number; media: number;
+  }>(
+    `SELECT e.id, e.content, e.occurred_at AS occurredAt, LENGTH(e.content) AS characters,
+      ((SELECT COUNT(*) FROM entry_images i WHERE i.entry_id = e.id)
+       + (SELECT COUNT(*) FROM follow_up_images fi
+          INNER JOIN follow_ups f ON f.id = fi.follow_up_id
+          WHERE f.entry_id = e.id AND f.deleted_at IS NULL)) AS media
+     FROM entries e
+     WHERE e.deleted_at IS NULL AND e.occurred_at >= ? AND e.occurred_at < ?
+     ORDER BY e.occurred_at ASC, e.created_at ASC`,
+    range.start,
+    range.end,
+  );
+  if (!rows.length) return [];
+  const selected: AnnualReviewMoment[] = [];
+  const add = (row: (typeof rows)[number] | undefined, label: AnnualReviewMoment['label']) => {
+    if (!row || selected.some((item) => item.id === row.id)) return;
+    selected.push({ ...row, characters: Number(row.characters), media: Number(row.media), label });
+  };
+  add(rows[0], '年初一刻');
+  const mediaRichest = [...rows].sort((a, b) => Number(b.media) - Number(a.media) || b.occurredAt.localeCompare(a.occurredAt))[0];
+  add(Number(mediaRichest?.media) > 0 ? mediaRichest : undefined, '影像最多');
+  add([...rows].sort((a, b) => Number(b.characters) - Number(a.characters) || a.occurredAt.localeCompare(b.occurredAt))[0], '最长记录');
+  return selected;
 }

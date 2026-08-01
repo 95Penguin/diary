@@ -15,7 +15,7 @@ export type BackupMediaProgress = (completed: number, total: number) => void;
 
 export async function embedBackupImages(backup: JournalBackup, onProgress?: BackupMediaProgress): Promise<JournalBackup> {
   const hasAvatar = Boolean(backup.appPreferences?.avatarLocalUri);
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (backup.timeCapsuleImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   const images = [] as JournalBackup['images'];
   for (const image of backup.images) {
@@ -43,6 +43,19 @@ export async function embedBackupImages(backup: JournalBackup, onProgress?: Back
     } catch { followUpImages.push({ ...image, dataBase64: null, mimeType: null }); }
     finally { completed += 1; onProgress?.(completed, total); }
   }
+  const timeCapsuleImages = [] as NonNullable<JournalBackup['timeCapsuleImages']>;
+  for (const image of backup.timeCapsuleImages ?? []) {
+    try {
+      const file = new File(image.localUri);
+      if (!file.exists) { timeCapsuleImages.push({ ...image, dataBase64: null, mimeType: null }); continue; }
+      const paired = image.pairedVideoLocalUri ? new File(image.pairedVideoLocalUri) : null;
+      const thumbnail = image.thumbnailLocalUri ? new File(image.thumbnailLocalUri) : null;
+      timeCapsuleImages.push({ ...image, dataBase64: await file.base64(), mimeType: file.type || null,
+        pairedVideoDataBase64: paired?.exists ? await paired.base64() : null, pairedVideoMimeType: paired?.type || null,
+        thumbnailDataBase64: thumbnail?.exists ? await thumbnail.base64() : null, thumbnailMimeType: thumbnail?.type || null });
+    } catch { timeCapsuleImages.push({ ...image, dataBase64: null, mimeType: null }); }
+    finally { completed += 1; onProgress?.(completed, total); }
+  }
   let appPreferences = backup.appPreferences;
   if (appPreferences?.avatarLocalUri) {
     try {
@@ -59,15 +72,16 @@ export async function embedBackupImages(backup: JournalBackup, onProgress?: Back
       onProgress?.(completed, total);
     }
   }
-  return { ...backup, images, followUpImages, appPreferences };
+  return { ...backup, images, followUpImages, timeCapsuleImages, appPreferences };
 }
 
 export async function materializeBackupImages(backup: JournalBackup, onProgress?: BackupMediaProgress) {
   const createdUris: string[] = [];
   const images = [] as JournalBackup['images'];
   const followUpImages = [] as NonNullable<JournalBackup['followUpImages']>;
+  const timeCapsuleImages = [] as NonNullable<JournalBackup['timeCapsuleImages']>;
   const hasAvatar = Boolean(backup.appPreferences?.avatarDataBase64);
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (backup.timeCapsuleImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   try {
     for (const image of backup.images) {
@@ -102,6 +116,17 @@ export async function materializeBackupImages(backup: JournalBackup, onProgress?
       createdUris.push(uri); followUpImages.push({ ...image, localUri: uri, pairedVideoLocalUri, thumbnailLocalUri });
       completed += 1; onProgress?.(completed, total);
     }
+    for (const image of backup.timeCapsuleImages ?? []) {
+      if (!image.dataBase64) { timeCapsuleImages.push({ ...image, localUri: '' }); completed += 1; onProgress?.(completed, total); continue; }
+      const uri = await persistJournalImageBase64(image.dataBase64, extensionFor(image.mimeType, image.localUri));
+      let pairedVideoLocalUri: string | null = null;
+      if (image.pairedVideoDataBase64) { pairedVideoLocalUri = await persistJournalImageBase64(image.pairedVideoDataBase64, extensionFor(image.pairedVideoMimeType, image.pairedVideoLocalUri ?? '.mov')); createdUris.push(pairedVideoLocalUri); }
+      let thumbnailLocalUri = image.thumbnailDataBase64 ? await persistJournalImageBase64(image.thumbnailDataBase64, extensionFor(image.thumbnailMimeType, image.thumbnailLocalUri ?? '.jpg')) : null;
+      if (!thumbnailLocalUri && (image.mediaType === 'video' || image.duration)) thumbnailLocalUri = await createPersistentVideoThumbnail(uri);
+      if (thumbnailLocalUri) createdUris.push(thumbnailLocalUri);
+      createdUris.push(uri); timeCapsuleImages.push({ ...image, localUri: uri, pairedVideoLocalUri, thumbnailLocalUri });
+      completed += 1; onProgress?.(completed, total);
+    }
   } catch (error) {
     createdUris.forEach(deleteJournalImage);
     throw error;
@@ -119,5 +144,5 @@ export async function materializeBackupImages(backup: JournalBackup, onProgress?
   } else if (appPreferences?.avatarLocalUri) {
     appPreferences = { ...appPreferences, avatarLocalUri: null };
   }
-  return { backup: { ...backup, images, followUpImages, appPreferences }, createdUris };
+  return { backup: { ...backup, images, followUpImages, timeCapsuleImages, appPreferences }, createdUris };
 }

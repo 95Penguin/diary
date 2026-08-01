@@ -48,7 +48,7 @@ export default function ReadableExportScreen() {
   }
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
-    <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>可阅读导出</Text><View style={styles.space} /></View>
+    <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>可阅读导出</Text><View style={styles.space} /></View>
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={[styles.note, styles.introNote, { color: readingTheme.secondary }]}>Markdown 适合长期保存和继续编辑；HTML 适合直接用浏览器阅读。媒体文件仍保留在完整 ZIP 备份中。</Text>
       <Choice title="文件格式" value={format} items={[['markdown', 'Markdown'], ['html', 'HTML 网页']]} onChange={(value) => setFormat(value as ReadableExportFormat)} />

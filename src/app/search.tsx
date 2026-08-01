@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -23,13 +23,22 @@ export default function SearchScreen() {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const requestId = useRef(0);
 
   const search = useCallback(async (value: string, filter: TimeFilter) => {
-    if (!value.trim()) { setResults([]); setLoading(false); return; }
+    const currentRequest = ++requestId.current;
+    if (!value.trim()) { setResults([]); setLoading(false); setFailed(false); return; }
     setLoading(true);
+    setFailed(false);
     try {
-      setResults(await searchEntries(db, value, dateRange(filter)));
-    } finally { setLoading(false); }
+      const next = await searchEntries(db, value, dateRange(filter));
+      if (currentRequest === requestId.current) setResults(next);
+    } catch {
+      if (currentRequest === requestId.current) setFailed(true);
+    } finally {
+      if (currentRequest === requestId.current) setLoading(false);
+    }
   }, [db]);
 
   useEffect(() => {
@@ -38,27 +47,24 @@ export default function SearchScreen() {
   }, [query, search, timeFilter]);
 
   return <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
-    <View style={styles.header}><Pressable onPress={() => router.back()} hitSlop={12}><Text style={styles.back}>‹</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>搜索</Text><View style={styles.headerSpace} /></View>
-    <View style={[styles.searchBox, { backgroundColor: readingTheme.surface }]}><Text style={[styles.icon, { color: readingTheme.secondary }]}>⌕</Text><TextInput autoFocus value={query} onChangeText={setQuery} placeholder="搜索记录、后续与标签" placeholderTextColor={readingTheme.secondary} returnKeyType="search" style={[styles.input, { color: readingTheme.text }]} />{query ? <Pressable onPress={() => setQuery('')}><Text style={[styles.clear, { color: readingTheme.secondary }]}>×</Text></Pressable> : null}</View>
+    <View style={styles.header}><Pressable accessibilityLabel="返回" onPress={() => router.back()} hitSlop={12}><Text style={styles.back}>‹</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>搜索</Text><View style={styles.headerSpace} /></View>
+    <View style={[styles.searchBox, { backgroundColor: readingTheme.surface }]}><Text style={[styles.icon, { color: readingTheme.secondary }]}>⌕</Text><TextInput accessibilityLabel="搜索记录" autoFocus value={query} onChangeText={setQuery} placeholder="搜索记录、后续与标签" placeholderTextColor={readingTheme.secondary} returnKeyType="search" style={[styles.input, { color: readingTheme.text }]} />{query ? <Pressable accessibilityLabel="清除搜索内容" onPress={() => setQuery('')}><Text style={[styles.clear, { color: readingTheme.secondary }]}>×</Text></Pressable> : null}</View>
     <ScrollView horizontal style={styles.filterScroll} contentContainerStyle={styles.filters} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
       {FILTERS.map((filter) => <Pressable key={filter.value} onPress={() => setTimeFilter(filter.value)} style={[styles.filter, { backgroundColor: readingTheme.surface }, timeFilter === filter.value && styles.filterActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, timeFilter === filter.value && styles.filterTextActive]}>{filter.label}</Text></Pressable>)}
     </ScrollView>
-    {loading ? <ActivityIndicator style={styles.loader} color={colors.primary} /> : !query.trim() ? <EmptyState title="找回一段记忆" description="输入正文、后续或标签中出现过的词。" /> : results.length ? (
-      <ScrollView contentContainerStyle={styles.results} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        <Text style={styles.resultCount}>找到 {results.length} 条相关记录</Text>
-        {results.map((result) => <SearchResultCard key={result.entry.id} result={result} query={query.trim()} />)}
-      </ScrollView>
+    {loading ? <ActivityIndicator style={styles.loader} color={colors.primary} /> : failed ? <View style={styles.failure}><Text style={styles.failureSymbol}>◌</Text><Text style={[styles.failureTitle, { color: readingTheme.text }]}>搜索暂时失败</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>记录没有丢失，可以重新搜索。</Text><Pressable onPress={() => void search(query, timeFilter)} style={styles.retry}><Text style={styles.retryText}>重新搜索</Text></Pressable></View> : !query.trim() ? <EmptyState title="找回一段记忆" description="输入正文、后续或标签中出现过的词。" /> : results.length ? (
+      <FlatList data={results} keyExtractor={(result) => result.entry.id} renderItem={({ item }) => <SearchResultCard result={item} query={query.trim()} />} ListHeaderComponent={<Text style={styles.resultCount}>“{query.trim()}”找到 {results.length} 条记录</Text>} contentContainerStyle={styles.results} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} initialNumToRender={10} maxToRenderPerBatch={8} windowSize={7} />
     ) : <EmptyState title="没有找到相关记录" description={timeFilter === 'all' ? '换一个关键词或标签试试看。' : '可以扩大时间范围再试试。'} />}
   </SafeAreaView>;
 }
 
 function SearchResultCard({ result, query }: { result: SearchResult; query: string }) {
-  const { readingTheme, readingFontFamily, fontScale } = useAppPreferences();
+  const { readingTheme, readingBodyStyle, readingFontFamily, fontScale } = useAppPreferences();
   const { entry, sources } = result;
   const labels = sources.map((source) => source === 'content' ? '正文' : source === 'followUp' ? '后续' : '标签');
   return <Pressable onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} style={({ pressed }) => [styles.card, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
     <View style={styles.cardHeader}><Text style={styles.date}>{formatShortDateTime(entry.occurredAt)}</Text><Text style={[styles.matchSource, { color: readingTheme.secondary }]}>命中{labels.join('、')}</Text></View>
-    <Text numberOfLines={3} style={[styles.content, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 21 * fontScale }]}><HighlightedText text={entry.content} query={sources.includes('content') ? query : ''} /></Text>
+    <Text numberOfLines={3} style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 21 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}><HighlightedText text={entry.content} query={sources.includes('content') ? query : ''} /></Text>
     {result.matchingFollowUp ? <View style={[styles.matchRow, { borderTopColor: readingTheme.border }]}><Text style={styles.matchLabel}>后续</Text><Text numberOfLines={2} style={[styles.matchText, { color: readingTheme.secondary }]}><HighlightedText text={result.matchingFollowUp} query={query} /></Text></View> : null}
     {result.matchingTag ? <View style={styles.tag}><Text style={styles.tagText}>#<HighlightedText text={result.matchingTag} query={query} /></Text></View> : null}
   </Pressable>;
@@ -86,6 +92,7 @@ const styles = StyleSheet.create({
   searchBox: { height: 42, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.xl, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, icon: { color: colors.textSecondary, fontSize: 22 }, input: { flex: 1, color: colors.text, fontSize: 13 }, clear: { color: colors.textSecondary, fontSize: 20 },
   filterScroll: { flexGrow: 0, height: 36 }, filters: { alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.xl }, filter: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterActive: { backgroundColor: colors.primary }, filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
   loader: { marginTop: 70 }, results: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, resultCount: { marginTop: spacing.sm, marginBottom: spacing.sm, color: colors.textSecondary, fontSize: 10 },
+  failure: { alignItems: 'center', paddingHorizontal: spacing.xxxl, paddingTop: 90 }, failureSymbol: { color: colors.primary, fontSize: 42 }, failureTitle: { marginTop: spacing.md, fontFamily: fonts.serif, fontSize: 18 }, failureText: { marginTop: spacing.sm, fontSize: 13, lineHeight: 20, textAlign: 'center' }, retry: { minHeight: 42, justifyContent: 'center', marginTop: spacing.xl, paddingHorizontal: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   card: { marginBottom: spacing.sm, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, pressed: { opacity: 0.66 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, date: { color: colors.primary, fontSize: 10, fontWeight: '700' }, matchSource: { color: colors.textFaint, fontSize: 9 },
   content: { marginTop: 6, color: colors.text, fontFamily: fonts.serif, fontSize: 14, lineHeight: 21 }, highlight: { color: colors.text, backgroundColor: colors.highlight, fontWeight: '700' },

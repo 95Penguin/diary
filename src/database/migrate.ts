@@ -7,7 +7,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
  * migrated in production: data from those builds must first be exported by the
  * old build and restored through the validated ZIP backup flow.
  */
-export const DATABASE_VERSION = 14;
+export const DATABASE_VERSION = 17;
 export const DATABASE_BASELINE_VERSION = 13;
 
 const BASELINE_SCHEMA = `
@@ -115,6 +115,42 @@ const BASELINE_SCHEMA = `
     FOREIGN KEY (follow_up_id) REFERENCES follow_ups(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE time_capsules (
+    id TEXT PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    open_at TEXT NOT NULL,
+    opened_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    notification_enabled INTEGER NOT NULL DEFAULT 1
+  );
+
+  CREATE TABLE time_capsule_replies (
+    id TEXT PRIMARY KEY NOT NULL,
+    capsule_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (capsule_id) REFERENCES time_capsules(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE time_capsule_images (
+    id TEXT PRIMARY KEY NOT NULL,
+    capsule_id TEXT NOT NULL,
+    uri TEXT NOT NULL,
+    width INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    media_type TEXT NOT NULL DEFAULT 'image',
+    paired_video_uri TEXT,
+    duration INTEGER,
+    thumbnail_uri TEXT,
+    FOREIGN KEY (capsule_id) REFERENCES time_capsules(id) ON DELETE CASCADE
+  );
+
   CREATE INDEX idx_entries_occurred_at
     ON entries(occurred_at DESC) WHERE deleted_at IS NULL;
   CREATE INDEX idx_follow_ups_entry_id
@@ -149,6 +185,12 @@ const BASELINE_SCHEMA = `
     WHERE deleted_at IS NULL;
   CREATE INDEX idx_entry_tags_entry_id
     ON entry_tags(entry_id, sort_order ASC);
+  CREATE INDEX idx_time_capsules_open_at
+    ON time_capsules(open_at ASC) WHERE deleted_at IS NULL;
+  CREATE INDEX idx_time_capsule_replies_capsule_id
+    ON time_capsule_replies(capsule_id, created_at ASC);
+  CREATE INDEX idx_time_capsule_images_capsule_id
+    ON time_capsule_images(capsule_id, sort_order ASC);
 `;
 
 const MIGRATION_13_TO_14 = `
@@ -157,6 +199,54 @@ const MIGRATION_13_TO_14 = `
     WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_entry_tags_entry_id
     ON entry_tags(entry_id, sort_order ASC);
+`;
+
+const MIGRATION_14_TO_15 = `
+  CREATE TABLE time_capsules (
+    id TEXT PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    open_at TEXT NOT NULL,
+    opened_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX idx_time_capsules_open_at
+    ON time_capsules(open_at ASC) WHERE deleted_at IS NULL;
+`;
+
+const MIGRATION_15_TO_16 = `
+  ALTER TABLE time_capsules ADD COLUMN notification_enabled INTEGER NOT NULL DEFAULT 1;
+  CREATE TABLE time_capsule_replies (
+    id TEXT PRIMARY KEY NOT NULL,
+    capsule_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (capsule_id) REFERENCES time_capsules(id) ON DELETE CASCADE
+  );
+  CREATE INDEX idx_time_capsule_replies_capsule_id
+    ON time_capsule_replies(capsule_id, created_at ASC);
+`;
+
+const MIGRATION_16_TO_17 = `
+  CREATE TABLE time_capsule_images (
+    id TEXT PRIMARY KEY NOT NULL,
+    capsule_id TEXT NOT NULL,
+    uri TEXT NOT NULL,
+    width INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    media_type TEXT NOT NULL DEFAULT 'image',
+    paired_video_uri TEXT,
+    duration INTEGER,
+    thumbnail_uri TEXT,
+    FOREIGN KEY (capsule_id) REFERENCES time_capsules(id) ON DELETE CASCADE
+  );
+  CREATE INDEX idx_time_capsule_images_capsule_id
+    ON time_capsule_images(capsule_id, sort_order ASC);
 `;
 
 export async function migrateDatabase(db: SQLiteDatabase) {
@@ -178,8 +268,11 @@ export async function migrateDatabase(db: SQLiteDatabase) {
   try {
     if (currentVersion === 0) {
       await db.execAsync(BASELINE_SCHEMA);
-    } else if (currentVersion === 13) {
-      await db.execAsync(MIGRATION_13_TO_14);
+    } else if (currentVersion >= 13 && currentVersion <= 16) {
+      if (currentVersion === 13) await db.execAsync(MIGRATION_13_TO_14);
+      if (currentVersion <= 14) await db.execAsync(MIGRATION_14_TO_15);
+      if (currentVersion <= 15) await db.execAsync(MIGRATION_15_TO_16);
+      await db.execAsync(MIGRATION_16_TO_17);
     } else {
       throw new Error(`没有可用的数据库迁移路径：${currentVersion} → ${DATABASE_VERSION}`);
     }

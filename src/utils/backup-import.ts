@@ -39,7 +39,7 @@ export function parseJournalBackup(contents: string): JournalBackup {
   try { value = JSON.parse(contents); } catch { throw new Error('invalid-json'); }
   if (!value || typeof value !== 'object') throw new Error('invalid-backup');
   const backup = value as Partial<JournalBackup>;
-  if (backup.format !== 'shishi-journal' || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].some((version) => backup.version === version)) throw new Error('unsupported-backup');
+  if (backup.format !== 'shishi-journal' || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].some((version) => backup.version === version)) throw new Error('unsupported-backup');
   if (!Array.isArray(backup.entries) || !Array.isArray(backup.followUps) || !Array.isArray(backup.tags) || !Array.isArray(backup.images)) throw new Error('invalid-backup');
   const validEntries = backup.entries.every((item) => item && isString(item.id) && isString(item.content) && isString(item.occurredAt) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt));
   const validFollowUps = backup.followUps.every((item) => item && isString(item.id) && isString(item.entryId) && isString(item.content) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt));
@@ -48,6 +48,9 @@ export function parseJournalBackup(contents: string): JournalBackup {
   const validFollowUpImages = backup.followUpImages === undefined || (Array.isArray(backup.followUpImages) && backup.followUpImages.every((item) => item && isString(item.id) && isString(item.followUpId) && isString(item.localUri) && typeof item.width === 'number' && Number.isFinite(item.width) && typeof item.height === 'number' && Number.isFinite(item.height) && typeof item.sortOrder === 'number' && Number.isFinite(item.sortOrder) && isString(item.createdAt) && isMediaType(item.mediaType) && isOptionalNullableString(item.pairedVideoLocalUri) && isOptionalNullableNumber(item.duration) && isOptionalNullableString(item.thumbnailLocalUri) && isOptionalNullableString(item.dataBase64) && isOptionalNullableString(item.mimeType) && isOptionalNullableString(item.pairedVideoDataBase64) && isOptionalNullableString(item.pairedVideoMimeType) && isOptionalNullableString(item.thumbnailDataBase64) && isOptionalNullableString(item.thumbnailMimeType)));
   const validVersions = backup.versions === undefined || (Array.isArray(backup.versions) && backup.versions.every((item) => item && isString(item.id) && isString(item.entryId) && isString(item.content) && isString(item.occurredAt) && isString(item.createdAt) && Array.isArray(item.tags)));
   const validSuppressed = backup.suppressedMemoryEntryIds === undefined || (Array.isArray(backup.suppressedMemoryEntryIds) && backup.suppressedMemoryEntryIds.every(isString));
+  const validCapsules = backup.timeCapsules === undefined || (Array.isArray(backup.timeCapsules) && backup.timeCapsules.every((item) => item && isString(item.id) && isString(item.title) && isString(item.content) && isString(item.openAt) && isNullableString(item.openedAt) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt) && typeof item.notificationEnabled === 'boolean'));
+  const validCapsuleReplies = backup.timeCapsuleReplies === undefined || (Array.isArray(backup.timeCapsuleReplies) && backup.timeCapsuleReplies.every((item) => item && isString(item.id) && isString(item.capsuleId) && isString(item.content) && isString(item.createdAt) && isString(item.updatedAt)));
+  const validCapsuleImages = backup.timeCapsuleImages === undefined || (Array.isArray(backup.timeCapsuleImages) && backup.timeCapsuleImages.every((item) => item && isString(item.id) && isString(item.capsuleId) && isString(item.localUri) && typeof item.width === 'number' && Number.isFinite(item.width) && typeof item.height === 'number' && Number.isFinite(item.height) && typeof item.sortOrder === 'number' && Number.isFinite(item.sortOrder) && isString(item.createdAt) && isMediaType(item.mediaType) && isOptionalNullableString(item.pairedVideoLocalUri) && isOptionalNullableNumber(item.duration) && isOptionalNullableString(item.thumbnailLocalUri) && isOptionalNullableString(item.dataBase64) && isOptionalNullableString(item.mimeType) && isOptionalNullableString(item.pairedVideoDataBase64) && isOptionalNullableString(item.pairedVideoMimeType) && isOptionalNullableString(item.thumbnailDataBase64) && isOptionalNullableString(item.thumbnailMimeType)));
   const validMetadataCatalog = isMetadataCatalog(backup.metadataCatalog);
   const validJournalTemplates = backup.journalTemplates === undefined || (() => {
     const parsed = parseJournalTemplateSettings(backup.journalTemplates);
@@ -65,26 +68,31 @@ export function parseJournalBackup(contents: string): JournalBackup {
     && isOptionalNullableString(preferences.avatarMimeType)
     && ['system', 'light', 'dark'].includes(preferences.themeMode)
     && ['verySmall', 'small', 'standard', 'large', 'veryLarge'].includes(preferences.fontSize)
-    && ['cream', 'white', 'warm', 'green', 'blue', 'pink', 'red', 'lavender', 'gray', 'night'].includes(preferences.readingTheme)
+    && ['cream', 'white', 'warm', 'green', 'cyan', 'blue', 'pink', 'red', 'lavender', 'gray', 'night'].includes(preferences.readingTheme)
     && ['serif', 'sans', 'light', 'mono', 'system'].includes(preferences.readingFont)
+    && (preferences.readingComfort === undefined || ['compact', 'comfortable', 'spacious'].includes(preferences.readingComfort))
     && typeof preferences.appLockEnabled === 'boolean'
     && [0, 60, 300].includes(preferences.appLockDelaySeconds)
     && [0, 7, 14, 30].includes(preferences.backupReminderDays)
     && (preferences.locationPrivacyMode === undefined || ['precise', 'approximate', 'nameOnly', 'ask'].includes(preferences.locationPrivacyMode))
     && (preferences.exportLocationMode === undefined || ['include', 'hidden'].includes(preferences.exportLocationMode))
   );
-  if (!validEntries || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validMetadataCatalog || !validJournalTemplates || !validAppPreferences) throw new Error('invalid-backup');
+  if (!validEntries || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validCapsules || !validCapsuleReplies || !validCapsuleImages || !validMetadataCatalog || !validJournalTemplates || !validAppPreferences) throw new Error('invalid-backup');
 
   const entries = backup.entries as JournalBackup['entries'];
   const followUps = backup.followUps as JournalBackup['followUps'];
   const images = backup.images as JournalBackup['images'];
   const followUpImages = (backup.followUpImages ?? []) as NonNullable<JournalBackup['followUpImages']>;
   const versions = (backup.versions ?? []) as NonNullable<JournalBackup['versions']>;
-  if (!hasUniqueIds(entries) || !hasUniqueIds(followUps) || !hasUniqueIds(images) || !hasUniqueIds(followUpImages) || !hasUniqueIds(versions)) {
+  const capsules = backup.timeCapsules ?? [];
+  const capsuleReplies = backup.timeCapsuleReplies ?? [];
+  const capsuleImages = backup.timeCapsuleImages ?? [];
+  if (!hasUniqueIds(entries) || !hasUniqueIds(followUps) || !hasUniqueIds(images) || !hasUniqueIds(followUpImages) || !hasUniqueIds(versions) || !hasUniqueIds(capsules) || !hasUniqueIds(capsuleReplies) || !hasUniqueIds(capsuleImages)) {
     throw new Error('invalid-backup');
   }
   const entryIds = new Set(entries.map((item) => item.id));
   const followUpIds = new Set(followUps.map((item) => item.id));
+  const capsuleIds = new Set(capsules.map((item) => item.id));
   if (
     followUps.some((item) => !entryIds.has(item.entryId))
     || images.some((item) => !entryIds.has(item.entryId))
@@ -92,6 +100,8 @@ export function parseJournalBackup(contents: string): JournalBackup {
     || (backup.tags as JournalBackup['tags']).some((item) => !entryIds.has(item.entryId))
     || versions.some((item) => !entryIds.has(item.entryId))
     || (backup.suppressedMemoryEntryIds ?? []).some((id) => !entryIds.has(id))
+    || capsuleReplies.some((item) => !capsuleIds.has(item.capsuleId))
+    || capsuleImages.some((item) => !capsuleIds.has(item.capsuleId))
   ) {
     throw new Error('invalid-backup');
   }

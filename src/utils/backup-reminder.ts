@@ -4,15 +4,6 @@ import * as Notifications from 'expo-notifications';
 export const BACKUP_REMINDER_ID = 'shishi-backup-reminder';
 const CHANNEL_ID = 'backup-reminders';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
-
 async function prepareNotifications() {
   if (Platform.OS === 'web') return false;
   if (Platform.OS === 'android') {

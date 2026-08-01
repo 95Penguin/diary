@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
+import { BackHandler, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { reGeocode } from 'expo-gaode-map';
@@ -39,7 +39,7 @@ const EMPTY_SUGGESTIONS: EntryFilterOptions = { locations: [], tags: [], moods: 
 
 export default function ComposeScreen() {
   const db = useSQLiteContext();
-  const { preferences, fontScale, readingFontFamily, readingTheme } = useAppPreferences();
+  const { preferences, fontScale, readingBodyStyle, readingFontFamily, readingTheme } = useAppPreferences();
   const { id, date, draft: requestedDraftId, quick } = useLocalSearchParams<{ id?: string; date?: string; draft?: string; quick?: string }>();
   const isEditing = Boolean(id);
   const initialOccurredAt = occurrenceTimeForDate(date ?? '', new Date());
@@ -501,7 +501,7 @@ export default function ComposeScreen() {
       }
       removedUris.forEach(deleteJournalImage);
       if (id) leaveComposer();
-      else router.replace({ pathname: '/entry/[id]', params: { id: entryId, ...(willLightNewPlace ? { lit: locationName.trim() } : {}) } });
+      else router.replace({ pathname: '/entry/[id]', params: { id: entryId, saved: '1', ...(willLightNewPlace ? { lit: locationName.trim() } : {}) } });
     } catch (error) {
       void recordAppError('compose.save-entry', error);
       newlyPersisted.forEach(deleteJournalImage);
@@ -531,6 +531,20 @@ export default function ComposeScreen() {
     }
   }
 
+  const handleHardwareBack = useEffectEvent(() => {
+    if (exitConfirmationVisible) setExitConfirmationVisible(false);
+    else void cancel();
+  });
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleHardwareBack();
+      return true;
+    });
+    return () => subscription.remove();
+  }, []);
+
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}>
     <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.header}>
@@ -550,7 +564,7 @@ export default function ComposeScreen() {
             <Pressable accessibilityLabel="恢复正文修改" disabled={!canRedo} hitSlop={8} onPress={redoContent} style={[styles.historyButton, { backgroundColor: readingTheme.surface }, !canRedo && styles.historyButtonDisabled]}><SymbolView name={{ ios: 'arrow.uturn.forward', android: 'redo', web: 'redo' }} size={16} tintColor={colors.primary} /></Pressable>
           </View>
         </View>
-        <TextInput ref={inputRef} multiline maxLength={10000} value={content} onChangeText={changeContent} placeholder="写下现在发生的事……" placeholderTextColor={readingTheme.secondary} textAlignVertical="top" style={[styles.editor, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale }]} />
+        <TextInput ref={inputRef} multiline maxLength={10000} value={content} onChangeText={changeContent} placeholder="写下现在发生的事……" placeholderTextColor={readingTheme.secondary} textAlignVertical="top" style={[styles.editor, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]} />
         {quickMode ? <Pressable onPress={() => setQuickMode(false)} style={[styles.expandQuick, { backgroundColor: readingTheme.surface }]}><Text style={styles.expandQuickText}>添加图片、地点或其他信息</Text></Pressable> : null}
         <View style={[styles.imageRow, quickMode && styles.quickHidden]}>
           {images.map((image, index) => <View key={image.uri} style={styles.imageItem}>

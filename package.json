@@ -1,11 +1,12 @@
 {
   "name": "shishi-mobile",
   "main": "expo-router/entry",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "dependencies": {
     "@expo-google-fonts/noto-sans-sc": "^0.4.3",
     "@expo-google-fonts/noto-serif-sc": "^0.4.3",
     "@expo/ui": "~57.0.8",
+    "@react-native-community/datetimepicker": "9.1.0",
     "expo": "~57.0.9",
     "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.6",
@@ -43,6 +44,7 @@
     "react-native-reanimated": "4.5.1",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
+    "react-native-view-shot": "5.1.0",
     "react-native-web": "~0.21.0",
     "react-native-worklets": "0.10.1"
   },

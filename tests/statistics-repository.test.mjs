@@ -3,8 +3,10 @@ import test from 'node:test';
 
 import { migrateDatabase } from '../src/database/migrate.ts';
 import {
+  getAnnualReviewMoments,
   getStatisticsOverview,
   getStatisticsRange,
+  getStatisticsYearOptions,
   getStatisticsYearHeatmap,
 } from '../src/database/statistics-repository.ts';
 import { createTestDatabase } from './sqlite-test-adapter.mjs';
@@ -205,4 +207,34 @@ test('year heatmap returns every local day and excludes deleted records', async 
     key: '2026-02-03',
     count: 1,
   });
+});
+
+test('annual review offers continuous years including empty years', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await insertEntry(db, { id: 'old-year', occurredAt: localIso(2024, 5, 1) });
+  const options = await getStatisticsYearOptions(db);
+  assert.equal(options[0].year, 2024);
+  assert.equal(options[0].count, 1);
+  assert.equal(options.at(-1).year, new Date().getFullYear());
+  assert.equal(options.find((item) => item.year === 2025).count, 0);
+});
+
+test('annual review selects distinct representative moments', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await insertEntry(db, { id: 'first', occurredAt: localIso(2026, 1, 2), content: '新年开始' });
+  await insertEntry(db, { id: 'media-rich', occurredAt: localIso(2026, 2, 2), content: '照片的一天' });
+  await insertEntry(db, { id: 'longest', occurredAt: localIso(2026, 3, 2), content: '很长的一段记录内容' });
+  await db.runAsync(
+    'INSERT INTO entry_images (id, entry_id, uri, created_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?)',
+    'media-a', 'media-rich', 'file:///a.jpg', localIso(2026, 2, 2),
+    'media-b', 'media-rich', 'file:///b.jpg', localIso(2026, 2, 2),
+  );
+
+  const moments = await getAnnualReviewMoments(db, new Date(2026, 6, 1));
+  assert.deepEqual(moments.map((item) => [item.id, item.label]), [
+    ['first', '年初一刻'], ['media-rich', '影像最多'], ['longest', '最长记录'],
+  ]);
+  assert.equal(new Set(moments.map((item) => item.id)).size, moments.length);
 });

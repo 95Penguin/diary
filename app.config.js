@@ -8,7 +8,8 @@ module.exports = ({ config }) => {
   return {
     ...config,
     plugins: [
-      ...(config.plugins ?? []).filter((plugin) => (Array.isArray(plugin) ? plugin[0] : plugin) !== 'expo-gaode-map'),
+      ...(config.plugins ?? []).filter((plugin) => !['expo-gaode-map', '@react-native-community/datetimepicker'].includes(Array.isArray(plugin) ? plugin[0] : plugin)),
+      '@react-native-community/datetimepicker',
       [
         'expo-gaode-map',
         {

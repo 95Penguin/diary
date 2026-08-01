@@ -2,7 +2,7 @@ import type { JournalBackup } from '@/domain/journal';
 import { strFromU8, unzipSync } from 'fflate';
 
 type ArchiveFiles = Record<string, Uint8Array | undefined>;
-type BackupMedia = JournalBackup['images'][number] | NonNullable<JournalBackup['followUpImages']>[number];
+type BackupMedia = JournalBackup['images'][number] | NonNullable<JournalBackup['followUpImages']>[number] | NonNullable<JournalBackup['timeCapsuleImages']>[number];
 
 function assertItemFiles(item: BackupMedia, files: ArchiveFiles) {
   for (const path of [item.localUri, item.pairedVideoLocalUri, item.thumbnailLocalUri]) {
@@ -15,6 +15,7 @@ function assertItemFiles(item: BackupMedia, files: ArchiveFiles) {
 export function validateArchiveMediaReferences(backup: JournalBackup, files: ArchiveFiles) {
   backup.images.forEach((item) => assertItemFiles(item, files));
   (backup.followUpImages ?? []).forEach((item) => assertItemFiles(item, files));
+  (backup.timeCapsuleImages ?? []).forEach((item) => assertItemFiles(item, files));
   const avatarPath = backup.appPreferences?.avatarLocalUri;
   if (avatarPath && (!files[avatarPath] || files[avatarPath].byteLength === 0)) {
     throw new Error('missing-backup-media');

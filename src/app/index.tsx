@@ -35,6 +35,7 @@ import { lunarDayLabel } from '@/utils/lunar';
 import { cleanupUnusedJournalMedia, deleteJournalImage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
+import { cleanupExpiredTimeCapsules } from '@/database/time-capsule-repository';
 
 export default function HomeScreen() {
   const db = useSQLiteContext();
@@ -42,6 +43,7 @@ export default function HomeScreen() {
   const todayKey = dateKey(new Date().toISOString());
   const [refreshKey, setRefreshKey] = useState(0);
   const [view, setView] = useState<HomeView>('timeline');
+  const [timelineScrollRequest, setTimelineScrollRequest] = useState(0);
   const [selectedDate, setSelectedDate] = useState(todayKey);
   const [actionEntry, setActionEntry] = useState<Entry | null>(null);
   const [draftCount, setDraftCount] = useState(0);
@@ -64,6 +66,9 @@ export default function HomeScreen() {
       InteractionManager.runAfterInteractions(() => {
         void cleanupExpiredTrash(db)
           .then((expiredImages) => expiredImages.forEach(deleteJournalImage))
+          .catch(() => { /* Cleanup is best-effort and must not block the timeline. */ });
+        void cleanupExpiredTimeCapsules(db)
+          .then((expiredMedia) => expiredMedia.forEach(deleteJournalImage))
           .catch(() => { /* Cleanup is best-effort and must not block the timeline. */ });
         void listReferencedMediaUris(db)
           .then((uris) => cleanupUnusedJournalMedia(uris))
@@ -116,12 +121,15 @@ export default function HomeScreen() {
       </View>
 
       <View style={styles.content}>
-        <View accessibilityElementsHidden={view !== 'timeline'} importantForAccessibility={view === 'timeline' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'timeline' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'timeline' && styles.hiddenPane]}><Timeline refreshKey={refreshKey} entryRefresh={entryRefresh} onOpen={openEntry} onLongPress={openEntryActions} /></View>
+        <View accessibilityElementsHidden={view !== 'timeline'} importantForAccessibility={view === 'timeline' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'timeline' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'timeline' && styles.hiddenPane]}><Timeline refreshKey={refreshKey} entryRefresh={entryRefresh} scrollRequest={timelineScrollRequest} onOpen={openEntry} onLongPress={openEntryActions} /></View>
         <View accessibilityElementsHidden={view !== 'calendar'} importantForAccessibility={view === 'calendar' ? 'auto' : 'no-hide-descendants'} pointerEvents={view === 'calendar' ? 'auto' : 'none'} style={[styles.viewPane, view !== 'calendar' && styles.hiddenPane]}><CalendarView refreshKey={refreshKey} entryRefresh={entryRefresh} selected={selectedDate} onSelect={setSelectedDate} onOpen={openEntry} onLongPress={openEntryActions} /></View>
       </View>
 
       {quickHintVisible ? <Pressable accessibilityRole="button" accessibilityLabel="知道了" onPress={dismissQuickHint} style={[styles.quickHint, { backgroundColor: readingTheme.surface }]}><Text style={[styles.quickHintText, { color: readingTheme.secondary }]}>长按“＋”可以直接进入快速记录</Text><Text style={styles.quickHintClose}>知道了</Text></Pressable> : null}
-      <BottomNavigation view={view} onChange={setView} onCompose={() => {
+      <BottomNavigation view={view} onChange={(nextView) => {
+        if (nextView === 'timeline' && view === 'timeline') setTimelineScrollRequest((value) => value + 1);
+        else setView(nextView);
+      }} onCompose={() => {
         if (view === 'calendar') router.push({ pathname: '/compose', params: { date: selectedDate } });
         else router.push('/compose');
       }} onQuickCompose={() => router.push({ pathname: '/compose', params: { quick: '1' } })} />
@@ -135,7 +143,7 @@ type ActiveFilterKind = Exclude<FilterKind, 'none'>;
 const PAGE_SIZE = 30;
 const EMPTY_FILTER_OPTIONS: EntryFilterOptions = { locations: [], tags: [], moods: [], weather: [] };
 
-function Timeline({ refreshKey, entryRefresh, onOpen, onLongPress }: { refreshKey: number; entryRefresh: { id: string; revision: number } | null; onOpen: (entry: Entry) => void; onLongPress: (entry: Entry) => void }) {
+function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress }: { refreshKey: number; entryRefresh: { id: string; revision: number } | null; scrollRequest: number; onOpen: (entry: Entry) => void; onLongPress: (entry: Entry) => void }) {
   const db = useSQLiteContext();
   const { readingTheme } = useAppPreferences();
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -144,6 +152,7 @@ function Timeline({ refreshKey, entryRefresh, onOpen, onLongPress }: { refreshKe
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const requestId = useRef(0);
+  const listRef = useRef<SectionList<Entry>>(null);
   const initialLoadStartedAt = useRef(startupTimer());
   const [filterOptions, setFilterOptions] = useState<EntryFilterOptions>(EMPTY_FILTER_OPTIONS);
   const [filterKind, setFilterKind] = useState<FilterKind>('none');
@@ -228,6 +237,11 @@ function Timeline({ refreshKey, entryRefresh, onOpen, onLongPress }: { refreshKe
     return result;
   }, [entries]);
 
+  useEffect(() => {
+    if (!scrollRequest || !groups.length) return;
+    listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: true, viewOffset: 0 });
+  }, [groups.length, scrollRequest]);
+
   if (loading && !entries.length) return <ActivityIndicator style={styles.loader} color={colors.primary} />;
   const valueOptions = filterKind === 'time'
     ? [{ value: 'today', label: '今天' }, { value: '7days', label: '最近 7 天' }, { value: '30days', label: '最近 30 天' }, { value: 'year', label: '今年' }]
@@ -269,6 +283,7 @@ function Timeline({ refreshKey, entryRefresh, onOpen, onLongPress }: { refreshKe
         {activeFilterCount ? <Pressable accessibilityLabel="清除全部筛选" hitSlop={8} onPress={() => { setFilters({}); setFilterKind('none'); }}><Text style={[styles.clearFilter, { color: readingTheme.secondary }]}>清除全部</Text></Pressable> : null}
       </ScrollView><Pressable accessibilityLabel="打开回忆" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></Pressable></View>
     <SectionList
+      ref={listRef}
       sections={groups}
       keyExtractor={(entry) => entry.id}
       renderSectionHeader={({ section }) => <View style={[styles.dayHeader, { backgroundColor: readingTheme.background }]}><Text style={[styles.dayTitle, { color: readingTheme.text }]}>{section.label}</Text><Text style={[styles.weekday, { color: readingTheme.secondary }]}>{section.weekday}</Text></View>}
@@ -303,6 +318,8 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
   const [monthOffset, setMonthOffset] = useState(0);
   const [calendarWidth, setCalendarWidth] = useState(0);
   const [calendarOrder, setCalendarOrder] = useState<'asc' | 'desc'>('asc');
+  const [monthPickerVisible, setMonthPickerVisible] = useState(false);
+  const [pickerYear, setPickerYear] = useState(now.getFullYear());
   const [monthCounts, setMonthCounts] = useState<Record<string, number>>({});
   const [selectedEntries, setSelectedEntries] = useState<Entry[]>([]);
   const [loadedDate, setLoadedDate] = useState<string | null>(null);
@@ -365,6 +382,12 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
     onSelect(`${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-01`);
   }
 
+  function jumpToMonth(targetYear: number, targetMonth: number) {
+    setMonthOffset((targetYear - now.getFullYear()) * 12 + targetMonth - now.getMonth());
+    onSelect(`${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-01`);
+    setMonthPickerVisible(false);
+  }
+
   function toggleCalendarOrder() {
     const next = calendarOrder === 'asc' ? 'desc' : 'asc';
     setCalendarOrder(next);
@@ -375,7 +398,7 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
 
   const calendarHeader = <><View style={styles.monthHeader}>
       <Pressable accessibilityLabel="上个月" onPress={() => changeMonth(-1)} style={[styles.monthButton, { backgroundColor: readingTheme.surface }]}><View style={[styles.monthArrow, styles.monthArrowLeft, { borderColor: readingTheme.text }]} /></Pressable>
-      <View style={styles.monthCenter}><Text style={[styles.monthTitle, { color: readingTheme.text }]}>{year} 年 {monthIndex + 1} 月</Text>{awayFromToday ? <Pressable onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); }} style={[styles.todayButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.todayText}>今天</Text></Pressable> : null}</View>
+      <View style={styles.monthCenter}><Pressable accessibilityLabel={`选择年月，当前 ${year} 年 ${monthIndex + 1} 月`} onPress={() => { setPickerYear(year); setMonthPickerVisible(true); }}><Text style={[styles.monthTitle, { color: readingTheme.text }]}>{year} 年 {monthIndex + 1} 月⌄</Text></Pressable>{awayFromToday ? <Pressable accessibilityLabel="回到今天" onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); }} style={[styles.todayButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.todayText}>今天</Text></Pressable> : null}</View>
       <Pressable accessibilityLabel="下个月" onPress={() => changeMonth(1)} style={[styles.monthButton, { backgroundColor: readingTheme.surface }]}><View style={[styles.monthArrow, styles.monthArrowRight, { borderColor: readingTheme.text }]} /></Pressable>
     </View>
     <View style={styles.calendarBoard} onLayout={(event) => setCalendarWidth(event.nativeEvent.layout.width)}>
@@ -395,7 +418,7 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
       {orderedSelectedEntries.length > 1 ? <Pressable accessibilityLabel={`当前${calendarOrder === 'asc' ? '正序' : '倒序'}，点击切换`} hitSlop={8} onPress={toggleCalendarOrder} style={[styles.calendarOrderButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.calendarOrderText}>{calendarOrder === 'asc' ? '正序' : '倒序'}</Text><View style={styles.calendarOrderChevron} /></Pressable> : null}
     </View></>;
 
-  return <FlatList
+  return <><FlatList
     data={orderedSelectedEntries}
     keyExtractor={(entry) => entry.id}
     renderItem={({ item }) => <EntryCard entry={item} onPress={() => onOpen(item)} onLongPress={() => onLongPress(item)} />}
@@ -407,7 +430,7 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
     maxToRenderPerBatch={4}
     windowSize={5}
     removeClippedSubviews={Platform.OS === 'android'}
-  />;
+  /><Modal visible={monthPickerVisible} transparent animationType="fade" onRequestClose={() => setMonthPickerVisible(false)}><Pressable accessibilityLabel="关闭年月选择" onPress={() => setMonthPickerVisible(false)} style={styles.monthPickerOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.monthPicker, { backgroundColor: readingTheme.background }]}><Text style={[styles.monthPickerTitle, { color: readingTheme.text }]}>跳转到年月</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.monthPickerYears}>{Array.from({ length: 51 }, (_, index) => now.getFullYear() - index).map((itemYear) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: pickerYear === itemYear }} key={itemYear} onPress={() => setPickerYear(itemYear)} style={[styles.monthPickerYear, { backgroundColor: readingTheme.surface }, pickerYear === itemYear && styles.monthPickerYearActive]}><Text style={[styles.monthPickerYearText, { color: readingTheme.secondary }, pickerYear === itemYear && styles.monthPickerYearTextActive]}>{itemYear}</Text></Pressable>)}</ScrollView><View style={styles.monthPickerGrid}>{Array.from({ length: 12 }, (_, index) => <Pressable accessibilityLabel={`${pickerYear} 年 ${index + 1} 月`} key={index} onPress={() => jumpToMonth(pickerYear, index)} style={[styles.monthPickerMonth, { backgroundColor: readingTheme.surface }, pickerYear === year && index === monthIndex && styles.monthPickerMonthActive]}><Text style={[styles.monthPickerMonthText, { color: readingTheme.text }, pickerYear === year && index === monthIndex && styles.monthPickerMonthTextActive]}>{index + 1} 月</Text></Pressable>)}</View><View style={styles.monthPickerActions}><Pressable onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); setMonthPickerVisible(false); }}><Text style={styles.monthPickerToday}>回到今天</Text></Pressable><Pressable onPress={() => setMonthPickerVisible(false)}><Text style={[styles.monthPickerCancel, { color: readingTheme.secondary }]}>取消</Text></Pressable></View></Pressable></Pressable></Modal></>;
 }
 
 const CalendarView = memo(CalendarViewComponent);
@@ -455,4 +478,5 @@ const styles = StyleSheet.create({
   calendarOrderButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted },
   calendarOrderText: { color: colors.primary, fontSize: 10, lineHeight: 14 },
   calendarOrderChevron: { width: 5, height: 5, marginTop: -2, borderRightWidth: 1.25, borderBottomWidth: 1.25, borderColor: colors.primary, transform: [{ rotate: '45deg' }] },
+  monthPickerOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, monthPicker: { width: '100%', maxWidth: 340, padding: spacing.xl, borderRadius: radii.lg }, monthPickerTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, monthPickerYears: { gap: spacing.xs, paddingVertical: spacing.lg }, monthPickerYear: { minWidth: 58, minHeight: 34, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radii.pill }, monthPickerYearActive: { backgroundColor: colors.primary }, monthPickerYearText: { fontSize: 11 }, monthPickerYearTextActive: { color: '#FFFFFF', fontWeight: '700' }, monthPickerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }, monthPickerMonth: { width: '22%', minHeight: 42, flexGrow: 1, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md }, monthPickerMonthActive: { backgroundColor: colors.primary }, monthPickerMonthText: { fontSize: 12 }, monthPickerMonthTextActive: { color: '#FFFFFF', fontWeight: '700' }, monthPickerActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.xl, paddingHorizontal: spacing.sm }, monthPickerToday: { color: colors.primary, fontSize: 12, fontWeight: '700' }, monthPickerCancel: { fontSize: 12 },
 });

@@ -11,7 +11,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { getDraftCount, getJournalStats, getLastExportAt } from '@/database/journal-repository';
 import type { JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
-import { readingThemes, useAppPreferences, type AppLockDelaySeconds, type BackupReminderDays, type FontSizeMode, type ReadingFontName, type ReadingThemeName } from '@/preferences/app-preferences';
+import { readingThemes, useAppPreferences, type AppLockDelaySeconds, type BackupReminderDays, type FontSizeMode, type ReadingComfortName, type ReadingFontName, type ReadingThemeName } from '@/preferences/app-preferences';
 import { setBackupReminder } from '@/utils/backup-reminder';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 
@@ -21,15 +21,17 @@ export default function SettingsScreen() {
   const db = useSQLiteContext();
   const [stats, setStats] = useState(EMPTY_STATS);
   const [draftCount, setDraftCount] = useState(0);
-  const { preferences, readingFontFamily, readingTheme, fontScale, updatePreferences } = useAppPreferences();
+  const [lastExportAt, setLastExportAt] = useState<string | null>(null);
+  const { preferences, readingBodyStyle, readingFontFamily, readingTheme, fontScale, updatePreferences } = useAppPreferences();
   const [profileEditor, setProfileEditor] = useState<'nickname' | 'signature' | null>(null);
   const [nickname, setNickname] = useState(preferences.nickname);
   const [signature, setSignature] = useState(preferences.signature);
 
   useFocusEffect(useCallback(() => {
-    void Promise.all([getJournalStats(db), getDraftCount(db)]).then(([nextStats, nextDraftCount]) => {
+    void Promise.all([getJournalStats(db), getDraftCount(db), getLastExportAt(db)]).then(([nextStats, nextDraftCount, nextExportAt]) => {
       setStats(nextStats);
       setDraftCount(nextDraftCount);
+      setLastExportAt(nextExportAt);
     });
   }, [db]));
 
@@ -91,7 +93,7 @@ export default function SettingsScreen() {
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}>
-      <Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable>
+      <Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable>
       <Text style={[styles.title, { color: readingTheme.text }]}>我的</Text>
       <View style={styles.headerSpace} />
     </View>
@@ -121,20 +123,28 @@ export default function SettingsScreen() {
         <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>收藏</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>查看标记过的重要时刻</Text></View>
         <Text style={styles.arrow}>›</Text>
       </Pressable>
+      <Pressable onPress={() => router.push('/media-library' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>媒体浏览</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>按年月查看记录中的图片和视频</Text></View>
+        <View style={styles.rowRight}>{stats.images > 0 ? <Text style={[styles.mediaCount, { color: readingTheme.secondary }]}>{stats.images}</Text> : null}<Text style={styles.arrow}>›</Text></View>
+      </Pressable>
       <Pressable onPress={() => router.push('/content-management' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
         <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>内容管理</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>批量管理、标签与地点、地点隐私与体检</Text></View>
         <Text style={styles.arrow}>›</Text>
       </Pressable>
 
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>数据与备份</Text>
-      <Pressable onPress={() => router.push('/trash')} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+      <Pressable onPress={() => router.push('/data-health' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>数据与备份体检</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>检查数据库、媒体文件与最近备份</Text></View>
+        <Text style={styles.arrow}>›</Text>
+      </Pressable>
+      <Pressable onPress={() => router.push('/trash')} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
         <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>回收站</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>移入回收站的记录保留 30 天</Text></View>
         <View style={styles.rowRight}>{stats.deleted > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{stats.deleted}</Text></View> : null}<Text style={styles.arrow}>›</Text></View>
       </Pressable>
 
-      <Pressable onPress={() => router.push('/backup')} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>备份与导出</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>导出 ZIP，并检查备份是否完整可恢复</Text></View>
-        <Text style={styles.arrow}>›</Text>
+      <Pressable accessibilityLabel={`备份与导出，${backupStatusLabel(lastExportAt, preferences.lastAutomaticBackupAt, preferences.lastBackupHealth, stats.entries)}`} onPress={() => router.push('/backup')} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>备份与导出</Text><Text style={[styles.rowDescription, { color: preferences.lastBackupHealth === 'failed' || (!lastExportAt && !preferences.lastAutomaticBackupAt && stats.entries >= 20) ? colors.danger : readingTheme.secondary }]}>{backupStatusLabel(lastExportAt, preferences.lastAutomaticBackupAt, preferences.lastBackupHealth, stats.entries)}</Text></View>
+        <View style={styles.rowRight}>{preferences.lastBackupHealth === 'healthy' ? <Text style={styles.healthy}>✓</Text> : preferences.lastBackupHealth === 'failed' || (!lastExportAt && !preferences.lastAutomaticBackupAt && stats.entries >= 20) ? <View style={styles.warningDot} /> : null}<Text style={styles.arrow}>›</Text></View>
       </Pressable>
       <View style={styles.reminderGap} />
       <SettingChoice
@@ -169,7 +179,8 @@ export default function SettingsScreen() {
       <ThemeChoice value={preferences.readingTheme} onChange={(value) => void updatePreferences({ readingTheme: value })} />
       <SettingChoice title="正文字体" value={preferences.readingFont} options={[["serif", "宋体"], ["sans", "黑体"], ["light", "细黑"], ["mono", "等宽"], ["system", "系统"]]} onChange={(value) => void updatePreferences({ readingFont: value as ReadingFontName })} />
       <SettingChoice title="字体大小" value={preferences.fontSize} options={[["verySmall", "很小"], ["small", "小"], ["standard", "标准"], ["large", "大"], ["veryLarge", "很大"]]} onChange={(value) => void updatePreferences({ fontSize: value as FontSizeMode })} />
-      <View style={[styles.preview, { backgroundColor: readingTheme.surface }]}><Text style={[styles.previewTitle, { color: readingTheme.secondary }]}>实时预览</Text><Text style={[styles.previewText, { color: readingTheme.text, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 24 * fontScale }]}>今天也值得被认真记录。</Text></View>
+      <SettingChoice title="阅读舒适度" value={preferences.readingComfort} options={[["compact", "紧凑"], ["comfortable", "舒适"], ["spacious", "宽松"]]} onChange={(value) => void updatePreferences({ readingComfort: value as ReadingComfortName })} />
+      <View style={[styles.preview, { backgroundColor: readingTheme.surface }]}><Text style={[styles.previewTitle, { color: readingTheme.secondary }]}>实时预览</Text><Text style={[styles.previewText, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 24 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>今天也值得被认真记录。</Text></View>
 
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>关于</Text>
       <Pressable onPress={() => router.push('/about' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
@@ -209,6 +220,15 @@ function Stat({ value, label }: { value: number; label: string }) {
   return <View style={styles.stat}><Text style={[styles.statValue, { color: readingTheme.text }]}>{value}</Text><Text style={[styles.statLabel, { color: readingTheme.secondary }]}>{label}</Text></View>;
 }
 
+function backupStatusLabel(manualAt: string | null, automaticAt: string | null, health: 'healthy' | 'warning' | 'failed' | null, entryCount: number) {
+  if (health === 'failed') return '最近自动备份失败，点击检查';
+  const latest = [manualAt, automaticAt].filter((value): value is string => Boolean(value)).sort().at(-1);
+  if (!latest) return entryCount >= 20 ? '还没有备份，建议现在保存一份' : '导出 ZIP，并检查备份是否完整可恢复';
+  const days = Math.max(0, Math.floor((Date.now() - new Date(latest).getTime()) / 86_400_000));
+  if (health === 'warning') return `最近备份有文件缺失 · ${days ? `${days} 天前` : '今天'}`;
+  return `最近备份：${days ? `${days} 天前` : '今天'}${health === 'healthy' ? ' · 状态正常' : ''}`;
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
@@ -230,6 +250,8 @@ const styles = StyleSheet.create({
   nextRow: { marginTop: spacing.sm },
   pressed: { opacity: 0.62 }, rowTitle: { color: colors.text, fontSize: 13, fontWeight: '600' }, rowDescription: { marginTop: 2, color: colors.textFaint, fontSize: 11 },
   rowRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, badge: { minWidth: 24, height: 24, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6, borderRadius: 12, backgroundColor: colors.primarySoft }, badgeText: { color: colors.primary, fontSize: 11, fontWeight: '700' }, arrow: { color: colors.textFaint, fontSize: 22 },
+  mediaCount: { fontSize: 11 },
+  healthy: { color: colors.primary, fontSize: 14, fontWeight: '700' }, warningDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.danger },
   switchTrack: { width: 42, height: 24, justifyContent: 'center', paddingHorizontal: 3, borderRadius: 12, backgroundColor: colors.border },
   switchTrackActive: { backgroundColor: colors.primary },
   switchThumb: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#FFFFFF' },

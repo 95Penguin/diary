@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,12 +14,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   getStatisticsOverview,
+  getAnnualReviewMoments,
+  getStatisticsYearOptions,
   getStatisticsYearHeatmap,
+  type AnnualReviewMoment,
   type StatisticsHeatmapDay,
   type StatisticsOverview,
   type StatisticsPeriod,
   type StatisticsRankingItem,
   type StatisticsTrendItem,
+  type StatisticsYearOption,
 } from '@/database/statistics-repository';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
@@ -26,7 +31,7 @@ import { colors, fonts, radii, spacing } from '@/theme/tokens';
 const PERIODS: { value: StatisticsPeriod; label: string }[] = [
   { value: 'week', label: '周总结' },
   { value: 'month', label: '月总结' },
-  { value: 'year', label: '年度总结' },
+  { value: 'year', label: '年度回顾' },
 ];
 
 const TOTALS: {
@@ -93,6 +98,9 @@ export default function SummariesScreen() {
   const [anchor, setAnchor] = useState(() => new Date());
   const [overview, setOverview] = useState<StatisticsOverview | null>(null);
   const [heatmap, setHeatmap] = useState<StatisticsHeatmapDay[]>([]);
+  const [yearOptions, setYearOptions] = useState<StatisticsYearOption[]>([]);
+  const [annualMoments, setAnnualMoments] = useState<AnnualReviewMoment[]>([]);
+  const [yearPickerVisible, setYearPickerVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const requestId = useRef(0);
 
@@ -100,13 +108,17 @@ export default function SummariesScreen() {
     const currentRequest = ++requestId.current;
     setLoading(true);
     try {
-      const [nextOverview, nextHeatmap] = await Promise.all([
+      const [nextOverview, nextHeatmap, nextYears, nextMoments] = await Promise.all([
         getStatisticsOverview(db, { period, anchor, rankingLimit: 6 }),
         period === 'year' ? getStatisticsYearHeatmap(db, anchor) : Promise.resolve([]),
+        period === 'year' ? getStatisticsYearOptions(db) : Promise.resolve([]),
+        period === 'year' ? getAnnualReviewMoments(db, anchor) : Promise.resolve([]),
       ]);
       if (currentRequest === requestId.current) {
         setOverview(nextOverview);
         setHeatmap(nextHeatmap);
+        setYearOptions(nextYears);
+        setAnnualMoments(nextMoments);
       }
     } finally {
       if (currentRequest === requestId.current) setLoading(false);
@@ -135,9 +147,25 @@ export default function SummariesScreen() {
   }
 
   function movePeriod(offset: number) {
+    if (period === 'year') {
+      const index = yearOptions.findIndex((item) => item.year === anchor.getFullYear());
+      const target = yearOptions[index + offset];
+      if (target) selectYear(target.year);
+      return;
+    }
     setOverview(null);
     setAnchor((value) => periodOffsetAnchor(period, value, offset));
   }
+
+  function selectYear(year: number) {
+    setOverview(null);
+    setAnchor(new Date(year, 0, 1, 12));
+    setYearPickerVisible(false);
+  }
+
+  const selectedYearIndex = yearOptions.findIndex((item) => item.year === anchor.getFullYear());
+  const hasPrevious = period !== 'year' || selectedYearIndex > 0;
+  const hasNext = period !== 'year' || (selectedYearIndex >= 0 && selectedYearIndex < yearOptions.length - 1);
 
   return (
     <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
@@ -168,14 +196,12 @@ export default function SummariesScreen() {
       </View>
 
       <View style={styles.periodNavigation}>
-        <Pressable accessibilityLabel="上一周期" hitSlop={10} onPress={() => movePeriod(-1)}>
-          <Text style={styles.periodArrow}>‹</Text>
+        <Pressable accessibilityLabel="上一周期" disabled={!hasPrevious} hitSlop={10} onPress={() => movePeriod(-1)}>
+          <Text style={[styles.periodArrow, !hasPrevious && styles.periodArrowDisabled]}>‹</Text>
         </Pressable>
-        <Text style={[styles.periodTitle, { color: readingTheme.text }]}>
-          {overview ? formatRange(period, overview.current.range.start, overview.current.range.end) : ' '}
-        </Text>
-        <Pressable accessibilityLabel="下一周期" hitSlop={10} onPress={() => movePeriod(1)}>
-          <Text style={styles.periodArrow}>›</Text>
+        <Pressable accessibilityLabel={period === 'year' ? '选择回顾年份' : undefined} disabled={period !== 'year'} onPress={() => setYearPickerVisible(true)} style={styles.periodTitleButton}><Text style={[styles.periodTitle, { color: readingTheme.text }]}>{overview ? formatRange(period, overview.current.range.start, overview.current.range.end) : ' '}{period === 'year' ? '⌄' : ''}</Text></Pressable>
+        <Pressable accessibilityLabel="下一周期" disabled={!hasNext} hitSlop={10} onPress={() => movePeriod(1)}>
+          <Text style={[styles.periodArrow, !hasNext && styles.periodArrowDisabled]}>›</Text>
         </Pressable>
       </View>
 
@@ -256,12 +282,15 @@ export default function SummariesScreen() {
 
           {period === 'year' ? (
             <>
+              <Text style={[styles.sectionTitle, { color: readingTheme.text }]}>这一年的代表时刻</Text>
+              {annualMoments.length ? <View style={styles.momentStack}>{annualMoments.map((moment) => <Pressable key={moment.id} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: moment.id } })} style={({ pressed }) => [styles.momentCard, { backgroundColor: readingTheme.surface }, pressed && styles.momentPressed]}><View style={styles.momentHeader}><Text style={styles.momentLabel}>{moment.label}</Text><Text style={[styles.momentDate, { color: readingTheme.secondary }]}>{compactDate(moment.occurredAt)}</Text></View><Text numberOfLines={3} style={[styles.momentContent, { color: readingTheme.text, fontFamily: readingFontFamily }]}>{moment.content || '这一刻没有写下文字'}</Text><Text style={[styles.momentMeta, { color: readingTheme.secondary }]}>{moment.characters} 字{moment.media ? ` · ${moment.media} 个媒体` : ''}</Text></Pressable>)}</View> : <View style={[styles.annualEmpty, { backgroundColor: readingTheme.surface }]}><Text style={[styles.annualEmptyTitle, { color: readingTheme.text }]}>这一年还是一张空白页</Text><Text style={[styles.annualEmptyText, { color: readingTheme.secondary }]}>可以先看看全年足迹，或者切换到有记录的年份。</Text></View>}
               <Text style={[styles.sectionTitle, { color: readingTheme.text }]}>全年记录</Text>
               <YearHeatmap data={heatmap} year={new Date(overview.current.range.start).getFullYear()} />
             </>
           ) : null}
         </ScrollView>
       ) : null}
+      <Modal visible={yearPickerVisible} transparent animationType="fade" onRequestClose={() => setYearPickerVisible(false)}><Pressable accessibilityLabel="关闭年份选择" onPress={() => setYearPickerVisible(false)} style={styles.yearOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.yearPicker, { backgroundColor: readingTheme.background }]}><Text style={[styles.yearPickerTitle, { color: readingTheme.text }]}>选择回顾年份</Text><ScrollView style={styles.yearList} showsVerticalScrollIndicator>{[...yearOptions].reverse().map((item) => { const active = item.year === anchor.getFullYear(); return <Pressable accessibilityRole="menuitem" key={item.year} onPress={() => selectYear(item.year)} style={[styles.yearItem, { borderBottomColor: readingTheme.border }, active && { backgroundColor: readingTheme.surface }]}><View><Text style={[styles.yearItemTitle, { color: active ? colors.primary : readingTheme.text }]}>{item.year} 年</Text><Text style={[styles.yearItemCount, { color: readingTheme.secondary }]}>{item.count ? `${item.count} 条记录` : '这一年还没有记录'}</Text></View>{active ? <Text style={styles.yearCheck}>✓</Text> : null}</Pressable>; })}</ScrollView><Pressable onPress={() => setYearPickerVisible(false)} style={styles.yearCancel}><Text style={[styles.yearCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable></Pressable></Pressable></Modal>
     </SafeAreaView>
   );
 }
@@ -477,7 +506,9 @@ const styles = StyleSheet.create({
   segmentTextActive: { color: '#FFFFFF', fontWeight: '700' },
   periodNavigation: { height: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xxl },
   periodArrow: { color: colors.primary, fontSize: 26, lineHeight: 30 },
+  periodArrowDisabled: { opacity: 0.22 },
   periodTitle: { fontFamily: fonts.serif, fontSize: 15, fontWeight: '600' },
+  periodTitleButton: { minWidth: 120, minHeight: 36, alignItems: 'center', justifyContent: 'center' },
   loader: { marginTop: 100 },
   scroll: { paddingHorizontal: spacing.xl, paddingBottom: 36 },
   hero: { padding: spacing.md, borderRadius: radii.lg },
@@ -526,6 +557,9 @@ const styles = StyleSheet.create({
   heatMany: { backgroundColor: colors.primary },
   heatLegend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: spacing.sm },
   heatLegendText: { fontSize: 9 },
+  momentStack: { gap: spacing.sm }, momentCard: { padding: spacing.md, borderRadius: radii.lg }, momentPressed: { opacity: 0.62 }, momentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, momentLabel: { color: colors.primary, fontSize: 10, fontWeight: '700' }, momentDate: { fontSize: 9 }, momentContent: { marginTop: spacing.sm, fontSize: 13, lineHeight: 20 }, momentMeta: { marginTop: spacing.sm, fontSize: 9 },
+  annualEmpty: { alignItems: 'center', padding: spacing.xl, borderRadius: radii.lg }, annualEmptyTitle: { fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' }, annualEmptyText: { marginTop: spacing.xs, fontSize: 10, textAlign: 'center' },
+  yearOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, yearPicker: { width: '100%', maxWidth: 310, maxHeight: '72%', paddingTop: spacing.xl, borderRadius: radii.lg }, yearPickerTitle: { paddingHorizontal: spacing.xl, paddingBottom: spacing.md, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, yearList: { flexGrow: 0 }, yearItem: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, yearItemTitle: { fontSize: 14, fontWeight: '700' }, yearItemCount: { marginTop: 2, fontSize: 10 }, yearCheck: { color: colors.primary, fontSize: 15, fontWeight: '700' }, yearCancel: { minHeight: 48, alignItems: 'center', justifyContent: 'center' }, yearCancelText: { fontSize: 12, fontWeight: '600' },
   exportHint: { marginTop: spacing.md, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg },
   exportHintTitle: { fontSize: 11, fontWeight: '700' },
   exportHintText: { marginTop: spacing.xs, fontSize: 10 },

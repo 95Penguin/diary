@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -24,10 +24,7 @@ export default function FavoritesScreen() {
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>我的收藏</Text><View style={styles.space} /></View>
-    {loading ? <ActivityIndicator color={colors.primary} style={styles.loader} /> : entries.length ? <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
-      <Text style={[styles.count, { color: readingTheme.secondary }]}>{entries.length} 条珍藏的时刻</Text>
-      {entries.map((entry) => <EntryCard key={entry.id} entry={entry} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} />)}
-    </ScrollView> : <EmptyState title="还没有收藏" description="在记录详情中点亮爱心，重要的时刻会留在这里。" />}
+    {loading ? <ActivityIndicator color={colors.primary} style={styles.loader} /> : entries.length ? <FlatList data={entries} keyExtractor={(entry) => entry.id} renderItem={({ item }) => <EntryCard entry={item} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: item.id } })} />} ListHeaderComponent={<Text style={[styles.count, { color: readingTheme.secondary }]}>{entries.length} 条珍藏的时刻</Text>} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false} initialNumToRender={10} maxToRenderPerBatch={8} windowSize={7} /> : <EmptyState title="还没有收藏" description="在记录详情中点亮书签，重要的时刻会留在这里。" />}
   </SafeAreaView>;
 }
 

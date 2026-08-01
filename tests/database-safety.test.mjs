@@ -18,6 +18,7 @@ import {
   listFootprintEntries,
   listMetadataUsage,
   listLocationMapPreferences,
+  listJournalMedia,
   removeLocationEverywhere,
   renameTagEverywhere,
   saveLocationDetail,
@@ -131,6 +132,9 @@ test('fresh baseline reaches the current schema and is idempotent', async (t) =>
   assert.ok(indexes.some((index) => index.name === 'idx_entries_mood'));
   assert.ok(indexes.some((index) => index.name === 'idx_follow_ups_created_at'));
   assert.ok(indexes.some((index) => index.name === 'idx_entry_tags_entry_id'));
+  assert.ok(indexes.some((index) => index.name === 'idx_time_capsules_open_at'));
+  assert.ok(indexes.some((index) => index.name === 'idx_time_capsule_replies_capsule_id'));
+  assert.ok(indexes.some((index) => index.name === 'idx_time_capsule_images_capsule_id'));
 });
 
 test('development-only schemas v1-v12 are rejected instead of guessed forward', async (t) => {
@@ -171,6 +175,8 @@ test('production baseline v13 migrates forward without rebuilding user tables', 
   );
   assert.ok(indexes.some((index) => index.name === 'idx_follow_ups_created_at'));
   assert.ok(indexes.some((index) => index.name === 'idx_entry_tags_entry_id'));
+  assert.ok(indexes.some((index) => index.name === 'idx_time_capsules_open_at'));
+  assert.ok(indexes.some((index) => index.name === 'idx_time_capsule_replies_capsule_id'));
 });
 
 test('older app refuses a database created by a newer schema', async (t) => {
@@ -217,7 +223,7 @@ test('backup import/export preserves records, media, tags, versions and suppress
   assert.deepEqual(exported.suppressedMemoryEntryIds, source.suppressedMemoryEntryIds);
 });
 
-test('backup v11 preserves location details and portable app preferences', async (t) => {
+test('current backup preserves location details and portable app preferences', async (t) => {
   const sourceDb = await setup();
   const restoredDb = await setup();
   t.after(() => sourceDb.close());
@@ -234,6 +240,7 @@ test('backup v11 preserves location details and portable app preferences', async
       readingTheme: 'green',
       fontSize: 'large',
       readingFont: 'sans',
+      readingComfort: 'spacious',
       appLockEnabled: true,
       appLockDelaySeconds: 60,
       backupReminderDays: 14,
@@ -244,10 +251,11 @@ test('backup v11 preserves location details and portable app preferences', async
   await saveJournalTemplate(sourceDb, null, { title: '周复盘', description: '每周使用', content: '本周：' });
 
   const backup = await createJournalExport(sourceDb);
-  assert.equal(backup.version, 11);
+  assert.equal(backup.version, 13);
   assert.equal(backup.appPreferences.nickname, '小拾');
   assert.equal(backup.appPreferences.avatarLocalUri, 'file:///avatar.png');
   assert.equal(backup.appPreferences.readingTheme, 'green');
+  assert.equal(backup.appPreferences.readingComfort, 'spacious');
   assert.equal('backupDirectoryUri' in backup.appPreferences, false);
   assert.equal(backup.journalTemplates.systemOverrides['daily-review'].title, '我的复盘');
   assert.equal(backup.journalTemplates.custom[0].title, '周复盘');
@@ -516,6 +524,22 @@ test('permanent deletion cascades rows and returns every associated media URI', 
   assert.equal(await db.getFirstAsync('SELECT id FROM entries WHERE id = ?', 'entry-1'), undefined);
   assert.equal((await db.getFirstAsync('SELECT COUNT(*) AS count FROM follow_ups')).count, 0);
   assert.equal((await db.getFirstAsync('SELECT COUNT(*) AS count FROM entry_images')).count, 0);
+});
+
+test('media library combines entry and follow-up media and excludes deleted content', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+
+  const media = await listJournalMedia(db);
+  assert.deepEqual(media.map((item) => [item.id, item.source, item.entryId]), [
+    ['follow-image-1', 'followUp', 'entry-1'],
+    ['image-1', 'entry', 'entry-1'],
+  ]);
+  assert.equal(media[0].entryContent, '原始正文');
+
+  await deleteEntry(db, 'entry-1');
+  assert.deepEqual(await listJournalMedia(db), []);
 });
 
 test('permanent deletion refuses active entries and keeps their media references', async (t) => {

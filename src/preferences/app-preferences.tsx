@@ -5,8 +5,9 @@ import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type FontSizeMode = 'verySmall' | 'small' | 'standard' | 'large' | 'veryLarge';
-export type ReadingThemeName = 'cream' | 'white' | 'warm' | 'green' | 'blue' | 'pink' | 'red' | 'lavender' | 'gray' | 'night';
+export type ReadingThemeName = 'cream' | 'white' | 'warm' | 'green' | 'cyan' | 'blue' | 'pink' | 'red' | 'lavender' | 'gray' | 'night';
 export type ReadingFontName = 'serif' | 'sans' | 'light' | 'mono' | 'system';
+export type ReadingComfortName = 'compact' | 'comfortable' | 'spacious';
 export type BackupReminderDays = 0 | 7 | 14 | 30;
 export type BackupHealth = 'healthy' | 'warning' | 'failed' | null;
 export type AppLockDelaySeconds = 0 | 60 | 300;
@@ -20,6 +21,7 @@ export type AppPreferences = {
   fontSize: FontSizeMode;
   readingTheme: ReadingThemeName;
   readingFont: ReadingFontName;
+  readingComfort: ReadingComfortName;
   appLockEnabled: boolean;
   appLockDelaySeconds: AppLockDelaySeconds;
   backupReminderDays: BackupReminderDays;
@@ -41,6 +43,7 @@ const defaults: AppPreferences = {
   fontSize: 'standard',
   readingTheme: 'cream',
   readingFont: 'serif',
+  readingComfort: 'comfortable',
   appLockEnabled: false,
   appLockDelaySeconds: 0,
   backupReminderDays: 0,
@@ -58,6 +61,7 @@ export const readingThemes = {
   white: { label: '纯白', background: '#FFFFFF', surface: '#F5F5F3', text: '#222825', secondary: '#747C78', border: '#E8EAE8' },
   warm: { label: '淡黄', background: '#FFFCF2', surface: '#FAF4E4', text: '#39362F', secondary: '#817B6F', border: '#F0E9D9' },
   green: { label: '浅绿', background: '#F1F7F1', surface: '#E4EEE5', text: '#26372D', secondary: '#718178', border: '#D9E7DC' },
+  cyan: { label: '青色', background: '#F2FAF9', surface: '#E3F2F0', text: '#243A38', secondary: '#6E8380', border: '#D3E7E4' },
   blue: { label: '浅蓝', background: '#F4F9FD', surface: '#E8F2F9', text: '#293841', secondary: '#71838E', border: '#D8E8F2' },
   pink: { label: '浅粉', background: '#FFF8FA', surface: '#FBEAF0', text: '#3E3035', secondary: '#8A747D', border: '#F0DCE4' },
   red: { label: '浅红', background: '#FFF8F6', surface: '#F9EAE6', text: '#432F2C', secondary: '#8C746F', border: '#EFDAD4' },
@@ -65,8 +69,15 @@ export const readingThemes = {
   gray: { label: '浅灰', background: '#F3F4F2', surface: '#E8EAE7', text: '#292E2B', secondary: '#747A76', border: '#DDE0DC' },
   night: { label: '夜间', background: '#151A17', surface: '#232B26', text: '#EDF2EF', secondary: '#AAB6AF', border: '#344039' },
 } as const;
-type PreferencesContextValue = { preferences: AppPreferences; ready: boolean; isDark: boolean; fontScale: number; readingTheme: (typeof readingThemes)[ReadingThemeName]; readingFontFamily: string | undefined; updatePreferences: (patch: Partial<AppPreferences>) => Promise<void> };
+type ReadingBodyStyle = { color: string; lineHeightMultiplier: number; letterSpacing: number };
+type PreferencesContextValue = { preferences: AppPreferences; ready: boolean; isDark: boolean; fontScale: number; readingTheme: (typeof readingThemes)[ReadingThemeName]; readingFontFamily: string | undefined; readingBodyStyle: ReadingBodyStyle; updatePreferences: (patch: Partial<AppPreferences>) => Promise<void> };
 const PreferencesContext = createContext<PreferencesContextValue | null>(null);
+
+function blendHex(foreground: string, background: string, backgroundRatio: number) {
+  const channel = (value: string, offset: number) => Number.parseInt(value.slice(offset, offset + 2), 16);
+  const blended = [1, 3, 5].map((offset) => Math.round(channel(foreground, offset) * (1 - backgroundRatio) + channel(background, offset) * backgroundRatio));
+  return `#${blended.map((value) => value.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+}
 
 export function AppPreferencesProvider({ children }: { children: ReactNode }) {
   const db = useSQLiteContext();
@@ -105,11 +116,14 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
     setPreferences(next);
   }, [db, preferences]);
 
-  const value = useMemo<PreferencesContextValue>(() => ({
+  const value = useMemo<PreferencesContextValue>(() => {
+    const readingTheme = readingThemes[preferences.readingTheme] ?? readingThemes.cream;
+    const comfort = preferences.readingComfort ?? 'comfortable';
+    return {
     preferences, ready,
     isDark: preferences.themeMode === 'dark' || (preferences.themeMode === 'system' && systemScheme === 'dark'),
     fontScale: preferences.fontSize === 'verySmall' ? 0.82 : preferences.fontSize === 'small' ? 0.92 : preferences.fontSize === 'large' ? 1.15 : preferences.fontSize === 'veryLarge' ? 1.3 : 1,
-    readingTheme: readingThemes[preferences.readingTheme] ?? readingThemes.cream,
+    readingTheme,
     readingFontFamily: preferences.readingFont === 'serif'
       ? Platform.select({ ios: 'Noto Serif SC', android: 'ShishiSerif', web: 'ShishiSerif', default: 'serif' })
       : preferences.readingFont === 'sans'
@@ -119,8 +133,13 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
           : preferences.readingFont === 'mono'
             ? Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' })
             : undefined,
+    readingBodyStyle: comfort === 'compact'
+      ? { color: readingTheme.text, lineHeightMultiplier: 1, letterSpacing: 0 }
+      : comfort === 'spacious'
+        ? { color: blendHex(readingTheme.text, readingTheme.background, 0.2), lineHeightMultiplier: 1.17, letterSpacing: 0.3 }
+        : { color: blendHex(readingTheme.text, readingTheme.background, 0.12), lineHeightMultiplier: 1.09, letterSpacing: 0.15 },
     updatePreferences,
-  }), [preferences, ready, systemScheme, updatePreferences]);
+  }; }, [preferences, ready, systemScheme, updatePreferences]);
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
 }
 

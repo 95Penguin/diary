@@ -83,7 +83,7 @@ export default function TemplatesScreen() {
   const customTemplates = templates.filter((item) => item.source === 'custom');
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
-    <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>模板管理</Text><Pressable hitSlop={10} onPress={() => beginEdit(null)}><Text style={styles.add}>＋ 新建</Text></Pressable></View>
+    <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>模板管理</Text><Pressable accessibilityLabel="新建模板" hitSlop={10} onPress={() => beginEdit(null)}><Text style={styles.add}>＋ 新建</Text></Pressable></View>
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={[styles.hint, { color: readingTheme.secondary }]}>系统模板可以修改，并随时恢复默认；你创建的模板可以自由编辑或删除。所有模板都会包含在完整备份中。</Text>
       {notice ? <Text style={[styles.notice, { color: notice.includes('失败') ? colors.danger : colors.primary }]}>{notice}</Text> : null}

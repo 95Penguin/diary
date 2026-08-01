@@ -17,6 +17,9 @@ import { backfillVideoThumbnails } from '@/utils/video-thumbnail-cache';
 import { AUTOMATIC_BACKUP_INTERVAL_MS, runAutomaticBackup } from '@/utils/automatic-backup';
 import { recordAppError } from '@/utils/app-error-log';
 import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
+import { syncTimeCapsuleNotifications } from '@/utils/time-capsule-notifications';
+
+Notifications.setNotificationHandler({ handleNotification: async () => ({ shouldPlaySound: false, shouldSetBadge: false, shouldShowBanner: true, shouldShowList: true }) });
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -95,6 +98,7 @@ async function initializeDatabase(db: Parameters<typeof migrateDatabase>[0]) {
     void recordAppError('video-thumbnail-backfill', error);
     console.warn('Video thumbnail backfill failed', error);
   });
+  void syncTimeCapsuleNotifications(db).catch((error) => void recordAppError('time-capsule.notification-sync', error));
 }
 
 function AppStack() {
@@ -103,6 +107,10 @@ function AppStack() {
     const openBackup = (response: Notifications.NotificationResponse | null) => {
       const route = response?.notification.request.content.data?.route;
       if (route === '/backup') router.push('/backup');
+      else if (route === '/time-capsule') {
+        const capsuleId = response?.notification.request.content.data?.capsuleId;
+        if (typeof capsuleId === 'string') router.push(`/time-capsule/${encodeURIComponent(capsuleId)}` as never);
+      }
     };
     const task = InteractionManager.runAfterInteractions(() => {
       void Notifications.getLastNotificationResponseAsync().then((response) => {
@@ -125,13 +133,19 @@ function AppStack() {
             <Stack.Screen name="entry/[id]" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="history/[id]" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="memories" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="time-capsules" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="time-capsule-compose" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
+            <Stack.Screen name="time-capsule/[id]" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="summaries" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="search" options={{ animation: 'fade_from_bottom' }} />
             <Stack.Screen name="favorites" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="media-library" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="share-card" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="drafts" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="trash" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="backup" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="data-health" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="about" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="metadata" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="content-management" options={{ animation: 'slide_from_right' }} />

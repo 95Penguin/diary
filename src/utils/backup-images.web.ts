@@ -22,7 +22,7 @@ export type BackupMediaProgress = (completed: number, total: number) => void;
 
 export async function embedBackupImages(backup: JournalBackup, onProgress?: BackupMediaProgress): Promise<JournalBackup> {
   const hasAvatar = Boolean(backup.appPreferences?.avatarLocalUri);
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (backup.timeCapsuleImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   const images = await Promise.all(backup.images.map(async (image) => {
     const primary = await embedUri(image.localUri);
@@ -38,18 +38,23 @@ export async function embedBackupImages(backup: JournalBackup, onProgress?: Back
     completed += 1; onProgress?.(completed, total);
     return { ...image, ...primary, pairedVideoDataBase64: paired.dataBase64, pairedVideoMimeType: paired.mimeType, thumbnailDataBase64: thumbnail.dataBase64, thumbnailMimeType: thumbnail.mimeType };
   }));
+  const timeCapsuleImages = await Promise.all((backup.timeCapsuleImages ?? []).map(async (image) => {
+    const primary = await embedUri(image.localUri); const paired = await embedUri(image.pairedVideoLocalUri); const thumbnail = await embedUri(image.thumbnailLocalUri);
+    completed += 1; onProgress?.(completed, total);
+    return { ...image, ...primary, pairedVideoDataBase64: paired.dataBase64, pairedVideoMimeType: paired.mimeType, thumbnailDataBase64: thumbnail.dataBase64, thumbnailMimeType: thumbnail.mimeType };
+  }));
   let appPreferences = backup.appPreferences;
   if (appPreferences?.avatarLocalUri) {
     const avatar = await embedUri(appPreferences.avatarLocalUri);
     completed += 1; onProgress?.(completed, total);
     appPreferences = { ...appPreferences, avatarDataBase64: avatar.dataBase64, avatarMimeType: avatar.mimeType };
   }
-  return { ...backup, images, followUpImages, appPreferences };
+  return { ...backup, images, followUpImages, timeCapsuleImages, appPreferences };
 }
 
 export async function materializeBackupImages(backup: JournalBackup, onProgress?: BackupMediaProgress) {
   const hasAvatar = Boolean(backup.appPreferences?.avatarDataBase64);
-  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (hasAvatar ? 1 : 0);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (backup.timeCapsuleImages?.length ?? 0) + (hasAvatar ? 1 : 0);
   let completed = 0;
   const images = [] as JournalBackup['images'];
   for (const image of backup.images) {
@@ -69,6 +74,15 @@ export async function materializeBackupImages(backup: JournalBackup, onProgress?
     followUpImages.push({ ...image, localUri: await persistJournalImageBase64(image.dataBase64, extension), pairedVideoLocalUri, thumbnailLocalUri });
     completed += 1; onProgress?.(completed, total);
   }
+  const timeCapsuleImages = [] as NonNullable<JournalBackup['timeCapsuleImages']>;
+  for (const image of backup.timeCapsuleImages ?? []) {
+    if (!image.dataBase64) { timeCapsuleImages.push({ ...image, localUri: '' }); completed += 1; onProgress?.(completed, total); continue; }
+    const extension = image.mimeType === 'image/png' ? '.png' : image.mimeType === 'image/webp' ? '.webp' : '.jpg';
+    const pairedVideoLocalUri = image.pairedVideoDataBase64 ? await persistJournalImageBase64(image.pairedVideoDataBase64, '.mov') : null;
+    const thumbnailLocalUri = image.thumbnailDataBase64 ? await persistJournalImageBase64(image.thumbnailDataBase64, '.jpg') : null;
+    timeCapsuleImages.push({ ...image, localUri: await persistJournalImageBase64(image.dataBase64, extension), pairedVideoLocalUri, thumbnailLocalUri });
+    completed += 1; onProgress?.(completed, total);
+  }
   let appPreferences = backup.appPreferences;
   if (appPreferences?.avatarDataBase64) {
     const extension = appPreferences.avatarMimeType === 'image/png' ? '.png' : appPreferences.avatarMimeType === 'image/webp' ? '.webp' : '.jpg';
@@ -78,5 +92,5 @@ export async function materializeBackupImages(backup: JournalBackup, onProgress?
   } else if (appPreferences?.avatarLocalUri) {
     appPreferences = { ...appPreferences, avatarLocalUri: null };
   }
-  return { backup: { ...backup, images, followUpImages, appPreferences }, createdUris: [] as string[] };
+  return { backup: { ...backup, images, followUpImages, timeCapsuleImages, appPreferences }, createdUris: [] as string[] };
 }
