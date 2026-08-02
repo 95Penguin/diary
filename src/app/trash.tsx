@@ -21,18 +21,19 @@ export default function TrashScreen() {
   const [entries, setEntries] = useState<DeletedEntry[]>([]);
   const [capsules, setCapsules] = useState<DeletedTimeCapsule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [workingId, setWorkingId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<DeletedEntry | null>(null);
   const [pendingCapsuleDelete, setPendingCapsuleDelete] = useState<DeletedTimeCapsule | null>(null);
   const [toast, setToast] = useState('');
   const [openedAt] = useState(() => Date.now());
 
   const load = useCallback(async () => {
-    const expiredImages = await cleanupExpiredTrash(db);
-    const expiredCapsuleMedia = await cleanupExpiredTimeCapsules(db);
-    [...expiredImages, ...expiredCapsuleMedia].forEach(deleteJournalImage);
-    setEntries(await listDeletedEntries(db));
-    setCapsules(await listDeletedTimeCapsules(db));
-    setLoading(false);
+    try {
+      const [nextEntries, nextCapsules] = await Promise.all([listDeletedEntries(db), listDeletedTimeCapsules(db)]);
+      setEntries(nextEntries); setCapsules(nextCapsules);
+      void Promise.all([cleanupExpiredTrash(db), cleanupExpiredTimeCapsules(db)]).then(([expiredImages, expiredCapsuleMedia]) => [...expiredImages, ...expiredCapsuleMedia].forEach(deleteJournalImage)).catch(() => undefined);
+    } catch { notify('回收站读取失败，请稍后重试'); }
+    finally { setLoading(false); }
   }, [db]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
@@ -43,22 +44,21 @@ export default function TrashScreen() {
   }
 
   async function restore(item: DeletedEntry) {
-    await restoreEntry(db, item.id);
-    await load();
-    notify('已恢复到时间轴');
+    if (workingId) return; setWorkingId(item.id);
+    try { await restoreEntry(db, item.id); await load(); notify('已恢复到时间轴'); }
+    catch { notify('恢复失败，请稍后重试'); }
+    finally { setWorkingId(null); }
   }
 
   async function removeForever() {
-    if (!pendingDelete) return;
-    const imageUris = await permanentlyDeleteEntry(db, pendingDelete.id);
-    imageUris.forEach(deleteJournalImage);
-    setPendingDelete(null);
-    await load();
-    notify('已永久删除');
+    if (!pendingDelete || workingId) return; const id = pendingDelete.id; setWorkingId(id);
+    try { const imageUris = await permanentlyDeleteEntry(db, id); imageUris.forEach(deleteJournalImage); setPendingDelete(null); await load(); notify('已永久删除'); }
+    catch { notify('删除失败，请稍后重试'); }
+    finally { setWorkingId(null); }
   }
 
-  async function restoreCapsule(item: DeletedTimeCapsule) { await restoreTimeCapsule(db, item.id); await load(); notify('时间胶囊已恢复'); }
-  async function removeCapsuleForever() { if (!pendingCapsuleDelete) return; const uris = await permanentlyDeleteTimeCapsule(db, pendingCapsuleDelete.id); uris.forEach(deleteJournalImage); setPendingCapsuleDelete(null); await load(); notify('时间胶囊已永久删除'); }
+  async function restoreCapsule(item: DeletedTimeCapsule) { if (workingId) return; setWorkingId(item.id); try { await restoreTimeCapsule(db, item.id); await load(); notify('时间胶囊已恢复'); } catch { notify('恢复失败，请稍后重试'); } finally { setWorkingId(null); } }
+  async function removeCapsuleForever() { if (!pendingCapsuleDelete || workingId) return; const id = pendingCapsuleDelete.id; setWorkingId(id); try { const uris = await permanentlyDeleteTimeCapsule(db, id); uris.forEach(deleteJournalImage); setPendingCapsuleDelete(null); await load(); notify('时间胶囊已永久删除'); } catch { notify('删除失败，请稍后重试'); } finally { setWorkingId(null); } }
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}>

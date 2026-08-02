@@ -5,6 +5,8 @@ export type MediaLibraryListItem =
   | { kind: 'header'; key: string; label: string; count: number }
   | { kind: 'row'; key: string; media: LibraryMedia[] };
 
+export type MediaMonth = { key: string; label: string; count: number; rowIndex: number };
+
 export function isVideoMedia(media: Pick<LibraryMedia, 'mediaType' | 'duration' | 'uri'>) {
   return media.mediaType === 'video'
     || Boolean(media.duration && media.duration > 0)
@@ -34,4 +36,15 @@ export function buildMediaLibraryRows(media: LibraryMedia[], columns = 3): Media
     }
     return rows;
   });
+}
+
+export function listMediaMonths(rows: MediaLibraryListItem[]): MediaMonth[] {
+  return rows.flatMap((row, rowIndex) => row.kind === 'header'
+    ? [{ key: row.key.replace('header-', ''), label: row.label, count: row.count, rowIndex }]
+    : []);
+}
+
+export function mediaPositionInSource(media: LibraryMedia[], current: LibraryMedia) {
+  const group = media.filter((item) => item.source === current.source && item.sourceId === current.sourceId);
+  return { index: group.findIndex((item) => item.id === current.id), total: group.length };
 }

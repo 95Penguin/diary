@@ -1,8 +1,9 @@
 import { Image } from 'expo-image';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { runOnJS } from 'react-native-worklets';
 
-export function ZoomableImage({ uri }: { uri: string }) {
+export function ZoomableImage({ uri, onPress }: { uri: string; onPress?: () => void }) {
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -57,7 +58,10 @@ export function ZoomableImage({ uri }: { uri: string }) {
       savedScale.value = 2;
     }
   });
-  const gesture = Gesture.Simultaneous(pinch, pan, doubleTap);
+  const singleTap = Gesture.Tap().numberOfTaps(1).onEnd((_event, success) => {
+    if (success && onPress) runOnJS(onPress)();
+  });
+  const gesture = Gesture.Simultaneous(pinch, pan, Gesture.Exclusive(doubleTap, singleTap));
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }, { translateY: translateY.value }, { scale: scale.value }],
   }));

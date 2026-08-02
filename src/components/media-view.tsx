@@ -14,9 +14,9 @@ export function MediaThumbnail({ media, style, allowRuntimeVideoPoster = false }
   return <View style={[styles.mediaThumb, style]}><Image source={media.uri} cachePolicy="memory-disk" contentFit="cover" style={StyleSheet.absoluteFill} /></View>;
 }
 
-export function MediaViewer({ media }: { media: JournalMedia }) {
+export function MediaViewer({ media, onPress }: { media: JournalMedia; onPress?: () => void }) {
   if (isVideo(media)) return <VideoPlayer uri={media.uri} />;
-  return <ZoomableImage key={media.uri} uri={media.uri} />;
+  return <ZoomableImage key={media.uri} uri={media.uri} onPress={onPress} />;
 }
 
 function isVideo(media: JournalMedia) {

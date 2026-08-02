@@ -28,6 +28,7 @@ import {
   updateLocationCoordinates,
   permanentlyDeleteEntry,
   restoreEntry,
+  searchEntries,
 } from '../src/database/journal-repository.ts';
 import { DATABASE_VERSION, migrateDatabase } from '../src/database/migrate.ts';
 import { getJournalTemplateSettings, saveJournalTemplate } from '../src/database/template-repository.ts';
@@ -533,13 +534,24 @@ test('media library combines entry and follow-up media and excludes deleted cont
 
   const media = await listJournalMedia(db);
   assert.deepEqual(media.map((item) => [item.id, item.source, item.entryId]), [
-    ['follow-image-1', 'followUp', 'entry-1'],
     ['image-1', 'entry', 'entry-1'],
+    ['follow-image-1', 'followUp', 'entry-1'],
   ]);
   assert.equal(media[0].entryContent, '原始正文');
+  assert.equal(media[0].sourceContent, '原始正文');
+  assert.equal(media[1].sourceContent, '原始后续');
 
   await deleteEntry(db, 'entry-1');
   assert.deepEqual(await listJournalMedia(db), []);
+});
+
+test('search result identifies the matching follow-up for detail navigation', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  const [result] = await searchEntries(db, '原始后续');
+  assert.equal(result.matchingFollowUpId, 'follow-up-1');
+  assert.equal(result.matchingFollowUp, '原始后续');
 });
 
 test('permanent deletion refuses active entries and keeps their media references', async (t) => {

@@ -34,10 +34,10 @@ export default function BatchManageScreen() {
   async function reload() { setEntries(await listEntries(db)); setSelected(new Set()); }
   useEffect(() => {
     let active = true;
-    void listEntries(db).then((items) => { if (active) setEntries(items); });
+    void listEntries(db).then((items) => { if (active) setEntries(items); }).catch((error) => { void recordAppError('batch-manage.load', error); if (active) { setEntries([]); setNotice({ title: '读取失败', message: '记录仍保存在本机，请返回后重新尝试。' }); } });
     return () => { active = false; };
   }, [db]);
-  function toggle(id: string) { setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
+  function toggle(id: string) { if (working) return; setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
   const ids = [...selected];
 
   async function apply(action: () => Promise<void>, success: string) {
@@ -71,7 +71,7 @@ export default function BatchManageScreen() {
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>批量管理</Text><Pressable accessibilityLabel={selected.size === filtered.length && filtered.length ? '取消全选' : `全选 ${filtered.length} 条记录`} disabled={!filtered.length} onPress={() => setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map((entry) => entry.id)))}><Text style={styles.selectAll}>{selected.size === filtered.length && filtered.length ? '取消全选' : '全选'}</Text></Pressable></View>
     <View style={styles.searchWrap}><TextInput accessibilityLabel="筛选需要批量管理的记录" value={query} onChangeText={(next) => { setQuery(next); setSelected(new Set()); }} placeholder="搜索正文、标签或地点" placeholderTextColor={readingTheme.secondary} style={[styles.search, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /></View>
     <View style={[styles.actionBar, { borderColor: readingTheme.border }]}><Text style={[styles.selectedCount, { color: readingTheme.secondary }]}>已选 {selected.size} 条</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.actions}>
-      <Action label="+ 标签" disabled={!ids.length} onPress={() => setEditor('addTag')} /><Action label="− 标签" disabled={!ids.length} onPress={() => setEditor('removeTag')} /><Action label="改地点" disabled={!ids.length} onPress={() => setEditor('location')} /><Action label="收藏" disabled={!ids.length} onPress={() => void apply(() => batchSetEntryFavorite(db, ids, true), '已加入收藏。')} /><Action label="取消收藏" disabled={!ids.length} onPress={() => void apply(() => batchSetEntryFavorite(db, ids, false), '已取消收藏。')} /><Action label="删除" danger disabled={!ids.length} onPress={confirmDelete} />
+      <Action label="+ 标签" disabled={!ids.length || working} onPress={() => setEditor('addTag')} /><Action label="− 标签" disabled={!ids.length || working} onPress={() => setEditor('removeTag')} /><Action label="改地点" disabled={!ids.length || working} onPress={() => setEditor('location')} /><Action label="收藏" disabled={!ids.length || working} onPress={() => void apply(() => batchSetEntryFavorite(db, ids, true), '已加入收藏。')} /><Action label="取消收藏" disabled={!ids.length || working} onPress={() => void apply(() => batchSetEntryFavorite(db, ids, false), '已取消收藏。')} /><Action label="删除" danger disabled={!ids.length || working} onPress={confirmDelete} />
     </ScrollView></View>
     {!entries ? <ActivityIndicator style={styles.loader} color={colors.primary} /> : <FlatList data={filtered} keyExtractor={(entry) => entry.id} contentContainerStyle={styles.list} initialNumToRender={12} maxToRenderPerBatch={10} windowSize={7} renderItem={({ item: entry }) => {
       const active = selected.has(entry.id);

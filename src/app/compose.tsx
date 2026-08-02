@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
-import { BackHandler, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppState, BackHandler, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { reGeocode } from 'expo-gaode-map';
@@ -51,6 +51,7 @@ export default function ComposeScreen() {
   const [saving, setSaving] = useState(false);
   const [draftStatus, setDraftStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [activeDraftId, setActiveDraftId] = useState<string | null>(requestedDraftId ?? null);
+  const activeDraftIdRef = useRef<string | null>(requestedDraftId ?? null);
   const [originalContent, setOriginalContent] = useState('');
   const [originalOccurredAt, setOriginalOccurredAt] = useState('');
   const [timeChanged, setTimeChanged] = useState(false);
@@ -92,6 +93,7 @@ export default function ComposeScreen() {
   const locationRequestRef = useRef(0);
   const addressRequestRef = useRef(0);
   const draftSaveVersionRef = useRef(0);
+  const appStateRef = useRef(AppState.currentState);
 
   function leaveComposer() {
     if (router.canGoBack()) router.back();
@@ -209,8 +211,8 @@ export default function ComposeScreen() {
       if (hasDraft) {
         const saveVersion = ++draftSaveVersionRef.current;
         setDraftStatus('saving');
-        const nextId = activeDraftId ?? createDraftId();
-        if (!activeDraftId) setActiveDraftId(nextId);
+        const nextId = activeDraftIdRef.current ?? createDraftId();
+        if (!activeDraftIdRef.current) { activeDraftIdRef.current = nextId; setActiveDraftId(nextId); }
         void saveDraft(db, { id: nextId, content, occurredAt, updatedAt: new Date().toISOString(), tags, mood, weather, images: images.map(({ uri, width, height, mediaType, pairedVideoUri, duration, thumbnailUri }) => ({ uri, width, height, mediaType, pairedVideoUri, duration, thumbnailUri })), locationName: locationName.trim() || null, latitude, longitude })
           .then(() => {
             if (draftSaveVersionRef.current === saveVersion) setDraftStatus('saved');
@@ -220,9 +222,10 @@ export default function ComposeScreen() {
             if (draftSaveVersionRef.current === saveVersion) setDraftStatus('error');
             showToast('草稿自动保存失败');
           });
-      } else if (activeDraftId) {
+      } else if (activeDraftIdRef.current) {
         draftSaveVersionRef.current += 1;
-        void deleteDraft(db, activeDraftId).then((uris) => uris.forEach(deleteJournalImage)).catch(() => showToast('草稿清理失败'));
+        void deleteDraft(db, activeDraftIdRef.current).then((uris) => uris.forEach(deleteJournalImage)).catch(() => showToast('草稿清理失败'));
+        activeDraftIdRef.current = null;
         setActiveDraftId(null);
         setDraftStatus('idle');
       } else {
@@ -485,11 +488,11 @@ export default function ComposeScreen() {
         // Editing text must never move an older entry to today. Only an explicitly
         // confirmed time change is allowed to replace the original occurrence time.
         removedUris = await updateEntryWithDetails(
-          db, id, { content, occurredAt: timeChanged ? occurredAt : originalOccurredAt, mood, weather, locationName, latitude, longitude }, savedImages, tags,
+          db, id, { content, occurredAt: timeChanged ? occurredAt : originalOccurredAt, mood, weather, locationName, latitude: privateLatitude, longitude: privateLongitude }, savedImages, tags,
         );
       } else {
         entryId = await createEntryWithDetails(db, { content, occurredAt, mood, weather, locationName, latitude: privateLatitude, longitude: privateLongitude }, savedImages, tags);
-        if (activeDraftId) await deleteDraft(db, activeDraftId, true);
+        if (activeDraftIdRef.current) await deleteDraft(db, activeDraftIdRef.current, true);
       }
       if (!entryId) throw new Error('Missing entry id');
       if (locationName.trim() && privateLatitude != null && privateLongitude != null) {
@@ -509,18 +512,33 @@ export default function ComposeScreen() {
     }
   }
 
-  async function persistCurrentDraft() {
+  async function persistCurrentDraft(silent = false) {
     if (isEditing || !(content.trim() || images.length || tags.length || mood || weather || locationName.trim())) return;
-    const nextId = activeDraftId ?? createDraftId();
-    if (!activeDraftId) setActiveDraftId(nextId);
+    const nextId = activeDraftIdRef.current ?? createDraftId();
+    if (!activeDraftIdRef.current) { activeDraftIdRef.current = nextId; setActiveDraftId(nextId); }
     try {
-      await saveDraft(db, { id: nextId, content, occurredAt, updatedAt: new Date().toISOString(), tags, mood, weather, images: images.map(({ uri, width, height }) => ({ uri, width, height })), locationName: locationName.trim() || null, latitude, longitude });
+      const saveVersion = ++draftSaveVersionRef.current;
+      setDraftStatus('saving');
+      await saveDraft(db, { id: nextId, content, occurredAt, updatedAt: new Date().toISOString(), tags, mood, weather, images: images.map(({ uri, width, height, mediaType, pairedVideoUri, duration, thumbnailUri }) => ({ uri, width, height, mediaType, pairedVideoUri, duration, thumbnailUri })), locationName: locationName.trim() || null, latitude, longitude });
+      if (draftSaveVersionRef.current === saveVersion) setDraftStatus('saved');
     } catch (error) {
       void recordAppError('compose.save-draft-on-exit', error);
-      await showAppDialog({ title: '草稿保存失败', message: '当前内容暂时无法写入草稿箱，请返回后再次确认。' });
+      setDraftStatus('error');
+      if (!silent) await showAppDialog({ title: '草稿保存失败', message: '当前内容暂时无法写入草稿箱，请返回后再次确认。' });
       throw new Error('draft-save-failed');
     }
   }
+
+  const persistDraftOnBackground = useEffectEvent(() => persistCurrentDraft(true));
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      const wasActive = appStateRef.current === 'active';
+      appStateRef.current = state;
+      if (wasActive && state !== 'active') void persistDraftOnBackground().catch(() => undefined);
+    });
+    return () => subscription.remove();
+  }, []);
 
   async function cancel() {
     const hasChanges = content !== originalContent || occurredAt !== originalOccurredAt || mood !== originalMood || weather !== originalWeather || locationName !== originalLocationName || JSON.stringify(images.map((image) => image.uri)) !== JSON.stringify(originalImageUris) || JSON.stringify(tags) !== JSON.stringify(originalTags);

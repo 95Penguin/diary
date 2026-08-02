@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildMediaLibraryRows, filterLibraryMedia, isVideoMedia } from '../src/utils/media-library.ts';
+import { buildMediaLibraryRows, filterLibraryMedia, isVideoMedia, listMediaMonths, mediaPositionInSource } from '../src/utils/media-library.ts';
 
 function item(id, occurredAt, mediaType = 'image') {
-  return { id, occurredAt, mediaType, duration: null, uri: `file:///${id}`, entryId: 'entry', source: 'entry', sourceId: 'entry', width: 1, height: 1, sortOrder: 0, pairedVideoUri: null, thumbnailUri: null, attachedAt: occurredAt, entryContent: '' };
+  return { id, occurredAt, mediaType, duration: null, uri: `file:///${id}`, entryId: 'entry', source: 'entry', sourceId: 'entry', width: 1, height: 1, sortOrder: 0, pairedVideoUri: null, thumbnailUri: null, attachedAt: occurredAt, entryContent: '', sourceContent: '' };
 }
 
 test('media library creates month headers and rows of three', () => {
@@ -16,6 +16,21 @@ test('media library creates month headers and rows of three', () => {
   assert.deepEqual(rows.map((row) => row.kind), ['header', 'row', 'row', 'header', 'row']);
   assert.equal(rows[0].count, 4);
   assert.deepEqual(rows[1].media.map((medium) => medium.id), ['a', 'b', 'c']);
+});
+
+test('media month index points to each month header', () => {
+  const rows = buildMediaLibraryRows([item('a', '2026-07-31T12:00:00.000Z'), item('b', '2026-06-30T12:00:00.000Z')]);
+  assert.deepEqual(listMediaMonths(rows).map(({ key, count, rowIndex }) => ({ key, count, rowIndex })), [
+    { key: '2026-07', count: 1, rowIndex: 0 }, { key: '2026-06', count: 1, rowIndex: 2 },
+  ]);
+});
+
+test('viewer count is scoped to the owning entry or follow-up', () => {
+  const first = item('a', '2026-07-31T12:00:00.000Z');
+  const second = { ...item('b', '2026-07-31T12:00:00.000Z'), sortOrder: 1 };
+  const followUp = { ...item('c', '2026-07-31T12:00:00.000Z'), source: 'followUp', sourceId: 'follow-up' };
+  assert.deepEqual(mediaPositionInSource([first, second, followUp], second), { index: 1, total: 2 });
+  assert.deepEqual(mediaPositionInSource([first, second, followUp], followUp), { index: 0, total: 1 });
 });
 
 test('media library distinguishes images and videos', () => {

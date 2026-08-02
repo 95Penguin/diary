@@ -123,29 +123,35 @@ export async function listJournalMedia(db: SQLiteDatabase): Promise<LibraryMedia
     id: string; entry_id: string; source: 'entry' | 'followUp'; source_id: string;
     uri: string; width: number; height: number; sort_order: number; media_type: JournalMediaType;
     paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null;
-    occurred_at: string; attached_at: string; entry_content: string;
+    occurred_at: string; attached_at: string; entry_content: string; source_content: string;
   }>(`
+    SELECT * FROM (
     SELECT i.id, i.entry_id, 'entry' AS source, i.entry_id AS source_id,
       i.uri, i.width, i.height, i.sort_order, i.media_type, i.paired_video_uri, i.duration, i.thumbnail_uri,
-      e.occurred_at, i.created_at AS attached_at, e.content AS entry_content
+      e.occurred_at, i.created_at AS attached_at, e.content AS entry_content, e.content AS source_content
     FROM entry_images i
     INNER JOIN entries e ON e.id = i.entry_id
     WHERE e.deleted_at IS NULL
     UNION ALL
     SELECT i.id, f.entry_id, 'followUp' AS source, i.follow_up_id AS source_id,
       i.uri, i.width, i.height, i.sort_order, i.media_type, i.paired_video_uri, i.duration, i.thumbnail_uri,
-      e.occurred_at, i.created_at AS attached_at, e.content AS entry_content
+      e.occurred_at, i.created_at AS attached_at, e.content AS entry_content, f.content AS source_content
     FROM follow_up_images i
     INNER JOIN follow_ups f ON f.id = i.follow_up_id
     INNER JOIN entries e ON e.id = f.entry_id
     WHERE f.deleted_at IS NULL AND e.deleted_at IS NULL
-    ORDER BY occurred_at DESC, attached_at DESC, sort_order ASC
+    )
+    ORDER BY occurred_at DESC,
+      CASE source WHEN 'entry' THEN 0 ELSE 1 END ASC,
+      CASE source WHEN 'entry' THEN sort_order END ASC,
+      CASE source WHEN 'followUp' THEN attached_at END ASC,
+      sort_order ASC
   `);
   return rows.map((row) => ({
     id: row.id, entryId: row.entry_id, source: row.source, sourceId: row.source_id,
     uri: row.uri, width: row.width, height: row.height, sortOrder: row.sort_order, mediaType: row.media_type,
     pairedVideoUri: row.paired_video_uri, duration: row.duration, thumbnailUri: row.thumbnail_uri,
-    occurredAt: row.occurred_at, attachedAt: row.attached_at, entryContent: row.entry_content,
+    occurredAt: row.occurred_at, attachedAt: row.attached_at, entryContent: row.entry_content, sourceContent: row.source_content,
   }));
 }
 
@@ -704,11 +710,12 @@ export async function searchEntries(
   return entries.map((entry) => {
     const sources: SearchResult['sources'] = [];
     if (entry.content.toLocaleLowerCase().includes(normalized)) sources.push('content');
-    const matchingFollowUp = entry.followUps.find((item) => item.content.toLocaleLowerCase().includes(normalized))?.content;
+    const followUpMatch = entry.followUps.find((item) => item.content.toLocaleLowerCase().includes(normalized));
+    const matchingFollowUp = followUpMatch?.content;
     if (matchingFollowUp) sources.push('followUp');
     const matchingTag = entry.tags.find((tag) => tag.toLocaleLowerCase().includes(normalized));
     if (matchingTag) sources.push('tag');
-    return { entry, sources, matchingFollowUp, matchingTag };
+    return { entry, sources, matchingFollowUp, matchingFollowUpId: followUpMatch?.id, matchingTag };
   });
 }
 

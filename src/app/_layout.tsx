@@ -129,7 +129,7 @@ function AppStack() {
           <StatusBar animated style={preferences.readingTheme === 'night' ? 'light' : 'dark'} />
           <Stack screenOptions={{ headerShown: false, contentStyle: styles.content }}>
             <Stack.Screen name="index" />
-            <Stack.Screen name="compose" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
+            <Stack.Screen name="compose" options={{ presentation: 'modal', animation: 'slide_from_bottom', gestureEnabled: false }} />
             <Stack.Screen name="entry/[id]" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="history/[id]" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="memories" options={{ animation: 'slide_from_right' }} />

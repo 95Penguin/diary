@@ -10,6 +10,7 @@ import type { SearchResult } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatShortDateTime } from '@/utils/date';
 import { useAppPreferences } from '@/preferences/app-preferences';
+import { searchSnippet } from '@/utils/search-snippet';
 
 type TimeFilter = 'all' | 'today' | '7d' | '30d';
 const FILTERS: { value: TimeFilter; label: string }[] = [
@@ -62,10 +63,10 @@ function SearchResultCard({ result, query }: { result: SearchResult; query: stri
   const { readingTheme, readingBodyStyle, readingFontFamily, fontScale } = useAppPreferences();
   const { entry, sources } = result;
   const labels = sources.map((source) => source === 'content' ? '正文' : source === 'followUp' ? '后续' : '标签');
-  return <Pressable onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} style={({ pressed }) => [styles.card, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+  return <Pressable onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id, match: query, ...(result.matchingFollowUpId ? { followUpId: result.matchingFollowUpId } : {}) } })} style={({ pressed }) => [styles.card, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
     <View style={styles.cardHeader}><Text style={styles.date}>{formatShortDateTime(entry.occurredAt)}</Text><Text style={[styles.matchSource, { color: readingTheme.secondary }]}>命中{labels.join('、')}</Text></View>
-    <Text numberOfLines={3} style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 21 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}><HighlightedText text={entry.content} query={sources.includes('content') ? query : ''} /></Text>
-    {result.matchingFollowUp ? <View style={[styles.matchRow, { borderTopColor: readingTheme.border }]}><Text style={styles.matchLabel}>后续</Text><Text numberOfLines={2} style={[styles.matchText, { color: readingTheme.secondary }]}><HighlightedText text={result.matchingFollowUp} query={query} /></Text></View> : null}
+    <Text numberOfLines={3} style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 21 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}><HighlightedText text={sources.includes('content') ? searchSnippet(entry.content, query) : entry.content} query={sources.includes('content') ? query : ''} /></Text>
+    {result.matchingFollowUp ? <View style={[styles.matchRow, { borderTopColor: readingTheme.border }]}><Text style={styles.matchLabel}>后续</Text><Text numberOfLines={2} style={[styles.matchText, { color: readingTheme.secondary }]}><HighlightedText text={searchSnippet(result.matchingFollowUp, query, 24, 48)} query={query} /></Text></View> : null}
     {result.matchingTag ? <View style={styles.tag}><Text style={styles.tagText}>#<HighlightedText text={result.matchingTag} query={query} /></Text></View> : null}
   </Pressable>;
 }

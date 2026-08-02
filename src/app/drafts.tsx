@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -16,14 +16,19 @@ import { MediaThumbnail } from '@/components/media-view';
 export default function DraftsScreen() {
   const db = useSQLiteContext();
   const { readingTheme, readingBodyStyle, readingFontFamily, fontScale } = useAppPreferences();
-  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [drafts, setDrafts] = useState<Draft[] | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Draft | null>(null);
-  const load = useCallback(async () => setDrafts(await listDrafts(db)), [db]);
+  const load = useCallback(async () => { setLoadError(false); try { setDrafts(await listDrafts(db)); } catch { setLoadError(true); } }, [db]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
   function confirmDelete(draft: Draft) {
     setPendingDelete(draft);
   }
+
+  if (!drafts) return loadError
+    ? <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><View style={styles.empty}><Text style={styles.emptyTitle}>草稿暂时没有加载出来</Text><Text style={styles.emptyText}>内容仍保存在本机，请重新尝试。</Text><Pressable onPress={() => void load()} style={styles.composeButton}><Text style={styles.composeText}>重新读取</Text></Pressable></View></SafeAreaView>
+    : <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><ActivityIndicator color={colors.primary} style={styles.loader} /></SafeAreaView>;
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>草稿箱</Text><Pressable accessibilityLabel="新建草稿" hitSlop={12} onPress={() => router.push('/compose')}><Text style={styles.newDraft}>＋ 新建</Text></Pressable></View>
@@ -42,5 +47,5 @@ export default function DraftsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, newDraft: { color: colors.primary, fontSize: 12, fontWeight: '600' },
   list: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, count: { paddingVertical: spacing.md, color: colors.textSecondary, fontSize: 10 }, card: { position: 'relative', flexDirection: 'row', gap: spacing.md, minHeight: 104, marginBottom: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surface }, pressed: { opacity: 0.68 }, thumbnail: { width: 76, height: 76, borderRadius: radii.sm, backgroundColor: colors.surfaceMuted }, cardBody: { flex: 1, paddingRight: 36 }, content: { color: colors.text, fontFamily: fonts.serif, fontSize: 14, lineHeight: 21 }, meta: { marginTop: 'auto' }, updated: { color: colors.textFaint, fontSize: 9 }, details: { flexDirection: 'row', gap: spacing.sm, marginTop: 3 }, detail: { color: colors.textSecondary, fontSize: 9 }, delete: { position: 'absolute', top: spacing.md, right: spacing.md, padding: spacing.xs }, deleteText: { color: colors.danger, fontSize: 10 },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, emptySymbol: { color: colors.primary, fontSize: 42 }, emptyTitle: { marginTop: spacing.md, color: colors.text, fontFamily: fonts.serif, fontSize: 18 }, emptyText: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 11 }, composeButton: { marginTop: spacing.xl, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, composeText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  loader: { marginTop: 80 }, empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, emptySymbol: { color: colors.primary, fontSize: 42 }, emptyTitle: { marginTop: spacing.md, color: colors.text, fontFamily: fonts.serif, fontSize: 18 }, emptyText: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 11 }, composeButton: { marginTop: spacing.xl, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, composeText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
 });

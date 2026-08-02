@@ -8,7 +8,7 @@ export type LibraryMedia = {
   id: string; entryId: string; source: 'entry' | 'followUp'; sourceId: string;
   uri: string; width: number; height: number; sortOrder: number; mediaType: JournalMediaType;
   pairedVideoUri: string | null; duration: number | null; thumbnailUri: string | null;
-  occurredAt: string; attachedAt: string; entryContent: string;
+  occurredAt: string; attachedAt: string; entryContent: string; sourceContent: string;
 };
 export type Entry = {
   id: string; content: string; occurredAt: string; createdAt: string; updatedAt: string;
@@ -70,7 +70,7 @@ export type JournalBackup = {
 };
 export type ImportResult = { createdEntries: number; updatedEntries: number; createdFollowUps: number; updatedFollowUps: number; tags: number };
 export type SearchMatchSource = 'content' | 'followUp' | 'tag';
-export type SearchResult = { entry: Entry; sources: SearchMatchSource[]; matchingFollowUp?: string; matchingTag?: string };
+export type SearchResult = { entry: Entry; sources: SearchMatchSource[]; matchingFollowUp?: string; matchingFollowUpId?: string; matchingTag?: string };
 export type DraftImage = { uri: string; width: number; height: number; mediaType?: JournalMediaType; pairedVideoUri?: string | null; duration?: number | null; thumbnailUri?: string | null };
 export type Draft = { id: string; content: string; occurredAt: string; createdAt: string; updatedAt: string; tags: string[]; mood: string | null; weather: string | null; images: DraftImage[]; locationName: string | null; latitude: number | null; longitude: number | null };
 export type EntryInput = { content: string; occurredAt: string; mood?: string | null; weather?: string | null; locationName?: string | null; latitude?: number | null; longitude?: number | null };

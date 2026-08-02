@@ -16,11 +16,15 @@ export default function FavoritesScreen() {
   const { readingTheme } = useAppPreferences();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   useFocusEffect(useCallback(() => {
     let active = true;
-    void listFavoriteEntries(db).then((items) => { if (active) { setEntries(items); setLoading(false); } });
+    setLoading(true); setLoadError(false);
+    void listFavoriteEntries(db).then((items) => { if (active) { setEntries(items); setLoading(false); } }).catch(() => { if (active) { setLoadError(true); setLoading(false); } });
     return () => { active = false; };
   }, [db]));
+
+  if (loadError) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}><View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>我的收藏</Text><View style={styles.space} /></View><View style={styles.failure}><Text style={[styles.failureTitle, { color: readingTheme.text }]}>收藏暂时没有加载出来</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>记录仍保存在本机，请返回后重试。</Text></View></SafeAreaView>;
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>我的收藏</Text><View style={styles.space} /></View>
@@ -30,5 +34,5 @@ export default function FavoritesScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, space: { width: 42 }, loader: { marginTop: 80 }, list: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, count: { paddingVertical: spacing.md, color: colors.textSecondary, fontSize: 10 },
+  back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, space: { width: 42 }, loader: { marginTop: 80 }, list: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, count: { paddingVertical: spacing.md, color: colors.textSecondary, fontSize: 10 }, failure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, failureTitle: { fontFamily: fonts.serif, fontSize: 18 }, failureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' },
 });

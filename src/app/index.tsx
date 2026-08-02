@@ -36,6 +36,7 @@ import { cleanupUnusedJournalMedia, deleteJournalImage } from '@/utils/image-sto
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
 import { cleanupExpiredTimeCapsules } from '@/database/time-capsule-repository';
+import { recordAppError } from '@/utils/app-error-log';
 
 export default function HomeScreen() {
   const db = useSQLiteContext();
@@ -150,6 +151,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const [cursor, setCursor] = useState<EntryPageCursor | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const requestId = useRef(0);
   const listRef = useRef<SectionList<Entry>>(null);
@@ -175,18 +177,24 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
         listEntryFilterOptions(db),
       ]);
       if (currentRequest !== requestId.current) return;
+      setLoadError(false);
       setEntries(page.entries);
       setCursor(page.nextCursor);
       setHasMore(Boolean(page.nextCursor));
       setFilterOptions(options);
       finishStartupMetric('home', initialLoadStartedAt.current);
+    } catch (error) {
+      void recordAppError('timeline.load', error);
+      if (currentRequest === requestId.current) setLoadError(true);
     } finally {
       if (currentRequest === requestId.current) setLoading(false);
     }
   }, [db, filters]);
 
   useEffect(() => {
-    if (refreshKey > 0) void loadFirstPage();
+    if (refreshKey <= 0) return;
+    const timer = setTimeout(() => void loadFirstPage(), 0);
+    return () => clearTimeout(timer);
   }, [loadFirstPage, refreshKey]);
 
   useEffect(() => {
@@ -243,6 +251,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   }, [groups.length, scrollRequest]);
 
   if (loading && !entries.length) return <ActivityIndicator style={styles.loader} color={colors.primary} />;
+  if (loadError && !entries.length) return <View style={styles.loadFailure}><Text style={[styles.loadFailureTitle, { color: readingTheme.text }]}>时间轴暂时没有加载出来</Text><Text style={[styles.loadFailureText, { color: readingTheme.secondary }]}>记录仍保存在本机，可以重新读取。</Text><Pressable onPress={() => void loadFirstPage()} style={styles.retryButton}><Text style={styles.retryButtonText}>重新读取</Text></Pressable></View>;
   const valueOptions = filterKind === 'time'
     ? [{ value: 'today', label: '今天' }, { value: '7days', label: '最近 7 天' }, { value: '30days', label: '最近 30 天' }, { value: 'year', label: '今年' }]
     : filterKind === 'location' ? availableLocations.map((value) => ({ value, label: `⌖ ${value}` }))
@@ -276,6 +285,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   }
 
   return <View style={styles.timelineContainer}>
+    {loadError && entries.length ? <Pressable onPress={() => void loadFirstPage()} style={styles.refreshFailure}><Text style={styles.refreshFailureText}>暂时无法刷新，正在显示上次内容　重试</Text></Pressable> : null}
     <View style={styles.timelineTools}><ScrollView horizontal style={styles.filterBarScroll} contentContainerStyle={styles.filterBar} showsHorizontalScrollIndicator={false}>
         <Pressable ref={filterButtonRef} accessibilityLabel="选择筛选方式" onPress={openFilterPicker} style={[styles.filterMenuButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.filterMenuText}>{activeFilterCount ? `${activeFilterCount} 项筛选` : filterLabels[filterKind]}</Text><View style={[styles.filterChevron, filterPickerVisible && styles.filterChevronOpen]} /></Pressable>
         {filterKind !== 'none' ? <><Pressable onPress={() => setFilterValue(null)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, !filters[filterKind] && styles.filterChipActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, !filters[filterKind] && styles.filterTextActive]}>不限{filterLabels[filterKind]}</Text></Pressable>{valueOptions.map((option) => <Pressable key={option.value} onPress={() => setFilterValue(option.value)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, filters[filterKind] === option.value && styles.filterChipActive]}><Text numberOfLines={1} style={[styles.filterText, { color: readingTheme.secondary }, filters[filterKind] === option.value && styles.filterTextActive]}>{option.label}</Text></Pressable>)}</> : null}
@@ -324,6 +334,9 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
   const [monthCounts, setMonthCounts] = useState<Record<string, number>>({});
   const [selectedEntries, setSelectedEntries] = useState<Entry[]>([]);
   const [loadedDate, setLoadedDate] = useState<string | null>(null);
+  const [monthLoadError, setMonthLoadError] = useState(false);
+  const [dateLoadError, setDateLoadError] = useState(false);
+  const [calendarRetry, setCalendarRetry] = useState(0);
   useEffect(() => { void getCalendarOrder(db).then(setCalendarOrder); }, [db]);
   const month = useMemo(() => new Date(now.getFullYear(), now.getMonth() + monthOffset, 1), [monthOffset, now]);
   const year = month.getFullYear(); const monthIndex = month.getMonth();
@@ -331,8 +344,8 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
     if (refreshKey === 0) return;
     const start = new Date(year, monthIndex, 1);
     const end = new Date(year, monthIndex + 1, 1);
-    void listCalendarMonthCounts(db, start.toISOString(), end.toISOString()).then(setMonthCounts);
-  }, [db, monthIndex, refreshKey, year]);
+    void listCalendarMonthCounts(db, start.toISOString(), end.toISOString()).then((counts) => { setMonthCounts(counts); setMonthLoadError(false); }).catch(() => setMonthLoadError(true));
+  }, [calendarRetry, db, monthIndex, refreshKey, year]);
   useEffect(() => {
     if (refreshKey === 0) return;
     let active = true;
@@ -340,10 +353,11 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
       if (active) {
         setSelectedEntries(items);
         setLoadedDate(selected);
+        setDateLoadError(false);
       }
-    });
+    }).catch(() => { if (active) setDateLoadError(true); });
     return () => { active = false; };
-  }, [db, refreshKey, selected]);
+  }, [calendarRetry, db, refreshKey, selected]);
   useEffect(() => {
     if (!entryRefresh) return;
     let active = true;
@@ -402,6 +416,7 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
       <View style={styles.monthCenter}><Pressable accessibilityLabel={`选择年月，当前 ${year} 年 ${monthIndex + 1} 月`} onPress={() => { setPickerYear(year); setMonthPickerVisible(true); }} style={styles.monthTitleButton}><Text style={[styles.monthTitle, { color: readingTheme.text }]}>{year} 年 {monthIndex + 1} 月</Text><SymbolView name={{ ios: 'chevron.down', android: 'keyboard_arrow_down', web: 'keyboard_arrow_down' }} size={16} tintColor={readingTheme.text} /></Pressable>{awayFromToday ? <Pressable accessibilityLabel="回到今天" onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); }} style={[styles.todayButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.todayText}>今天</Text></Pressable> : null}</View>
       <Pressable accessibilityLabel="下个月" onPress={() => changeMonth(1)} style={[styles.monthButton, { backgroundColor: readingTheme.surface }]}><View style={[styles.monthArrow, styles.monthArrowRight, { borderColor: readingTheme.text }]} /></Pressable>
     </View>
+    {monthLoadError ? <Pressable onPress={() => setCalendarRetry((value) => value + 1)} style={styles.calendarFailure}><Text style={styles.calendarFailureText}>月份标记暂时无法刷新　重试</Text></Pressable> : null}
     <View style={styles.calendarBoard} onLayout={(event) => setCalendarWidth(event.nativeEvent.layout.width)}>
       {cellSize > 0 ? <>
         <View style={[styles.weekRow, { width: cellSize * 7 }]}>{['一','二','三','四','五','六','日'].map((item) => <Text allowFontScaling={false} key={item} style={[styles.weekLabel, { width: cellSize, color: readingTheme.secondary }]}>{item}</Text>)}</View>
@@ -414,17 +429,17 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
         })}</View>
       </> : null}
     </View>
-    <View style={[styles.selectedHeader, { borderTopColor: readingTheme.border }]}>
+    <View style={[styles.selectedHeader, { borderTopColor: readingTheme.border }]}> 
       <Text style={[styles.selectedCount, { color: readingTheme.secondary }]}>{dateLoading ? '读取中…' : `${orderedSelectedEntries.length} 条记录`}</Text>
       {orderedSelectedEntries.length > 1 ? <Pressable accessibilityLabel={`当前${calendarOrder === 'asc' ? '正序' : '倒序'}，点击切换`} hitSlop={8} onPress={toggleCalendarOrder} style={[styles.calendarOrderButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.calendarOrderText}>{calendarOrder === 'asc' ? '正序' : '倒序'}</Text><View style={styles.calendarOrderChevron} /></Pressable> : null}
-    </View></>;
+    </View>{dateLoadError ? <Pressable onPress={() => setCalendarRetry((value) => value + 1)} style={styles.calendarFailure}><Text style={styles.calendarFailureText}>这一天暂时没有加载出来，正在保留上次内容　重试</Text></Pressable> : null}</>;
 
   return <><FlatList
     data={orderedSelectedEntries}
     keyExtractor={(entry) => entry.id}
     renderItem={({ item }) => <EntryCard entry={item} onPress={() => onOpen(item)} onLongPress={() => onLongPress(item)} />}
     ListHeaderComponent={calendarHeader}
-    ListEmptyComponent={dateLoading ? <ActivityIndicator style={styles.pageLoader} color={colors.primary} /> : <EmptyState title="这一天还没有记录" description="可以修改日期，补记发生过的事情。" />}
+    ListEmptyComponent={dateLoading && !dateLoadError ? <ActivityIndicator style={styles.pageLoader} color={colors.primary} /> : dateLoadError ? null : <EmptyState title="这一天还没有记录" description="可以修改日期，补记发生过的事情。" />}
     contentContainerStyle={styles.calendar}
     showsVerticalScrollIndicator={false}
     initialNumToRender={5}
@@ -449,6 +464,7 @@ const styles = StyleSheet.create({
   profileImage: { width: 36, height: 36, borderRadius: 18 },
   profileText: { width: 32, height: 32, color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 14, fontWeight: '600', lineHeight: 32, textAlign: 'center', includeFontPadding: false },
   content: { flex: 1 }, viewPane: { ...StyleSheet.absoluteFill }, hiddenPane: { opacity: 0 }, loader: { marginTop: 80 }, pageLoader: { marginVertical: spacing.lg },
+  loadFailure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxxl }, loadFailureTitle: { fontFamily: fonts.serif, fontSize: 18 }, loadFailureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { marginTop: spacing.xl, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, retryButtonText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, refreshFailure: { alignItems: 'center', paddingVertical: spacing.xs, backgroundColor: colors.primarySoft }, refreshFailureText: { color: colors.primary, fontSize: 10 },
   quickHint: { position: 'absolute', left: spacing.xl, right: spacing.xl, bottom: 86, zIndex: 30, minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md, elevation: 4, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }, quickHintText: { fontSize: 11 }, quickHintClose: { marginLeft: spacing.md, color: colors.primary, fontSize: 11, fontWeight: '700' },
   timelineContainer: { flex: 1 }, timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.xl, paddingRight: spacing.xl, gap: spacing.sm }, filterBarScroll: { flex: 1, flexGrow: 1 }, filterBar: { alignItems: 'center', gap: spacing.sm }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '600' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] }, clearFilter: { paddingHorizontal: spacing.xs, color: colors.textFaint, fontSize: 10 },
@@ -476,6 +492,7 @@ const styles = StyleSheet.create({
   dayDot: { position: 'absolute', bottom: 1, alignSelf: 'center', width: 4, height: 4, borderRadius: 2, backgroundColor: colors.primary }, dayDotActive: { backgroundColor: '#FFFFFF' },
   selectedHeader: { minHeight: 34, marginTop: spacing.xs, paddingTop: spacing.sm, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   selectedCount: { color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 10, lineHeight: 16, includeFontPadding: false },
+  calendarFailure: { alignItems: 'center', marginVertical: spacing.xs, paddingVertical: spacing.sm, borderRadius: radii.md, backgroundColor: colors.primarySoft }, calendarFailureText: { color: colors.primary, fontSize: 10 },
   calendarOrderButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted },
   calendarOrderText: { color: colors.primary, fontSize: 10, lineHeight: 14 },
   calendarOrderChevron: { width: 5, height: 5, marginTop: -2, borderRightWidth: 1.25, borderBottomWidth: 1.25, borderColor: colors.primary, transform: [{ rotate: '45deg' }] },
