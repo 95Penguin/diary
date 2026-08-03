@@ -94,9 +94,11 @@ async function initializeDatabase(db: Parameters<typeof migrateDatabase>[0]) {
   const startedAt = startupTimer();
   await migrateDatabase(db);
   finishStartupMetric('database', startedAt);
-  void backfillVideoThumbnails(db).catch((error) => {
-    void recordAppError('video-thumbnail-backfill', error);
-    console.warn('Video thumbnail backfill failed', error);
+  InteractionManager.runAfterInteractions(() => {
+    void backfillVideoThumbnails(db).catch((error) => {
+      void recordAppError('video-thumbnail-backfill', error);
+      console.warn('Video thumbnail backfill failed', error);
+    });
   });
   void syncTimeCapsuleNotifications(db).catch((error) => void recordAppError('time-capsule.notification-sync', error));
 }

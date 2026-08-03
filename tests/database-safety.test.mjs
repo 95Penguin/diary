@@ -6,6 +6,7 @@ import {
   applyCoordinatesToLocation,
   cleanupExpiredTrash,
   createFollowUpWithImages,
+  createEntry,
   createJournalExport,
   deleteEntry,
   getEntry,
@@ -19,6 +20,7 @@ import {
   listMetadataUsage,
   listLocationMapPreferences,
   listJournalMedia,
+  listMemoryEntryIndex,
   removeLocationEverywhere,
   renameTagEverywhere,
   saveLocationDetail,
@@ -26,8 +28,10 @@ import {
   toggleMetadataPinned,
   updateLocationPreferences,
   updateLocationCoordinates,
+  updateFollowUpWithImages,
   permanentlyDeleteEntry,
   restoreEntry,
+  searchEntrySummaries,
   searchEntries,
 } from '../src/database/journal-repository.ts';
 import { DATABASE_VERSION, migrateDatabase } from '../src/database/migrate.ts';
@@ -136,6 +140,36 @@ test('fresh baseline reaches the current schema and is idempotent', async (t) =>
   assert.ok(indexes.some((index) => index.name === 'idx_time_capsules_open_at'));
   assert.ok(indexes.some((index) => index.name === 'idx_time_capsule_replies_capsule_id'));
   assert.ok(indexes.some((index) => index.name === 'idx_time_capsule_images_capsule_id'));
+});
+
+test('memory index stays lightweight while preserving dates, tags and image counts', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const entryId = await createEntry(db, { content: '回忆正文', occurredAt: '2026-08-02T12:00:00.000Z' });
+  await db.runAsync('INSERT INTO entry_tags (entry_id, label, sort_order) VALUES (?, ?, ?)', entryId, '夏天', 0);
+  await db.runAsync(
+    'INSERT INTO entry_images (id, entry_id, uri, width, height, sort_order, created_at, media_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'memory-image', entryId, 'file:///memory.jpg', 800, 600, 0, '2026-08-02T12:00:00.000Z', 'image',
+  );
+  const index = await listMemoryEntryIndex(db);
+  assert.deepEqual(index, [{ id: entryId, occurredAt: '2026-08-02T12:00:00.000Z', imageCount: 1, tags: ['夏天'] }]);
+});
+
+test('editing follow-up media returns only files removed after the database update', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const entryId = await createEntry(db, { content: '正文', occurredAt: '2026-08-02T12:00:00.000Z' });
+  const followUpId = await createFollowUpWithImages(db, entryId, '带图后续', [
+    { uri: 'file:///keep.jpg', width: 800, height: 600, mediaType: 'image' },
+    { uri: 'file:///remove.mp4', width: 1920, height: 1080, mediaType: 'video', thumbnailUri: 'file:///remove-thumb.jpg' },
+  ]);
+  const before = await getEntry(db, entryId);
+  const kept = before.followUps[0].images[0];
+  const removed = await updateFollowUpWithImages(db, followUpId, '更新后续', [kept]);
+  assert.deepEqual(new Set(removed), new Set(['file:///remove.mp4', 'file:///remove-thumb.jpg']));
+  const after = await getEntry(db, entryId);
+  assert.equal(after.followUps[0].content, '更新后续');
+  assert.deepEqual(after.followUps[0].images.map((image) => image.uri), ['file:///keep.jpg']);
 });
 
 test('development-only schemas v1-v12 are rejected instead of guessed forward', async (t) => {
@@ -552,6 +586,18 @@ test('search result identifies the matching follow-up for detail navigation', as
   const [result] = await searchEntries(db, '原始后续');
   assert.equal(result.matchingFollowUpId, 'follow-up-1');
   assert.equal(result.matchingFollowUp, '原始后续');
+});
+
+test('lightweight search paginates without loading full entry relationships', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  const page = await searchEntrySummaries(db, '原始后续', { limit: 1 });
+  assert.equal(page.results.length, 1);
+  assert.deepEqual(page.results[0].entry, { id: 'entry-1', content: '原始正文', occurredAt: '2026-07-26T12:00:00.000Z' });
+  assert.equal(page.results[0].matchingFollowUpId, 'follow-up-1');
+  assert.deepEqual(page.results[0].sources, ['followUp']);
+  assert.equal('images' in page.results[0].entry, false);
 });
 
 test('permanent deletion refuses active entries and keeps their media references', async (t) => {

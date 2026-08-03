@@ -15,6 +15,7 @@ export type Entry = {
   mood: string | null; weather: string | null; favoritedAt: string | null; locationName: string | null; latitude: number | null; longitude: number | null;
   followUps: FollowUp[]; images: EntryImage[]; tags: string[];
 };
+export type MemoryEntryIndex = { id: string; occurredAt: string; imageCount: number; tags: string[] };
 export type DeletedEntry = Entry & { deletedAt: string };
 export type EntryVersion = {
   id: string; entryId: string; content: string; occurredAt: string; mood: string | null; weather: string | null;
@@ -71,6 +72,7 @@ export type JournalBackup = {
 export type ImportResult = { createdEntries: number; updatedEntries: number; createdFollowUps: number; updatedFollowUps: number; tags: number };
 export type SearchMatchSource = 'content' | 'followUp' | 'tag';
 export type SearchResult = { entry: Entry; sources: SearchMatchSource[]; matchingFollowUp?: string; matchingFollowUpId?: string; matchingTag?: string };
+export type SearchResultSummary = { entry: Pick<Entry, 'id' | 'content' | 'occurredAt'>; sources: SearchMatchSource[]; matchingFollowUp?: string; matchingFollowUpId?: string; matchingTag?: string };
 export type DraftImage = { uri: string; width: number; height: number; mediaType?: JournalMediaType; pairedVideoUri?: string | null; duration?: number | null; thumbnailUri?: string | null };
 export type Draft = { id: string; content: string; occurredAt: string; createdAt: string; updatedAt: string; tags: string[]; mood: string | null; weather: string | null; images: DraftImage[]; locationName: string | null; latitude: number | null; longitude: number | null };
 export type EntryInput = { content: string; occurredAt: string; mood?: string | null; weather?: string | null; locationName?: string | null; latitude?: number | null; longitude?: number | null };

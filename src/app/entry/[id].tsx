@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,7 +8,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
 
-import { createFollowUpWithImages, deleteEntry, deleteFollowUp, getEntry, getFollowUpOrder, saveFollowUpOrder, setEntryFavorite, updateFollowUp } from '@/database/journal-repository';
+import { createFollowUpWithImages, deleteEntry, deleteFollowUp, getEntry, getFollowUpOrder, saveFollowUpOrder, setEntryFavorite, updateFollowUpWithImages } from '@/database/journal-repository';
 import { EntryActionModal } from '@/components/entry-action-modal';
 import type { Entry, FollowUp } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
@@ -35,6 +35,7 @@ export default function EntryDetailScreen() {
   const [followUpImages, setFollowUpImages] = useState<PendingMedia[]>([]);
   const [sending, setSending] = useState(false);
   const [editingFollowUp, setEditingFollowUp] = useState<FollowUp | null>(null);
+  const [editFollowUpImages, setEditFollowUpImages] = useState<FollowUp['images']>([]);
   const [followUpAction, setFollowUpAction] = useState<FollowUp | null>(null);
   const [confirmingFollowUpDelete, setConfirmingFollowUpDelete] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -111,12 +112,16 @@ export default function EntryDetailScreen() {
         savedMedia.push({ ...image, uri, pairedVideoUri, thumbnailUri });
       }
       await createFollowUpWithImages(db, entry.id, followUp, savedMedia);
-      setFollowUp(''); setFollowUpImages([]); await load();
+      setFollowUp(''); setFollowUpImages([]); Keyboard.dismiss();
     }
     catch {
       persisted.forEach(deleteJournalImage);
       await showAppDialog({ title: '添加失败', message: '后续没有保存，请稍后重试。' });
+      setSending(false);
+      return;
     }
+    try { await load(); }
+    catch { await showAppDialog({ title: '已保存', message: '后续已经保存，但页面暂时没有刷新出来。重新进入这一刻即可看到。' }); }
     finally { setSending(false); }
   }
 
@@ -218,11 +223,15 @@ export default function EntryDetailScreen() {
   }
 
   async function saveFollowUpEdit() {
-    if (!editingFollowUp || !editValue.trim()) return;
+    if (!editingFollowUp || (!editValue.trim() && !editFollowUpImages.length)) return;
+    let removedUris: string[];
     try {
-      await updateFollowUp(db, editingFollowUp.id, editValue);
-      setEditingFollowUp(null); setEditValue(''); await load();
-    } catch { await showAppDialog({ title: '保存失败', message: '这条后续没有保存，请稍后重试。' }); }
+      removedUris = await updateFollowUpWithImages(db, editingFollowUp.id, editValue, editFollowUpImages);
+    } catch { await showAppDialog({ title: '保存失败', message: '这条后续没有保存，请稍后重试。' }); return; }
+    removedUris.forEach(deleteJournalImage);
+    setEditingFollowUp(null); setEditValue(''); setEditFollowUpImages([]);
+    try { await load(); }
+    catch { await showAppDialog({ title: '已保存', message: '修改已经保存，但页面暂时没有刷新出来。重新进入这一刻即可看到。' }); }
   }
 
   if (loading) return <SafeAreaView style={styles.safe}><View style={styles.missing}><Text style={styles.loadingText}>正在打开这一刻…</Text></View></SafeAreaView>;
@@ -262,14 +271,16 @@ export default function EntryDetailScreen() {
           <Pressable accessibilityLabel="移除后续媒体" onPress={() => setFollowUpImages((current) => current.filter((_, itemIndex) => itemIndex !== index))} style={styles.pendingRemove}><Text style={styles.pendingRemoveText}>×</Text></Pressable>
         </View>)}</ScrollView> : null}
         {compressionStatus ? <Text style={[styles.compressionStatus, { color: readingTheme.secondary }]}>{compressionStatus}</Text> : null}
-        <View style={styles.inputBar}><TextInput maxLength={2000} value={followUp} onChangeText={setFollowUp} onSubmitEditing={() => void addFollowUp()} returnKeyType="send" placeholder="写一条后续……" placeholderTextColor={readingTheme.secondary} textAlignVertical="center" style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text, fontFamily: readingFontFamily }]} /><Pressable accessibilityLabel="添加后续图片或视频" disabled={followUpImages.length >= 5 || sending || Boolean(compressionStatus)} hitSlop={6} onPress={() => setMediaMenuVisible(true)} style={[styles.imagePickerButton, { backgroundColor: readingTheme.surface, borderColor: readingTheme.border }]}><Text style={styles.imagePickerText}>＋</Text></Pressable><Pressable disabled={(!followUp.trim() && !followUpImages.length) || sending} onPress={() => void addFollowUp()}><Text style={[styles.send, ((!followUp.trim() && !followUpImages.length) || sending) && styles.disabled]}>{sending ? '发送中' : '发送'}</Text></Pressable></View>
+        <View style={styles.inputBar}><TextInput multiline maxLength={2000} value={followUp} onChangeText={setFollowUp} placeholder="写一条后续……" placeholderTextColor={readingTheme.secondary} textAlignVertical="top" style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text, fontFamily: readingFontFamily }]} /><Pressable accessibilityLabel="添加后续图片或视频" disabled={followUpImages.length >= 5 || sending || Boolean(compressionStatus)} hitSlop={6} onPress={() => setMediaMenuVisible(true)} style={[styles.imagePickerButton, { backgroundColor: readingTheme.surface, borderColor: readingTheme.border }]}><Text style={styles.imagePickerText}>＋</Text></Pressable><Pressable accessibilityLabel="发送后续" disabled={(!followUp.trim() && !followUpImages.length) || sending} onPress={() => void addFollowUp()} style={styles.sendButton}><Text style={[styles.send, ((!followUp.trim() && !followUpImages.length) || sending) && styles.disabled]}>{sending ? '发送中' : '发送'}</Text></Pressable></View>
       </View>
-      <Modal visible={Boolean(editingFollowUp)} transparent animationType="fade" onRequestClose={() => setEditingFollowUp(null)}>
+      <Modal visible={Boolean(editingFollowUp)} transparent animationType="fade" onRequestClose={() => { setEditingFollowUp(null); setEditFollowUpImages([]); }}>
         <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={styles.modalOverlay}><View style={[styles.modalCard, { backgroundColor: readingTheme.background }]}>
           <Text style={[styles.modalTitle, { color: readingTheme.text }]}>编辑</Text>
+          {editFollowUpImages.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.editMediaRow}>{editFollowUpImages.map((image, index) => <View key={image.id} style={styles.editMediaItem}><MediaThumbnail media={image} allowRuntimeVideoPoster style={styles.editMedia} /><Pressable accessibilityLabel={`删除第 ${index + 1} 个后续媒体`} hitSlop={8} onPress={() => setEditFollowUpImages((current) => current.filter((item) => item.id !== image.id))} style={styles.editMediaRemove}><Text style={styles.pendingRemoveText}>×</Text></Pressable></View>)}</ScrollView> : null}
           <TextInput autoFocus multiline maxLength={2000} value={editValue} onChangeText={setEditValue} textAlignVertical="top" style={[styles.modalInput, { backgroundColor: readingTheme.surface, color: readingTheme.text, fontFamily: readingFontFamily }]} />
-          <View style={styles.modalActions}><Pressable onPress={() => setEditingFollowUp(null)}><Text style={[styles.modalCancel, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={!editValue.trim()} onPress={() => void saveFollowUpEdit()}><Text style={[styles.modalSave, !editValue.trim() && styles.disabled]}>保存</Text></Pressable></View>
+          {!editValue.trim() && !editFollowUpImages.length ? <Text style={styles.editEmptyHint}>请保留文字或至少一个媒体；如需全部移除，可删除整条后续。</Text> : null}
+          <View style={styles.modalActions}><Pressable onPress={() => { setEditingFollowUp(null); setEditFollowUpImages([]); }}><Text style={[styles.modalCancel, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={!editValue.trim() && !editFollowUpImages.length} onPress={() => void saveFollowUpEdit()}><Text style={[styles.modalSave, (!editValue.trim() && !editFollowUpImages.length) && styles.disabled]}>保存</Text></Pressable></View>
         </View></View>
         </KeyboardAvoidingView>
       </Modal>
@@ -293,7 +304,7 @@ export default function EntryDetailScreen() {
       <EntryActionModal visible={entryMenuVisible} onClose={() => setEntryMenuVisible(false)} onEdit={editEntry} onDelete={deleteCurrentEntry} onHistory={() => { setEntryMenuVisible(false); router.push({ pathname: '/history/[id]', params: { id: entry.id } }); }} onShare={() => { setEntryMenuVisible(false); router.push(`/share-card?id=${encodeURIComponent(entry.id)}` as Href); }} />
       <AppDialog visible={Boolean(litLocation)} title="🍃 新地点已点亮" message={`你在“${litLocation}”留下了第一条足迹。`} onClose={() => setLitLocation('')} actions={[{ label: '继续记录', onPress: () => setLitLocation('') }, { label: '查看地图', tone: 'primary', onPress: () => { setLitLocation(''); router.push('/footprint-map' as Href); } }]} />
       <AppDialog visible={mediaMenuVisible} title="添加图片或视频" message="最多添加 5 个；拍照会打开系统相机，可切换照片或视频模式。" onClose={() => setMediaMenuVisible(false)} actions={[{ label: '相册', onPress: () => { setMediaMenuVisible(false); void pickFollowUpImages(); } }, { label: '拍照', onPress: () => { setMediaMenuVisible(false); void captureFollowUpMedia(); } }]} />
-      <AppDialog visible={Boolean(followUpAction)} title={confirmingFollowUpDelete ? '删除这条后续？' : '后续操作'} message={confirmingFollowUpDelete ? '删除后将无法恢复。' : undefined} onClose={() => { setFollowUpAction(null); setConfirmingFollowUpDelete(false); }} actions={confirmingFollowUpDelete ? [{ label: '取消', onPress: () => setConfirmingFollowUpDelete(false) }, { label: '删除', tone: 'danger', onPress: async () => { if (!followUpAction) return; try { const images = await deleteFollowUp(db, followUpAction.id); images.forEach(deleteJournalImage); setFollowUpAction(null); setConfirmingFollowUpDelete(false); await load(); } catch { await showAppDialog({ title: '删除失败', message: '这条后续暂时无法删除，请稍后重试。' }); } } }] : [{ label: '编辑', tone: 'primary', onPress: () => { if (!followUpAction) return; setEditingFollowUp(followUpAction); setEditValue(followUpAction.content); setFollowUpAction(null); } }, { label: '删除', tone: 'danger', onPress: () => setConfirmingFollowUpDelete(true) }]} />
+      <AppDialog visible={Boolean(followUpAction)} title={confirmingFollowUpDelete ? '删除这条后续？' : '后续操作'} message={confirmingFollowUpDelete ? '删除后将无法恢复。' : undefined} onClose={() => { setFollowUpAction(null); setConfirmingFollowUpDelete(false); }} actions={confirmingFollowUpDelete ? [{ label: '取消', onPress: () => setConfirmingFollowUpDelete(false) }, { label: '删除', tone: 'danger', onPress: async () => { if (!followUpAction) return; try { const images = await deleteFollowUp(db, followUpAction.id); images.forEach(deleteJournalImage); setFollowUpAction(null); setConfirmingFollowUpDelete(false); await load(); } catch { await showAppDialog({ title: '删除失败', message: '这条后续暂时无法删除，请稍后重试。' }); } } }] : [{ label: '编辑', tone: 'primary', onPress: () => { if (!followUpAction) return; setEditingFollowUp(followUpAction); setEditValue(followUpAction.content); setEditFollowUpImages(followUpAction.images); setFollowUpAction(null); } }, { label: '删除', tone: 'danger', onPress: () => setConfirmingFollowUpDelete(true) }]} />
     </KeyboardAvoidingView>
   </SafeAreaView>;
 }
@@ -319,10 +330,11 @@ const styles = StyleSheet.create({
   followUpItem: { flexDirection: 'row', minHeight: 44 }, rail: { width: 20, alignItems: 'center' }, dot: { width: 8, height: 8, marginTop: 4, borderRadius: 4, borderWidth: 2, borderColor: colors.primary, backgroundColor: colors.background }, line: { width: 1, flex: 1, marginVertical: 3, backgroundColor: colors.border },
   followUpBody: { flex: 1, paddingBottom: spacing.sm }, followUpMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, followUpTime: { color: colors.textFaint, fontSize: 10 }, followUpMenu: { minWidth: 28, color: colors.textSecondary, textAlign: 'right', letterSpacing: 1 }, followUpText: { marginTop: 1, color: colors.text, fontSize: 13, lineHeight: 20 }, followUpImageRow: { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.sm }, followUpImage: { width: 72, height: 72, borderRadius: radii.sm },
   empty: { color: colors.textFaint, textAlign: 'center', paddingVertical: spacing.xl, fontSize: 11 },
-  inputArea: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, compressionStatus: { marginBottom: spacing.xs, fontSize: 10, textAlign: 'right' }, inputBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, imagePickerButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: 16 }, imagePickerText: { color: colors.primary, fontSize: 18, lineHeight: 20, fontWeight: '400' }, pendingImages: { flexDirection: 'row', gap: spacing.sm, paddingTop: 5, paddingBottom: spacing.sm }, pendingImage: { width: 50, height: 50, borderRadius: radii.sm }, pendingSorting: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm }, pendingRemove: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: colors.overlay }, pendingRemoveText: { color: '#FFFFFF', fontSize: 14, lineHeight: 16 },
-  input: { flex: 1, height: 42, paddingHorizontal: spacing.md, paddingVertical: 0, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 13, lineHeight: 20, includeFontPadding: false }, send: { color: colors.primary, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.3 },
+  inputArea: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, compressionStatus: { marginBottom: spacing.xs, fontSize: 10, textAlign: 'right' }, inputBar: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm }, imagePickerButton: { width: 32, height: 32, marginBottom: 5, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: 16 }, imagePickerText: { color: colors.primary, fontSize: 18, lineHeight: 20, fontWeight: '400' }, pendingImages: { flexDirection: 'row', gap: spacing.sm, paddingTop: 5, paddingBottom: spacing.sm }, pendingImage: { width: 50, height: 50, borderRadius: radii.sm }, pendingSorting: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm }, pendingRemove: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: colors.overlay }, pendingRemoveText: { color: '#FFFFFF', fontSize: 14, lineHeight: 16 },
+  input: { flex: 1, minHeight: 42, maxHeight: 104, paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 13, lineHeight: 20, includeFontPadding: false }, sendButton: { minHeight: 42, justifyContent: 'center', paddingBottom: 1 }, send: { color: colors.primary, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.3 },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center' }, loadingText: { color: colors.textFaint, fontSize: 12 }, missingTitle: { fontFamily: fonts.serif, fontSize: 18 }, backLink: { marginTop: spacing.lg, color: colors.primary },
   modalKeyboard: { flex: 1 }, modalOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, modalCard: { width: '100%', padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.surface }, modalTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' },
+  editMediaRow: { gap: spacing.sm, paddingTop: spacing.lg, paddingHorizontal: 5 }, editMediaItem: { position: 'relative' }, editMedia: { width: 64, height: 64, borderRadius: radii.sm }, editMediaRemove: { position: 'absolute', top: -6, right: -6, width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: colors.overlay }, editEmptyHint: { marginTop: spacing.sm, color: colors.danger, fontSize: 10, lineHeight: 15 },
   modalInput: { minHeight: 120, marginTop: spacing.lg, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 15, lineHeight: 23 }, modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.xxl, marginTop: spacing.xl }, modalCancel: { color: colors.textSecondary }, modalSave: { color: colors.primary, fontWeight: '700' },
   previewOverlay: { flex: 1, backgroundColor: '#111111F2' }, previewScroller: { flex: 1 }, previewPage: { height: '100%', alignItems: 'center', justifyContent: 'center' }, previewImage: { width: '100%', height: '100%' }, previewCloseButton: { position: 'absolute', top: 48, right: 20, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }, previewClose: { color: '#FFFFFF', fontSize: 34, lineHeight: 38 }, previewCount: { position: 'absolute', bottom: 42, alignSelf: 'center', overflow: 'hidden', paddingHorizontal: spacing.md, paddingVertical: 5, borderRadius: radii.pill, backgroundColor: '#00000080', color: '#FFFFFF', fontSize: 12 },
 });

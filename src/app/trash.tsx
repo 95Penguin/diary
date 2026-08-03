@@ -1,11 +1,10 @@
 import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
-import { cleanupExpiredTrash, listDeletedEntries, permanentlyDeleteEntry, restoreEntry } from '@/database/journal-repository';
-import type { DeletedEntry } from '@/domain/journal';
+import { cleanupExpiredTrash, listDeletedEntrySummaries, permanentlyDeleteEntry, restoreEntry, type DeletedEntrySummary } from '@/database/journal-repository';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatFullDate } from '@/utils/date';
 import { deleteJournalImage } from '@/utils/image-storage';
@@ -18,21 +17,24 @@ const DAY = 24 * 60 * 60 * 1000;
 export default function TrashScreen() {
   const db = useSQLiteContext();
   const { readingBodyStyle, readingFontFamily, readingTheme } = useAppPreferences();
-  const [entries, setEntries] = useState<DeletedEntry[]>([]);
+  const [entries, setEntries] = useState<DeletedEntrySummary[]>([]);
   const [capsules, setCapsules] = useState<DeletedTimeCapsule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [workingId, setWorkingId] = useState<string | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<DeletedEntry | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<DeletedEntrySummary | null>(null);
   const [pendingCapsuleDelete, setPendingCapsuleDelete] = useState<DeletedTimeCapsule | null>(null);
   const [toast, setToast] = useState('');
   const [openedAt] = useState(() => Date.now());
 
   const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
-      const [nextEntries, nextCapsules] = await Promise.all([listDeletedEntries(db), listDeletedTimeCapsules(db)]);
+      const [nextEntries, nextCapsules] = await Promise.all([listDeletedEntrySummaries(db), listDeletedTimeCapsules(db)]);
       setEntries(nextEntries); setCapsules(nextCapsules);
       void Promise.all([cleanupExpiredTrash(db), cleanupExpiredTimeCapsules(db)]).then(([expiredImages, expiredCapsuleMedia]) => [...expiredImages, ...expiredCapsuleMedia].forEach(deleteJournalImage)).catch(() => undefined);
-    } catch { notify('回收站读取失败，请稍后重试'); }
+    } catch { setLoadError(true); }
     finally { setLoading(false); }
   }, [db]);
 
@@ -43,7 +45,7 @@ export default function TrashScreen() {
     setTimeout(() => setToast(''), 1600);
   }
 
-  async function restore(item: DeletedEntry) {
+  async function restore(item: DeletedEntrySummary) {
     if (workingId) return; setWorkingId(item.id);
     try { await restoreEntry(db, item.id); await load(); notify('已恢复到时间轴'); }
     catch { notify('恢复失败，请稍后重试'); }
@@ -66,7 +68,7 @@ export default function TrashScreen() {
       <Text style={[styles.title, { color: readingTheme.text }]}>回收站</Text><View style={styles.headerSpace} />
     </View>
     {toast ? <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View> : null}
-    <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+    {loading && !entries.length && !capsules.length ? <ActivityIndicator color={colors.primary} style={styles.loader} /> : loadError ? <View style={styles.failure}><Text style={[styles.failureTitle, { color: readingTheme.text }]}>回收站暂时没有加载出来</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>内容仍保存在本机，请稍后重试。</Text><Pressable onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>重新加载</Text></Pressable></View> : <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
       <Text style={[styles.note, { color: readingTheme.secondary }]}>记录将在移入回收站 30 天后自动清理</Text>
       {!loading && !entries.length && !capsules.length ? <View style={styles.empty}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>回收站是空的</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>删除的记录和时间胶囊会在这里保留 30 天。</Text></View> : null}
       {capsules.length ? <Text style={[styles.groupTitle, { color: readingTheme.text }]}>时间胶囊</Text> : null}
@@ -83,7 +85,7 @@ export default function TrashScreen() {
           </View>
         </View>;
       })}
-    </ScrollView>
+    </ScrollView>}
     <AppDialog visible={Boolean(pendingDelete)} title="永久删除这条记录？" message="删除后无法恢复。" onClose={() => setPendingDelete(null)} actions={[{ label: '取消', onPress: () => setPendingDelete(null) }, { label: '永久删除', tone: 'danger', onPress: removeForever }]} />
     <AppDialog visible={Boolean(pendingCapsuleDelete)} title="永久删除这枚时间胶囊？" message="原文、媒体和所有回应都将无法恢复。" onClose={() => setPendingCapsuleDelete(null)} actions={[{ label: '取消', onPress: () => setPendingCapsuleDelete(null) }, { label: '永久删除', tone: 'danger', onPress: removeCapsuleForever }]} />
   </SafeAreaView>;
@@ -101,4 +103,5 @@ const styles = StyleSheet.create({
   cardFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg }, remaining: { fontSize: 10 }, actions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
   delete: { color: colors.danger, fontSize: 11 }, restoreButton: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, restoreText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   toast: { position: 'absolute', zIndex: 10, top: 62, alignSelf: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.text }, toastText: { color: '#FFFFFF', fontSize: 11 },
+  loader: { flex: 1 }, failure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, failureTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, failureText: { marginTop: spacing.sm, fontSize: 11, textAlign: 'center' }, retry: { marginTop: spacing.lg, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
 });

@@ -33,11 +33,14 @@ export default function EntryHistoryScreen() {
   const [preview, setPreview] = useState<EntryVersion | null>(null);
   const [pendingRestore, setPendingRestore] = useState<EntryVersion | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
-    const [current, history] = await Promise.all([getEntry(db, id), listEntryVersions(db, id)]);
-    setEntry(current); setVersions(history); setLoading(false);
+    setLoading(true); setLoadError(false);
+    try { const [current, history] = await Promise.all([getEntry(db, id), listEntryVersions(db, id)]); setEntry(current); setVersions(history); }
+    catch { setLoadError(true); }
+    finally { setLoading(false); }
   }, [db, id]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
@@ -47,7 +50,7 @@ export default function EntryHistoryScreen() {
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>编辑历史</Text><View style={styles.space} /></View>
-    {loading ? <View style={styles.center}><Text style={styles.hint}>正在读取历史…</Text></View> : !entry ? <View style={styles.center}><Text style={styles.emptyTitle}>记录不存在</Text></View> : versions.length ? <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+    {loading ? <View style={styles.center}><Text style={styles.hint}>正在读取历史…</Text></View> : loadError ? <View style={styles.center}><Text style={styles.emptyTitle}>编辑历史暂时没有加载出来</Text><Text style={styles.hint}>记录仍保存在本机，请重新加载。</Text><Pressable onPress={() => void load()}><Text style={styles.retry}>重新加载</Text></Pressable></View> : !entry ? <View style={styles.center}><Text style={styles.emptyTitle}>记录不存在</Text></View> : versions.length ? <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
       <View style={[styles.notice, { backgroundColor: readingTheme.surface }]}><Text style={[styles.noticeText, { color: readingTheme.secondary }]}>保存正文、时间、心情、天气、地点和标签的历史；图片不随版本恢复。最多保留最近 50 个版本。</Text></View>
       {versions.map((version, index) => {
         const newer = index === 0 ? entry : versions[index - 1];
@@ -70,7 +73,7 @@ export default function EntryHistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, space: { width: 42 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, emptySymbol: { color: colors.primary, fontSize: 42 }, emptyTitle: { marginTop: spacing.sm, color: colors.text, fontFamily: fonts.serif, fontSize: 18 }, hint: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 11, textAlign: 'center' },
+  safe: { flex: 1, backgroundColor: colors.background }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, space: { width: 42 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, emptySymbol: { color: colors.primary, fontSize: 42 }, emptyTitle: { marginTop: spacing.sm, color: colors.text, fontFamily: fonts.serif, fontSize: 18 }, hint: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 11, textAlign: 'center' }, retry: { marginTop: spacing.lg, color: colors.primary, fontSize: 12, fontWeight: '700' },
   list: { padding: spacing.xl, paddingBottom: spacing.xxxl }, notice: { marginBottom: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.primarySoft }, noticeText: { color: colors.textSecondary, fontSize: 10, lineHeight: 16 }, card: { marginBottom: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surface }, pressed: { opacity: 0.65 }, cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm }, versionTime: { color: colors.primary, fontSize: 10, fontWeight: '700' }, changes: { flexShrink: 1, color: colors.textFaint, fontSize: 9, textAlign: 'right' }, content: { marginTop: spacing.sm, color: colors.text, fontFamily: fonts.serif, fontSize: 14, lineHeight: 21 }, meta: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.sm }, metaText: { overflow: 'hidden', paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted, color: colors.textSecondary, fontSize: 9 },
   overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, previewCard: { width: '100%', maxWidth: 340, maxHeight: '78%', padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.background }, previewTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, previewDate: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 9, textAlign: 'center' }, previewScroll: { marginTop: spacing.lg }, previewContent: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 25 }, previewMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.md }, previewActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xl }, cancelButton: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, restoreButton: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md, backgroundColor: colors.primary }, cancelText: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' }, restoreText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
 });

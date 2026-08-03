@@ -103,11 +103,13 @@ export default function SummariesScreen() {
   const [annualMoments, setAnnualMoments] = useState<AnnualReviewMoment[]>([]);
   const [yearPickerVisible, setYearPickerVisible] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const requestId = useRef(0);
 
   const load = useCallback(async () => {
     const currentRequest = ++requestId.current;
     setLoading(true);
+    setLoadError(false);
     try {
       const [nextOverview, nextHeatmap, nextYears, nextMoments] = await Promise.all([
         getStatisticsOverview(db, { period, anchor, rankingLimit: 6 }),
@@ -121,6 +123,8 @@ export default function SummariesScreen() {
         setYearOptions(nextYears);
         setAnnualMoments(nextMoments);
       }
+    } catch {
+      if (currentRequest === requestId.current) setLoadError(true);
     } finally {
       if (currentRequest === requestId.current) setLoading(false);
     }
@@ -208,6 +212,8 @@ export default function SummariesScreen() {
 
       {loading && !overview ? (
         <ActivityIndicator color={colors.primary} style={styles.loader} />
+      ) : loadError && !overview ? (
+        <View style={styles.failure}><Text style={[styles.failureTitle, { color: readingTheme.text }]}>时光总结暂时没有加载出来</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>记录仍保存在本机，可以重新加载。</Text><Pressable onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>重新加载</Text></Pressable></View>
       ) : overview ? (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           <View style={[styles.hero, { backgroundColor: readingTheme.surface }]}>
@@ -511,6 +517,7 @@ const styles = StyleSheet.create({
   periodTitle: { fontFamily: fonts.serif, fontSize: 15, fontWeight: '600' },
   periodTitleButton: { minWidth: 120, minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3 },
   loader: { marginTop: 100 },
+  failure: { alignItems: 'center', paddingHorizontal: spacing.xxl, paddingTop: 90 }, failureTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, failureText: { marginTop: spacing.sm, fontSize: 11, lineHeight: 18, textAlign: 'center' }, retry: { marginTop: spacing.lg, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   scroll: { paddingHorizontal: spacing.xl, paddingBottom: 36 },
   hero: { padding: spacing.md, borderRadius: radii.lg },
   heroEyebrow: { fontSize: 9 },

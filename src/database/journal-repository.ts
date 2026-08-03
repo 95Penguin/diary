@@ -1,5 +1,5 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, EntryVersion, FollowUp, FollowUpImage, FootprintEntry, ImportResult, JournalBackup, JournalMediaType, JournalStats, LibraryMedia, PendingFootprintEntry, PendingLocationGroup, SearchResult } from '@/domain/journal';
+import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, EntryVersion, FollowUp, FollowUpImage, FootprintEntry, ImportResult, JournalBackup, JournalMediaType, JournalStats, LibraryMedia, MemoryEntryIndex, PendingFootprintEntry, PendingLocationGroup, SearchResult, SearchResultSummary } from '@/domain/journal';
 import { getJournalTemplateSettings, saveJournalTemplateSettings } from './template-repository.ts';
 import { mergeJournalTemplateSettings } from '../utils/journal-templates.ts';
 import { findLocationDuplicates, type LocationDuplicateSuggestion } from '../utils/location-duplicates.ts';
@@ -15,6 +15,8 @@ export type EntryListFilters = Partial<Record<Exclude<EntryFilterKind, 'none'>, 
 export type EntryPageCursor = { occurredAt: string; createdAt: string; id: string };
 export type EntryPage = { entries: Entry[]; nextCursor: EntryPageCursor | null };
 export type EntryFilterOptions = { locations: string[]; tags: string[]; moods: string[]; weather: string[] };
+export type EntryManagementSummary = Pick<Entry, 'id' | 'content' | 'occurredAt' | 'locationName' | 'tags'>;
+export type DeletedEntrySummary = Pick<DeletedEntry, 'id' | 'content' | 'occurredAt' | 'deletedAt'>;
 export type MetadataUsageItem = { value: string; count: number; pinned: boolean; address?: string };
 export type MetadataUsage = { tags: MetadataUsageItem[]; locations: MetadataUsageItem[] };
 export type LocationCategory = '家' | '学校' | '工作' | '旅行' | '常去' | '想再去';
@@ -116,6 +118,59 @@ export async function listEntries(db: SQLiteDatabase, query = ''): Promise<Entry
      WHERE ${where} ORDER BY e.occurred_at DESC, e.created_at DESC`, params,
   );
   return attachFollowUps(db, rows);
+}
+
+export async function listMemoryEntryIndex(db: SQLiteDatabase): Promise<MemoryEntryIndex[]> {
+  const [rows, tagRows] = await Promise.all([
+    db.getAllAsync<{ id: string; occurred_at: string; image_count: number }>(`
+      SELECT e.id, e.occurred_at, COUNT(i.id) AS image_count
+      FROM entries e
+      LEFT JOIN entry_images i ON i.entry_id = e.id
+      WHERE e.deleted_at IS NULL
+      GROUP BY e.id
+      ORDER BY e.occurred_at DESC
+    `),
+    db.getAllAsync<TagRow>(`
+      SELECT t.entry_id, t.label
+      FROM entry_tags t
+      INNER JOIN entries e ON e.id = t.entry_id
+      WHERE e.deleted_at IS NULL
+      ORDER BY t.entry_id, t.sort_order ASC
+    `),
+  ]);
+  const tagsByEntry = new Map<string, string[]>();
+  for (const row of tagRows) {
+    const tags = tagsByEntry.get(row.entry_id) ?? [];
+    tags.push(row.label);
+    tagsByEntry.set(row.entry_id, tags);
+  }
+  return rows.map((row) => ({
+    id: row.id,
+    occurredAt: row.occurred_at,
+    imageCount: row.image_count,
+    tags: tagsByEntry.get(row.id) ?? [],
+  }));
+}
+
+export async function listEntryManagementSummaries(db: SQLiteDatabase): Promise<EntryManagementSummary[]> {
+  const [rows, tagRows] = await Promise.all([
+    db.getAllAsync<{ id: string; content: string; occurred_at: string; location_name: string | null }>(`
+      SELECT id, content, occurred_at, location_name FROM entries
+      WHERE deleted_at IS NULL ORDER BY occurred_at DESC, created_at DESC, id DESC
+    `),
+    db.getAllAsync<TagRow>(`
+      SELECT t.entry_id, t.label FROM entry_tags t
+      INNER JOIN entries e ON e.id = t.entry_id
+      WHERE e.deleted_at IS NULL ORDER BY t.entry_id, t.sort_order ASC
+    `),
+  ]);
+  const tagsByEntry = new Map<string, string[]>();
+  for (const row of tagRows) {
+    const tags = tagsByEntry.get(row.entry_id) ?? [];
+    tags.push(row.label);
+    tagsByEntry.set(row.entry_id, tags);
+  }
+  return rows.map((row) => ({ id: row.id, content: row.content, occurredAt: row.occurred_at, locationName: row.location_name, tags: tagsByEntry.get(row.id) ?? [] }));
 }
 
 export async function listJournalMedia(db: SQLiteDatabase): Promise<LibraryMedia[]> {
@@ -681,6 +736,59 @@ export async function listEntriesForDate(db: SQLiteDatabase, date: string): Prom
   return attachFollowUps(db, rows);
 }
 
+export async function searchEntrySummaries(
+  db: SQLiteDatabase,
+  query: string,
+  options: { range?: { start: string; end: string }; limit?: number; offset?: number } = {},
+): Promise<{ results: SearchResultSummary[]; hasMore: boolean }> {
+  const keyword = query.trim();
+  if (!keyword) return { results: [], hasMore: false };
+  const escaped = keyword.replace(/[\\%_]/g, '\\$&');
+  const like = `%${escaped}%`;
+  const limit = Math.max(1, Math.min(options.limit ?? 20, 50));
+  const offset = Math.max(0, options.offset ?? 0);
+  const params: (string | number)[] = [like, like, like, like, like, like];
+  let dateWhere = '';
+  if (options.range) {
+    dateWhere = ' AND e.occurred_at >= ? AND e.occurred_at < ?';
+    params.push(options.range.start, options.range.end);
+  }
+  params.push(limit + 1, offset);
+  const rows = await db.getAllAsync<{
+    id: string; content: string; occurred_at: string;
+    matching_follow_up_id: string | null; matching_follow_up: string | null; matching_tag: string | null;
+  }>(`
+    SELECT e.id, e.content, e.occurred_at,
+      (SELECT f.id FROM follow_ups f WHERE f.entry_id = e.id AND f.deleted_at IS NULL AND f.content LIKE ? ESCAPE '\\' ORDER BY f.created_at ASC LIMIT 1) AS matching_follow_up_id,
+      (SELECT f.content FROM follow_ups f WHERE f.entry_id = e.id AND f.deleted_at IS NULL AND f.content LIKE ? ESCAPE '\\' ORDER BY f.created_at ASC LIMIT 1) AS matching_follow_up,
+      (SELECT t.label FROM entry_tags t WHERE t.entry_id = e.id AND t.label LIKE ? ESCAPE '\\' ORDER BY t.sort_order ASC LIMIT 1) AS matching_tag
+    FROM entries e
+    WHERE e.deleted_at IS NULL AND (
+      e.content LIKE ? ESCAPE '\\'
+      OR EXISTS (SELECT 1 FROM follow_ups f WHERE f.entry_id = e.id AND f.deleted_at IS NULL AND f.content LIKE ? ESCAPE '\\')
+      OR EXISTS (SELECT 1 FROM entry_tags t WHERE t.entry_id = e.id AND t.label LIKE ? ESCAPE '\\')
+    )${dateWhere}
+    ORDER BY e.occurred_at DESC, e.created_at DESC, e.id DESC
+    LIMIT ? OFFSET ?
+  `, params);
+  const normalized = keyword.toLocaleLowerCase();
+  return {
+    hasMore: rows.length > limit,
+    results: rows.slice(0, limit).map((row) => {
+      const sources: SearchResultSummary['sources'] = [];
+      if (row.content.toLocaleLowerCase().includes(normalized)) sources.push('content');
+      if (row.matching_follow_up) sources.push('followUp');
+      if (row.matching_tag) sources.push('tag');
+      return {
+        entry: { id: row.id, content: row.content, occurredAt: row.occurred_at }, sources,
+        matchingFollowUp: row.matching_follow_up ?? undefined,
+        matchingFollowUpId: row.matching_follow_up_id ?? undefined,
+        matchingTag: row.matching_tag ?? undefined,
+      };
+    }),
+  };
+}
+
 export async function searchEntries(
   db: SQLiteDatabase,
   query: string,
@@ -1071,6 +1179,14 @@ export async function listDeletedEntries(db: SQLiteDatabase): Promise<DeletedEnt
   return attached.map((entry, index) => ({ ...entry, deletedAt: rows[index].deleted_at }));
 }
 
+export async function listDeletedEntrySummaries(db: SQLiteDatabase): Promise<DeletedEntrySummary[]> {
+  const rows = await db.getAllAsync<{ id: string; content: string; occurred_at: string; deleted_at: string }>(`
+    SELECT id, content, occurred_at, deleted_at FROM entries
+    WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC
+  `);
+  return rows.map((row) => ({ id: row.id, content: row.content, occurredAt: row.occurred_at, deletedAt: row.deleted_at }));
+}
+
 export async function restoreEntry(db: SQLiteDatabase, id: string) {
   const row = await db.getFirstAsync<{ deleted_at: string }>('SELECT deleted_at FROM entries WHERE id = ? AND deleted_at IS NOT NULL', id);
   if (!row) return;
@@ -1428,6 +1544,36 @@ export async function updateFollowUp(db: SQLiteDatabase, id: string, content: st
     'UPDATE follow_ups SET content = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
     content.trim(), new Date().toISOString(), id,
   );
+}
+
+export async function updateFollowUpWithImages(
+  db: SQLiteDatabase,
+  id: string,
+  content: string,
+  images: (EntryAssetInput & { id?: string })[],
+) {
+  const existing = await db.getAllAsync<{ id: string; uri: string; paired_video_uri: string | null; thumbnail_uri: string | null; created_at: string }>(
+    'SELECT id, uri, paired_video_uri, thumbnail_uri, created_at FROM follow_up_images WHERE follow_up_id = ?',
+    id,
+  );
+  const existingById = new Map(existing.map((image) => [image.id, image]));
+  const keptIds = new Set(images.flatMap((image) => image.id ? [image.id] : []));
+  const removedUris = existing
+    .filter((image) => !keptIds.has(image.id))
+    .flatMap((image) => [image.uri, image.paired_video_uri, image.thumbnail_uri].filter((uri): uri is string => Boolean(uri)));
+  const now = new Date().toISOString();
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
+      'UPDATE follow_ups SET content = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+      content.trim(), now, id,
+    );
+    await txn.runAsync('DELETE FROM follow_up_images WHERE follow_up_id = ?', id);
+    for (const [index, image] of images.entries()) await txn.runAsync(
+      'INSERT INTO follow_up_images (id, follow_up_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      image.id ?? createId(), id, image.uri, image.width, image.height, index, image.id ? existingById.get(image.id)?.created_at ?? now : now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null, image.thumbnailUri ?? null,
+    );
+  });
+  return removedUris;
 }
 
 export async function deleteFollowUp(db: SQLiteDatabase, id: string) {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Location from 'expo-location';
 import { Circle, MapType, MapView, Marker, type MapViewRef } from 'expo-gaode-map';
 import { router, useFocusEffect, type Href } from 'expo-router';
@@ -36,6 +36,7 @@ export default function FootprintMapScreen() {
   const [backfilling, setBackfilling] = useState(false);
   const [pendingVisible, setPendingVisible] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [customRange, setCustomRange] = useState<{ start: string; end: string } | null>(null);
@@ -58,24 +59,17 @@ export default function FootprintMapScreen() {
   const [backfillPrivacyVisible, setBackfillPrivacyVisible] = useState(false);
 
   const load = useCallback(async () => {
-    const [result, preferences, viewPreferences, duplicates] = await Promise.all([
-      listFootprintEntries(db),
-      listLocationMapPreferences(db),
-      getFootprintViewPreferences(db),
-      listLocationDuplicateSuggestions(db),
-    ]);
-    setEntries(result.entries);
-    setMissingCoordinates(result.missingCoordinates);
-    setPendingEntries(result.pendingEntries);
-    setPendingGroups(result.pendingGroups);
-    setLocationPreferences(preferences);
-    setDuplicateCount(duplicates.length);
-    if (!viewPreferencesLoaded) {
+    setLoading(true); setLoadError(false);
+    try {
+      const [result, preferences, viewPreferences, duplicates] = await Promise.all([
+        listFootprintEntries(db), listLocationMapPreferences(db), getFootprintViewPreferences(db), listLocationDuplicateSuggestions(db),
+      ]);
+      setEntries(result.entries); setMissingCoordinates(result.missingCoordinates); setPendingEntries(result.pendingEntries); setPendingGroups(result.pendingGroups); setLocationPreferences(preferences); setDuplicateCount(duplicates.length);
       setPlaceSort(viewPreferences.sort);
       setViewPreferencesLoaded(true);
-    }
-    setLoading(false);
-  }, [db, viewPreferencesLoaded]);
+    } catch { setLoadError(true); }
+    finally { setLoading(false); }
+  }, [db]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
   useEffect(() => {
@@ -239,6 +233,7 @@ export default function FootprintMapScreen() {
   }
 
   if (loading) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><ActivityIndicator style={styles.loader} color={colors.primary} /></SafeAreaView>;
+  if (loadError) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>足迹地图</Text><View style={styles.headerAction} /></View><View style={styles.failure}><Text style={[styles.failureTitle, { color: readingTheme.text }]}>足迹暂时没有加载出来</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>地点记录仍保存在本机，请重新加载。</Text><Pressable onPress={() => void load()} style={styles.failureRetry}><Text style={styles.failureRetryText}>重新加载</Text></Pressable></View></SafeAreaView>;
 
   return <SafeAreaView edges={['top', 'bottom']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}>
@@ -268,17 +263,14 @@ export default function FootprintMapScreen() {
         <View style={styles.duplicateNoticeCopy}><Text style={styles.duplicateNoticeTitle}>发现 {duplicateCount} 组相近地点</Text><Text style={[styles.duplicateNoticeText, { color: readingTheme.secondary }]}>可能是同一地点，只在确认后才会合并</Text></View>
         <Text style={styles.duplicateNoticeArrow}>整理 ›</Text>
       </Pressable> : null}
-      <ScrollView contentContainerStyle={styles.placeList} showsVerticalScrollIndicator={false}>
-        {listPlaces.map((place) => {
+      <FlatList data={listPlaces} keyExtractor={(place) => place.id} contentContainerStyle={styles.placeList} showsVerticalScrollIndicator={false} initialNumToRender={12} maxToRenderPerBatch={10} windowSize={7} ListEmptyComponent={<Text style={[styles.noPlaces, { color: readingTheme.secondary }]}>没有符合条件的地点</Text>} renderItem={({ item: place }) => {
           const preference = locationPreferences[place.name];
-          return <Pressable key={place.id} onPress={() => router.push(`/location/${encodeURIComponent(place.name)}` as Href)} style={[styles.placeListRow, { backgroundColor: readingTheme.surface }]}>
+          return <Pressable onPress={() => router.push(`/location/${encodeURIComponent(place.name)}` as Href)} style={[styles.placeListRow, { backgroundColor: readingTheme.surface }]}>
             <View style={styles.placeListIcon}><Text style={styles.placeListLeaf}>{preference?.favorite ? '★' : '🍃'}</Text></View>
             <View style={styles.placeListCopy}><View style={styles.placeListNameRow}><Text numberOfLines={1} style={[styles.placeListName, { color: readingTheme.text }]}>{place.name}</Text></View><Text style={[styles.placeListMeta, { color: readingTheme.secondary }]}>{place.entries.length} 次到访 · 最近 {shortDate(place.entries[0].occurredAt)}</Text></View>
             <Text style={styles.placeListArrow}>›</Text>
           </Pressable>;
-        })}
-        {!listPlaces.length ? <Text style={[styles.noPlaces, { color: readingTheme.secondary }]}>没有符合条件的地点</Text> : null}
-      </ScrollView>
+        }} />
     </View> : viewMode === 'map' && places.length ? <View style={styles.mapShell}>
       <GaodeMapPrivacyGate onDecline={() => setViewMode('list')}><MapView
         key={mapAttempt}
@@ -418,6 +410,7 @@ export default function FootprintMapScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 }, loader: { marginTop: 100 },
+  failure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, failureTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, failureText: { marginTop: spacing.sm, fontSize: 11, lineHeight: 18, textAlign: 'center' }, failureRetry: { marginTop: spacing.lg, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, failureRetryText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth },
   back: { color: colors.primary, fontSize: 13 }, title: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' },
   headerAction: { minWidth: 52, minHeight: 36, alignItems: 'flex-end', justifyContent: 'center' }, headerActionText: { color: colors.primary, fontSize: 11, fontWeight: '700' },

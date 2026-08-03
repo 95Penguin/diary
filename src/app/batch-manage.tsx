@@ -4,8 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { AppDialog } from '@/components/app-dialog';
-import { batchAddEntryTag, batchDeleteEntries, batchRemoveEntryTag, batchSetEntryFavorite, batchSetEntryLocation, listEntries } from '@/database/journal-repository';
-import type { Entry } from '@/domain/journal';
+import { batchAddEntryTag, batchDeleteEntries, batchRemoveEntryTag, batchSetEntryFavorite, batchSetEntryLocation, listEntryManagementSummaries, type EntryManagementSummary } from '@/database/journal-repository';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatShortDateTime } from '@/utils/date';
@@ -16,7 +15,7 @@ type Editor = 'addTag' | 'removeTag' | 'location' | null;
 export default function BatchManageScreen() {
   const db = useSQLiteContext();
   const { preferences, readingTheme } = useAppPreferences();
-  const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [entries, setEntries] = useState<EntryManagementSummary[] | null>(null);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editor, setEditor] = useState<Editor>(null);
@@ -31,10 +30,10 @@ export default function BatchManageScreen() {
     return (entries ?? []).filter((entry) => [entry.content, entry.locationName, ...entry.tags].filter(Boolean).some((item) => item!.toLocaleLowerCase().includes(keyword)));
   }, [entries, query]);
 
-  async function reload() { setEntries(await listEntries(db)); setSelected(new Set()); }
+  async function reload() { setEntries(await listEntryManagementSummaries(db)); setSelected(new Set()); }
   useEffect(() => {
     let active = true;
-    void listEntries(db).then((items) => { if (active) setEntries(items); }).catch((error) => { void recordAppError('batch-manage.load', error); if (active) { setEntries([]); setNotice({ title: '读取失败', message: '记录仍保存在本机，请返回后重新尝试。' }); } });
+    void listEntryManagementSummaries(db).then((items) => { if (active) setEntries(items); }).catch((error) => { void recordAppError('batch-manage.load', error); if (active) { setEntries([]); setNotice({ title: '读取失败', message: '记录仍保存在本机，请返回后重新尝试。' }); } });
     return () => { active = false; };
   }, [db]);
   function toggle(id: string) { if (working) return; setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }

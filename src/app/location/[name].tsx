@@ -23,6 +23,7 @@ export default function LocationDetailScreen() {
   const locationName = typeof name === 'string' ? name : '';
   const [detail, setDetail] = useState<LocationPageDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [pickerVisible, setPickerVisible] = useState(false);
@@ -30,8 +31,11 @@ export default function LocationDetailScreen() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       setDetail(await getLocationPageDetail(db, locationName));
+    } catch {
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -99,6 +103,7 @@ export default function LocationDetailScreen() {
   }
 
   if (loading) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><ActivityIndicator style={styles.loader} color={colors.primary} /></SafeAreaView>;
+  if (loadError) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>地点详情</Text><View style={styles.headerSpace} /></View><View style={styles.empty}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>地点详情暂时没有加载出来</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>记录仍保存在本机，请重新加载。</Text><Pressable onPress={() => void load()}><Text style={styles.retry}>重新加载</Text></Pressable></View></SafeAreaView>;
   if (!detail || !stats) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>地点详情</Text><View style={styles.headerSpace} /></View>
     <View style={styles.empty}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>没有找到这个地点</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>地点可能已被重命名或合并。</Text></View>
@@ -174,7 +179,7 @@ const styles = StyleSheet.create({
   entry: { minHeight: 86, justifyContent: 'center', paddingVertical: spacing.md, paddingRight: spacing.xl },
   timeline: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs }, dot: { color: colors.primary, fontSize: 15 }, date: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   content: { marginTop: spacing.xs, fontSize: 14, lineHeight: 22 }, arrow: { position: 'absolute', right: 0, color: colors.primary, fontSize: 19 },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center' }, emptyTitle: { fontFamily: fonts.serif, fontSize: 18 }, emptyText: { marginTop: spacing.sm, fontSize: 11 },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, emptyTitle: { fontFamily: fonts.serif, fontSize: 18, textAlign: 'center' }, emptyText: { marginTop: spacing.sm, fontSize: 11, textAlign: 'center' }, retry: { marginTop: spacing.lg, color: colors.primary, fontSize: 12, fontWeight: '700' },
   overlay: { flex: 1, justifyContent: 'center', padding: spacing.xl, backgroundColor: '#00000055' }, editor: { padding: spacing.xl, borderRadius: radii.lg },
   editorTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, input: { height: 46, marginTop: spacing.lg, paddingHorizontal: spacing.md, borderRadius: radii.md, fontSize: 14 },
   hint: { marginTop: spacing.sm, fontSize: 10, lineHeight: 17 }, actions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: spacing.xl, marginTop: spacing.xl },

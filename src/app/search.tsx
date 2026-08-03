@@ -5,8 +5,8 @@ import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
 import { EmptyState } from '@/components/empty-state';
-import { searchEntries } from '@/database/journal-repository';
-import type { SearchResult } from '@/domain/journal';
+import { searchEntrySummaries } from '@/database/journal-repository';
+import type { SearchResultSummary } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatShortDateTime } from '@/utils/date';
 import { useAppPreferences } from '@/preferences/app-preferences';
@@ -22,27 +22,36 @@ export default function SearchScreen() {
   const { readingTheme } = useAppPreferences();
   const [query, setQuery] = useState('');
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [results, setResults] = useState<SearchResultSummary[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [failed, setFailed] = useState(false);
   const requestId = useRef(0);
 
-  const search = useCallback(async (value: string, filter: TimeFilter) => {
+  const search = useCallback(async (value: string, filter: TimeFilter, offset = 0) => {
     const currentRequest = ++requestId.current;
-    if (!value.trim()) { setResults([]); setLoading(false); setFailed(false); return; }
-    setLoading(true);
+    if (!value.trim()) { setResults([]); setHasMore(false); setLoading(false); setLoadingMore(false); setFailed(false); return; }
+    if (offset) setLoadingMore(true); else setLoading(true);
     setFailed(false);
     try {
-      const next = await searchEntries(db, value, dateRange(filter));
-      if (currentRequest === requestId.current) setResults(next);
+      const page = await searchEntrySummaries(db, value, { range: dateRange(filter), limit: 20, offset });
+      if (currentRequest === requestId.current) {
+        setResults((current) => offset ? [...current, ...page.results.filter((item) => !current.some((existing) => existing.entry.id === item.entry.id))] : page.results);
+        setHasMore(page.hasMore);
+      }
     } catch {
-      if (currentRequest === requestId.current) setFailed(true);
+      if (currentRequest === requestId.current) {
+        if (offset) setHasMore(false);
+        else setFailed(true);
+      }
     } finally {
-      if (currentRequest === requestId.current) setLoading(false);
+      if (currentRequest === requestId.current) { setLoading(false); setLoadingMore(false); }
     }
   }, [db]);
 
   useEffect(() => {
+    requestId.current += 1;
     const timer = setTimeout(() => void search(query, timeFilter), 250);
     return () => clearTimeout(timer);
   }, [query, search, timeFilter]);
@@ -54,12 +63,12 @@ export default function SearchScreen() {
       {FILTERS.map((filter) => <Pressable key={filter.value} onPress={() => setTimeFilter(filter.value)} style={[styles.filter, { backgroundColor: readingTheme.surface }, timeFilter === filter.value && styles.filterActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, timeFilter === filter.value && styles.filterTextActive]}>{filter.label}</Text></Pressable>)}
     </ScrollView>
     {loading ? <ActivityIndicator style={styles.loader} color={colors.primary} /> : failed ? <View style={styles.failure}><Text style={styles.failureSymbol}>◌</Text><Text style={[styles.failureTitle, { color: readingTheme.text }]}>搜索暂时失败</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>记录没有丢失，可以重新搜索。</Text><Pressable onPress={() => void search(query, timeFilter)} style={styles.retry}><Text style={styles.retryText}>重新搜索</Text></Pressable></View> : !query.trim() ? <EmptyState title="找回一段记忆" description="输入正文、后续或标签中出现过的词。" /> : results.length ? (
-      <FlatList data={results} keyExtractor={(result) => result.entry.id} renderItem={({ item }) => <SearchResultCard result={item} query={query.trim()} />} ListHeaderComponent={<Text style={styles.resultCount}>“{query.trim()}”找到 {results.length} 条记录</Text>} contentContainerStyle={styles.results} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} initialNumToRender={10} maxToRenderPerBatch={8} windowSize={7} />
+      <FlatList data={results} keyExtractor={(result) => result.entry.id} renderItem={({ item }) => <SearchResultCard result={item} query={query.trim()} />} ListHeaderComponent={<Text style={styles.resultCount}>“{query.trim()}”已显示 {results.length} 条记录</Text>} ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.primary} style={styles.moreLoader} /> : null} onEndReachedThreshold={0.4} onEndReached={() => { if (hasMore && !loadingMore && !loading) void search(query, timeFilter, results.length); }} contentContainerStyle={styles.results} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} initialNumToRender={10} maxToRenderPerBatch={8} windowSize={7} />
     ) : <EmptyState title="没有找到相关记录" description={timeFilter === 'all' ? '换一个关键词或标签试试看。' : '可以扩大时间范围再试试。'} />}
   </SafeAreaView>;
 }
 
-function SearchResultCard({ result, query }: { result: SearchResult; query: string }) {
+function SearchResultCard({ result, query }: { result: SearchResultSummary; query: string }) {
   const { readingTheme, readingBodyStyle, readingFontFamily, fontScale } = useAppPreferences();
   const { entry, sources } = result;
   const labels = sources.map((source) => source === 'content' ? '正文' : source === 'followUp' ? '后续' : '标签');
@@ -93,6 +102,7 @@ const styles = StyleSheet.create({
   searchBox: { height: 42, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.xl, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, icon: { color: colors.textSecondary, fontSize: 22 }, input: { flex: 1, color: colors.text, fontSize: 13 }, clear: { color: colors.textSecondary, fontSize: 20 },
   filterScroll: { flexGrow: 0, height: 36 }, filters: { alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.xl }, filter: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterActive: { backgroundColor: colors.primary }, filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
   loader: { marginTop: 70 }, results: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, resultCount: { marginTop: spacing.sm, marginBottom: spacing.sm, color: colors.textSecondary, fontSize: 10 },
+  moreLoader: { paddingVertical: spacing.lg },
   failure: { alignItems: 'center', paddingHorizontal: spacing.xxxl, paddingTop: 90 }, failureSymbol: { color: colors.primary, fontSize: 42 }, failureTitle: { marginTop: spacing.md, fontFamily: fonts.serif, fontSize: 18 }, failureText: { marginTop: spacing.sm, fontSize: 13, lineHeight: 20, textAlign: 'center' }, retry: { minHeight: 42, justifyContent: 'center', marginTop: spacing.xl, paddingHorizontal: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   card: { marginBottom: spacing.sm, padding: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, pressed: { opacity: 0.66 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, date: { color: colors.primary, fontSize: 10, fontWeight: '700' }, matchSource: { color: colors.textFaint, fontSize: 9 },
