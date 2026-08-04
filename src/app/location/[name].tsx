@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -52,8 +52,15 @@ export default function LocationDetailScreen() {
       latest: ascending.at(-1)!.occurredAt,
     };
   }, [detail]);
-  const media = useMemo(() => detail?.entries.flatMap((entry) =>
-    entry.images.map((item) => ({ entryId: entry.id, item }))) ?? [], [detail]);
+  const { mediaCount, galleryMedia } = useMemo(() => {
+    let count = 0;
+    const gallery: { entryId: string; item: NonNullable<typeof detail>['entries'][number]['images'][number] }[] = [];
+    for (const entry of detail?.entries ?? []) {
+      count += entry.images.length;
+      for (const item of entry.images) if (gallery.length < 30) gallery.push({ entryId: entry.id, item });
+    }
+    return { mediaCount: count, galleryMedia: gallery };
+  }, [detail]);
 
   async function saveAlias() {
     const next = editValue.trim();
@@ -115,7 +122,7 @@ export default function LocationDetailScreen() {
       <Text style={[styles.headerTitle, { color: readingTheme.text }]}>地点详情</Text>
       <Pressable hitSlop={10} onPress={() => { setEditValue(detail.name); setEditing(true); }}><Text style={styles.edit}>整理</Text></Pressable>
     </View>
-    <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+    <FlatList data={detail.entries} keyExtractor={(entry) => entry.id} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} initialNumToRender={12} maxToRenderPerBatch={10} windowSize={7} ListHeaderComponent={<>
       <View style={styles.hero}>
         <View style={styles.nameRow}><Text style={[styles.name, { color: readingTheme.text }]}>{detail.name}</Text><Pressable accessibilityLabel={detail.favorite ? '取消收藏地点' : '收藏地点'} onPress={() => void toggleFavorite()} style={[styles.favorite, { backgroundColor: readingTheme.surface }]}><Text style={styles.favoriteText}>{detail.favorite ? '★ 已收藏' : '☆ 收藏'}</Text></Pressable></View>
         <Text selectable style={[styles.address, { color: readingTheme.secondary }]}>{detail.address || `${detail.latitude.toFixed(5)}, ${detail.longitude.toFixed(5)}`}</Text>
@@ -128,24 +135,17 @@ export default function LocationDetailScreen() {
         <View style={styles.stat}><Text style={styles.statValue}>{formatDay(stats.latest)}</Text><Text style={[styles.statLabel, { color: readingTheme.secondary }]}>最近到访</Text></View>
       </View>
 
-      {media.length ? <View style={styles.section}>
-        <View style={styles.sectionHeading}><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>这里的照片</Text><Text style={[styles.sectionCount, { color: readingTheme.secondary }]}>{media.length} 张</Text></View>
+      {mediaCount ? <View style={styles.section}>
+        <View style={styles.sectionHeading}><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>这里的照片</Text><Text style={[styles.sectionCount, { color: readingTheme.secondary }]}>{mediaCount > galleryMedia.length ? `${mediaCount} 张 · 展示最近 ${galleryMedia.length} 张` : `${mediaCount} 张`}</Text></View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.gallery}>
-          {media.map(({ entryId, item }) => <Pressable key={item.id} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entryId } })}><MediaThumbnail media={item} style={styles.photo} /></Pressable>)}
+          {galleryMedia.map(({ entryId, item }) => <Pressable key={item.id} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entryId } })}><MediaThumbnail media={item} style={styles.photo} /></Pressable>)}
         </ScrollView>
       </View> : null}
 
       <View style={styles.section}>
         <View style={styles.sectionHeading}><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>在这里留下的时光</Text><Text style={[styles.sectionCount, { color: readingTheme.secondary }]}>{detail.entries.length} 条</Text></View>
-        <View style={[styles.entries, { borderColor: readingTheme.border }]}>
-          {detail.entries.map((entry, index) => <Pressable key={entry.id} onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} style={[styles.entry, index > 0 && { borderTopColor: readingTheme.border, borderTopWidth: StyleSheet.hairlineWidth }]}>
-            <View style={styles.timeline}><Text style={styles.dot}>•</Text><Text style={styles.date}>{formatDay(entry.occurredAt)}</Text></View>
-            <Text numberOfLines={3} style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, lineHeight: 21 * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>{entry.content || '一条没有文字的记录'}</Text>
-            <Text style={styles.arrow}>›</Text>
-          </Pressable>)}
-        </View>
       </View>
-    </ScrollView>
+    </>} renderItem={({ item: entry }) => <View style={[styles.entries, { borderColor: readingTheme.border }]}><Pressable onPress={() => router.push({ pathname: '/entry/[id]', params: { id: entry.id } })} style={styles.entry}><View style={styles.timeline}><Text style={styles.dot}>•</Text><Text style={styles.date}>{formatDay(entry.occurredAt)}</Text></View><Text numberOfLines={3} style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, lineHeight: 21 * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>{entry.content || '一条没有文字的记录'}</Text><Text style={styles.arrow}>›</Text></Pressable></View>} />
 
     <Modal visible={editing} transparent animationType="fade" onRequestClose={() => setEditing(false)}>
       <Pressable onPress={() => setEditing(false)} style={styles.overlay}>
@@ -175,7 +175,7 @@ const styles = StyleSheet.create({
   section: { marginTop: spacing.xxl }, sectionHeading: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', paddingHorizontal: spacing.xl, marginBottom: spacing.md },
   sectionTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, sectionCount: { fontSize: 10 },
   gallery: { paddingHorizontal: spacing.xl, gap: spacing.sm }, photo: { width: 112, height: 112, borderRadius: radii.md },
-  entries: { marginHorizontal: spacing.xl, paddingHorizontal: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg },
+  entries: { marginHorizontal: spacing.xl, marginBottom: spacing.sm, paddingHorizontal: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg },
   entry: { minHeight: 86, justifyContent: 'center', paddingVertical: spacing.md, paddingRight: spacing.xl },
   timeline: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs }, dot: { color: colors.primary, fontSize: 15 }, date: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   content: { marginTop: spacing.xs, fontSize: 14, lineHeight: 22 }, arrow: { position: 'absolute', right: 0, color: colors.primary, fontSize: 19 },

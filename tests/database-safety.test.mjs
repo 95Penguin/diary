@@ -16,11 +16,13 @@ import {
   isNewFootprintLocation,
   listEntryPage,
   listEntryFilterOptions,
+  listFavoriteEntryPage,
   listFootprintEntries,
   listMetadataUsage,
   listLocationMapPreferences,
   listJournalMedia,
   listMemoryEntryIndex,
+  listMemoryTagIndex,
   removeLocationEverywhere,
   renameTagEverywhere,
   saveLocationDetail,
@@ -33,6 +35,7 @@ import {
   restoreEntry,
   searchEntrySummaries,
   searchEntries,
+  setEntryFavorite,
 } from '../src/database/journal-repository.ts';
 import { DATABASE_VERSION, migrateDatabase } from '../src/database/migrate.ts';
 import { getJournalTemplateSettings, saveJournalTemplate } from '../src/database/template-repository.ts';
@@ -142,7 +145,7 @@ test('fresh baseline reaches the current schema and is idempotent', async (t) =>
   assert.ok(indexes.some((index) => index.name === 'idx_time_capsule_images_capsule_id'));
 });
 
-test('memory index stays lightweight while preserving dates, tags and image counts', async (t) => {
+test('memory entry and tag indexes stay lightweight and can load independently', async (t) => {
   const db = await setup();
   t.after(() => db.close());
   const entryId = await createEntry(db, { content: '回忆正文', occurredAt: '2026-08-02T12:00:00.000Z' });
@@ -152,7 +155,27 @@ test('memory index stays lightweight while preserving dates, tags and image coun
     'memory-image', entryId, 'file:///memory.jpg', 800, 600, 0, '2026-08-02T12:00:00.000Z', 'image',
   );
   const index = await listMemoryEntryIndex(db);
-  assert.deepEqual(index, [{ id: entryId, occurredAt: '2026-08-02T12:00:00.000Z', imageCount: 1, tags: ['夏天'] }]);
+  assert.deepEqual(index, [{ id: entryId, occurredAt: '2026-08-02T12:00:00.000Z', imageCount: 1 }]);
+  const tags = await listMemoryTagIndex(db);
+  assert.deepEqual(tags, [{ entryId, label: '夏天' }]);
+});
+
+test('favorite entry pages keep a stable cursor when favorite timestamps match', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const ids = [];
+  for (let index = 0; index < 3; index += 1) {
+    const id = await createEntry(db, { content: `收藏 ${index}`, occurredAt: `2026-08-0${index + 1}T12:00:00.000Z` });
+    await setEntryFavorite(db, id, true);
+    ids.push(id);
+  }
+  const sharedTime = '2026-08-04T12:00:00.000Z';
+  await db.runAsync('UPDATE entries SET favorited_at = ? WHERE id IN (?, ?, ?)', sharedTime, ...ids);
+  const first = await listFavoriteEntryPage(db, { limit: 2 });
+  const second = await listFavoriteEntryPage(db, { limit: 2, cursor: first.nextCursor });
+  assert.equal(first.entries.length, 2);
+  assert.equal(second.entries.length, 1);
+  assert.deepEqual(new Set([...first.entries, ...second.entries].map((entry) => entry.id)), new Set(ids));
 });
 
 test('editing follow-up media returns only files removed after the database update', async (t) => {

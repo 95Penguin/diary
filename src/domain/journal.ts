@@ -15,7 +15,7 @@ export type Entry = {
   mood: string | null; weather: string | null; favoritedAt: string | null; locationName: string | null; latitude: number | null; longitude: number | null;
   followUps: FollowUp[]; images: EntryImage[]; tags: string[];
 };
-export type MemoryEntryIndex = { id: string; occurredAt: string; imageCount: number; tags: string[] };
+export type MemoryEntryIndex = { id: string; occurredAt: string; imageCount: number };
 export type DeletedEntry = Entry & { deletedAt: string };
 export type EntryVersion = {
   id: string; entryId: string; content: string; occurredAt: string; mood: string | null; weather: string | null;

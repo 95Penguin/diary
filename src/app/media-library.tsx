@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, FlatList, InteractionManager, Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -35,14 +35,16 @@ export default function MediaLibraryScreen() {
     let active = true;
     setLoading(true);
     setLoadError(false);
-    void listJournalMedia(db).then((items) => {
-      if (!active) return;
-      setMedia(items);
-      setLoading(false);
-    }).catch(() => {
-      if (active) { setLoadError(true); setLoading(false); }
+    const task = InteractionManager.runAfterInteractions(() => {
+      void listJournalMedia(db).then((items) => {
+        if (!active) return;
+        setMedia(items);
+        setLoading(false);
+      }).catch(() => {
+        if (active) { setLoadError(true); setLoading(false); }
+      });
     });
-    return () => { active = false; };
+    return () => { active = false; task.cancel(); };
   }, [db]));
 
   const filtered = useMemo(() => filterLibraryMedia(media, filter), [filter, media]);

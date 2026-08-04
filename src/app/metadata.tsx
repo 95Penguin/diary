@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -35,21 +35,29 @@ export default function MetadataScreen() {
   const [editValue, setEditValue] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [duplicates, setDuplicates] = useState<LocationDuplicateSuggestion[]>([]);
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const [duplicatesChecked, setDuplicatesChecked] = useState(false);
   const [merging, setMerging] = useState<{ suggestion: LocationDuplicateSuggestion; keep: string } | null>(null);
 
   const load = useCallback(async () => {
-    const [nextUsage, nextDuplicates] = await Promise.all([
-      listMetadataUsage(db),
-      listLocationDuplicateSuggestions(db),
-    ]);
-    setUsage(nextUsage);
-    setDuplicates(nextDuplicates);
+    setUsage(await listMetadataUsage(db));
   }, [db]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
   function beginRename(kind: MetadataKind, item: MetadataUsageItem) {
     setEditValue(item.value);
     setEditing({ kind, item });
+  }
+
+  async function checkDuplicates() {
+    if (checkingDuplicates) return;
+    setCheckingDuplicates(true);
+    try {
+      setDuplicates(await listLocationDuplicateSuggestions(db));
+      setDuplicatesChecked(true);
+    } catch {
+      setNotice('重复地点暂时无法检查，请稍后重试。');
+    } finally { setCheckingDuplicates(false); }
   }
 
   function beginAdd(kind: MetadataKind) {
@@ -110,6 +118,7 @@ export default function MetadataScreen() {
         onTogglePinned={(item) => void togglePinned('tag', item)}
         onDelete={(item) => setDeleting({ kind: 'tag', item })}
       />
+      <View style={styles.duplicateCheckRow}><View><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>重复地点检查</Text><Text style={[styles.sectionCount, { color: readingTheme.secondary }]}>{duplicatesChecked ? duplicates.length ? `发现 ${duplicates.length} 组` : '没有发现疑似重复地点' : '需要时再进行本地检测'}</Text></View><Pressable disabled={checkingDuplicates} onPress={() => void checkDuplicates()} style={[styles.addButton, { backgroundColor: readingTheme.surface }]}>{checkingDuplicates ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.addText}>{duplicatesChecked ? '重新检查' : '开始检查'}</Text>}</Pressable></View>
       {duplicates.length ? <View style={styles.duplicateSection}>
         <View style={styles.duplicateHeading}><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>疑似重复地点</Text><Text style={[styles.sectionCount, { color: readingTheme.secondary }]}>本地检测 · {duplicates.length} 组</Text></View>
         <Text style={[styles.duplicateHint, { color: readingTheme.secondary }]}>只有确认后才会合并。坐标和记录正文不会删除。</Text>
@@ -157,7 +166,7 @@ export default function MetadataScreen() {
         { label: '移除', tone: 'danger', onPress: confirmDelete },
       ]}
     />
-    <AppDialog visible={Boolean(notice)} title="无法置顶" message={notice ?? ''} onClose={() => setNotice(null)} actions={[{ label: '知道了', tone: 'primary', onPress: () => setNotice(null) }]} />
+    <AppDialog visible={Boolean(notice)} title="操作未完成" message={notice ?? ''} onClose={() => setNotice(null)} actions={[{ label: '知道了', tone: 'primary', onPress: () => setNotice(null) }]} />
     <AppDialog visible={Boolean(merging)} title="合并这两个地点？" message={merging ? `将把“${merging.suggestion.first.name === merging.keep ? merging.suggestion.second.name : merging.suggestion.first.name}”合并到“${merging.keep}”。相关记录以后会统一显示为“${merging.keep}”。` : ''} onClose={() => setMerging(null)} actions={[{ label: '取消', onPress: () => setMerging(null) }, { label: '确认合并', tone: 'primary', onPress: confirmMerge }]} />
   </SafeAreaView>;
 }
@@ -200,6 +209,7 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.md, marginBottom: spacing.sm },
   sectionTitle: { fontFamily: fonts.serif, fontSize: 15, fontWeight: '600' }, sectionCount: { marginTop: 2, fontSize: 11 },
+  duplicateCheckRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg, marginBottom: spacing.sm },
   duplicateSection: { marginTop: spacing.md }, duplicateHeading: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }, duplicateHint: { marginTop: 3, marginBottom: spacing.sm, fontSize: 11, lineHeight: 17 },
   duplicateCard: { marginBottom: spacing.sm, padding: spacing.md, borderRadius: radii.md }, duplicateNames: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   duplicateName: { flex: 1, fontSize: 12, fontWeight: '700' }, duplicateSwap: { color: colors.primary, fontSize: 13 }, duplicateReason: { marginTop: spacing.xs, fontSize: 11 },

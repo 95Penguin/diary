@@ -121,35 +121,29 @@ export async function listEntries(db: SQLiteDatabase, query = ''): Promise<Entry
 }
 
 export async function listMemoryEntryIndex(db: SQLiteDatabase): Promise<MemoryEntryIndex[]> {
-  const [rows, tagRows] = await Promise.all([
-    db.getAllAsync<{ id: string; occurred_at: string; image_count: number }>(`
-      SELECT e.id, e.occurred_at, COUNT(i.id) AS image_count
-      FROM entries e
-      LEFT JOIN entry_images i ON i.entry_id = e.id
-      WHERE e.deleted_at IS NULL
-      GROUP BY e.id
-      ORDER BY e.occurred_at DESC
-    `),
-    db.getAllAsync<TagRow>(`
-      SELECT t.entry_id, t.label
-      FROM entry_tags t
-      INNER JOIN entries e ON e.id = t.entry_id
-      WHERE e.deleted_at IS NULL
-      ORDER BY t.entry_id, t.sort_order ASC
-    `),
-  ]);
-  const tagsByEntry = new Map<string, string[]>();
-  for (const row of tagRows) {
-    const tags = tagsByEntry.get(row.entry_id) ?? [];
-    tags.push(row.label);
-    tagsByEntry.set(row.entry_id, tags);
-  }
+  const rows = await db.getAllAsync<{ id: string; occurred_at: string; image_count: number }>(`
+    SELECT e.id, e.occurred_at, COUNT(i.id) AS image_count
+    FROM entries e
+    LEFT JOIN entry_images i ON i.entry_id = e.id
+    WHERE e.deleted_at IS NULL
+    GROUP BY e.id
+    ORDER BY e.occurred_at DESC
+  `);
   return rows.map((row) => ({
     id: row.id,
     occurredAt: row.occurred_at,
     imageCount: row.image_count,
-    tags: tagsByEntry.get(row.id) ?? [],
   }));
+}
+
+export async function listMemoryTagIndex(db: SQLiteDatabase): Promise<{ entryId: string; label: string }[]> {
+  const rows = await db.getAllAsync<TagRow>(`
+    SELECT t.entry_id, t.label FROM entry_tags t
+    INNER JOIN entries e ON e.id = t.entry_id
+    WHERE e.deleted_at IS NULL
+    ORDER BY t.label COLLATE NOCASE ASC, t.entry_id ASC
+  `);
+  return rows.map((row) => ({ entryId: row.entry_id, label: row.label }));
 }
 
 export async function listEntryManagementSummaries(db: SQLiteDatabase): Promise<EntryManagementSummary[]> {
@@ -183,14 +177,14 @@ export async function listJournalMedia(db: SQLiteDatabase): Promise<LibraryMedia
     SELECT * FROM (
     SELECT i.id, i.entry_id, 'entry' AS source, i.entry_id AS source_id,
       i.uri, i.width, i.height, i.sort_order, i.media_type, i.paired_video_uri, i.duration, i.thumbnail_uri,
-      e.occurred_at, i.created_at AS attached_at, e.content AS entry_content, e.content AS source_content
+      e.occurred_at, i.created_at AS attached_at, SUBSTR(e.content, 1, 500) AS entry_content, SUBSTR(e.content, 1, 500) AS source_content
     FROM entry_images i
     INNER JOIN entries e ON e.id = i.entry_id
     WHERE e.deleted_at IS NULL
     UNION ALL
     SELECT i.id, f.entry_id, 'followUp' AS source, i.follow_up_id AS source_id,
       i.uri, i.width, i.height, i.sort_order, i.media_type, i.paired_video_uri, i.duration, i.thumbnail_uri,
-      e.occurred_at, i.created_at AS attached_at, e.content AS entry_content, f.content AS source_content
+      e.occurred_at, i.created_at AS attached_at, SUBSTR(e.content, 1, 500) AS entry_content, SUBSTR(f.content, 1, 500) AS source_content
     FROM follow_up_images i
     INNER JOIN follow_ups f ON f.id = i.follow_up_id
     INNER JOIN entries e ON e.id = f.entry_id
@@ -976,6 +970,31 @@ export async function listFavoriteEntries(db: SQLiteDatabase): Promise<Entry[]> 
      WHERE deleted_at IS NULL AND favorited_at IS NOT NULL ORDER BY favorited_at DESC`,
   );
   return attachFollowUps(db, rows);
+}
+
+export async function listFavoriteEntryPage(
+  db: SQLiteDatabase,
+  options: { limit?: number; cursor?: { favoritedAt: string; id: string } | null } = {},
+): Promise<{ entries: Entry[]; nextCursor: { favoritedAt: string; id: string } | null }> {
+  const limit = Math.max(1, Math.min(options.limit ?? 30, 100));
+  const params: (string | number)[] = [];
+  const before = options.cursor ? 'AND (favorited_at < ? OR (favorited_at = ? AND id < ?))' : '';
+  if (options.cursor) params.push(options.cursor.favoritedAt, options.cursor.favoritedAt, options.cursor.id);
+  params.push(limit + 1);
+  const rows = await db.getAllAsync<EntryRow>(
+    `SELECT id, content, occurred_at, created_at, updated_at, mood, weather, favorited_at, location_name, latitude, longitude FROM entries
+     WHERE deleted_at IS NULL AND favorited_at IS NOT NULL ${before}
+     ORDER BY favorited_at DESC, id DESC LIMIT ?`,
+    params,
+  );
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  return {
+    entries: await attachFollowUps(db, pageRows),
+    nextCursor: hasMore && pageRows.at(-1)?.favorited_at
+      ? { favoritedAt: pageRows.at(-1)!.favorited_at!, id: pageRows.at(-1)!.id }
+      : null,
+  };
 }
 
 export async function setEntryFavorite(db: SQLiteDatabase, id: string, favorite: boolean) {

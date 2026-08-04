@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, InteractionManager, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -33,8 +33,10 @@ export default function BatchManageScreen() {
   async function reload() { setEntries(await listEntryManagementSummaries(db)); setSelected(new Set()); }
   useEffect(() => {
     let active = true;
-    void listEntryManagementSummaries(db).then((items) => { if (active) setEntries(items); }).catch((error) => { void recordAppError('batch-manage.load', error); if (active) { setEntries([]); setNotice({ title: '读取失败', message: '记录仍保存在本机，请返回后重新尝试。' }); } });
-    return () => { active = false; };
+    const task = InteractionManager.runAfterInteractions(() => {
+      void listEntryManagementSummaries(db).then((items) => { if (active) setEntries(items); }).catch((error) => { void recordAppError('batch-manage.load', error); if (active) { setEntries([]); setNotice({ title: '读取失败', message: '记录仍保存在本机，请返回后重新尝试。' }); } });
+    });
+    return () => { active = false; task.cancel(); };
   }, [db]);
   function toggle(id: string) { if (working) return; setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
   const ids = [...selected];

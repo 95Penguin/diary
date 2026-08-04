@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, InteractionManager, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Location from 'expo-location';
 import { Circle, MapType, MapView, Marker, type MapViewRef } from 'expo-gaode-map';
 import { router, useFocusEffect, type Href } from 'expo-router';
@@ -61,16 +61,23 @@ export default function FootprintMapScreen() {
   const load = useCallback(async () => {
     setLoading(true); setLoadError(false);
     try {
-      const [result, preferences, viewPreferences, duplicates] = await Promise.all([
-        listFootprintEntries(db), listLocationMapPreferences(db), getFootprintViewPreferences(db), listLocationDuplicateSuggestions(db),
+      const [result, preferences, viewPreferences] = await Promise.all([
+        listFootprintEntries(db), listLocationMapPreferences(db), getFootprintViewPreferences(db),
       ]);
-      setEntries(result.entries); setMissingCoordinates(result.missingCoordinates); setPendingEntries(result.pendingEntries); setPendingGroups(result.pendingGroups); setLocationPreferences(preferences); setDuplicateCount(duplicates.length);
+      setEntries(result.entries); setMissingCoordinates(result.missingCoordinates); setPendingEntries(result.pendingEntries); setPendingGroups(result.pendingGroups); setLocationPreferences(preferences);
       setPlaceSort(viewPreferences.sort);
       setViewPreferencesLoaded(true);
     } catch { setLoadError(true); }
     finally { setLoading(false); }
   }, [db]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void listLocationDuplicateSuggestions(db).then((items) => { if (active) setDuplicateCount(items.length); }).catch(() => undefined);
+    });
+    return () => { active = false; task.cancel(); };
+  }, [db]));
 
   useEffect(() => {
     if (!viewPreferencesLoaded) return;
