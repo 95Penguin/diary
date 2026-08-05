@@ -122,11 +122,10 @@ export async function listEntries(db: SQLiteDatabase, query = ''): Promise<Entry
 
 export async function listMemoryEntryIndex(db: SQLiteDatabase): Promise<MemoryEntryIndex[]> {
   const rows = await db.getAllAsync<{ id: string; occurred_at: string; image_count: number }>(`
-    SELECT e.id, e.occurred_at, COUNT(i.id) AS image_count
+    SELECT e.id, e.occurred_at,
+      (SELECT COUNT(*) FROM entry_images i WHERE i.entry_id = e.id) AS image_count
     FROM entries e
-    LEFT JOIN entry_images i ON i.entry_id = e.id
     WHERE e.deleted_at IS NULL
-    GROUP BY e.id
     ORDER BY e.occurred_at DESC
   `);
   return rows.map((row) => ({
@@ -134,6 +133,22 @@ export async function listMemoryEntryIndex(db: SQLiteDatabase): Promise<MemoryEn
     occurredAt: row.occurred_at,
     imageCount: row.image_count,
   }));
+}
+
+export async function getRandomMemoryEntry(db: SQLiteDatabase, before: string): Promise<Entry | null> {
+  const row = await db.getFirstAsync<EntryRow>(`
+    SELECT e.id, e.content, e.occurred_at, e.created_at, e.updated_at, e.mood, e.weather,
+      e.favorited_at, e.location_name, e.latitude, e.longitude
+    FROM entries e
+    WHERE e.deleted_at IS NULL AND e.occurred_at <= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM memory_suppressed_entries s WHERE s.entry_id = e.id
+      )
+    ORDER BY RANDOM()
+    LIMIT 1
+  `, before);
+  if (!row) return null;
+  return (await attachFollowUps(db, [row]))[0];
 }
 
 export async function listMemoryTagIndex(db: SQLiteDatabase): Promise<{ entryId: string; label: string }[]> {

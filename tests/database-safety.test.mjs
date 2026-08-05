@@ -10,6 +10,7 @@ import {
   createJournalExport,
   deleteEntry,
   getEntry,
+  getRandomMemoryEntry,
   getFootprintViewPreferences,
   getLocationPageDetail,
   importJournalBackup,
@@ -158,6 +159,10 @@ test('memory entry and tag indexes stay lightweight and can load independently',
   assert.deepEqual(index, [{ id: entryId, occurredAt: '2026-08-02T12:00:00.000Z', imageCount: 1 }]);
   const tags = await listMemoryTagIndex(db);
   assert.deepEqual(tags, [{ entryId, label: '夏天' }]);
+  const random = await getRandomMemoryEntry(db, '2026-08-03T00:00:00.000Z');
+  assert.equal(random?.id, entryId);
+  await db.runAsync('INSERT INTO memory_suppressed_entries (entry_id, suppressed_at) VALUES (?, ?)', entryId, '2026-08-03T00:00:00.000Z');
+  assert.equal(await getRandomMemoryEntry(db, '2026-08-03T00:00:00.000Z'), null);
 });
 
 test('favorite entry pages keep a stable cursor when favorite timestamps match', async (t) => {

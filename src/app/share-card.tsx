@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, NativeScrollEvent, NativeSyntheticEvent, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Image } from 'expo-image';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -22,8 +22,10 @@ type ContentMode = 'summary' | 'full';
 export default function ShareCardScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const db = useSQLiteContext();
+  const { width } = useWindowDimensions();
   const { readingTheme } = useAppPreferences();
   const cardRefs = useRef<(View | null)[]>([]);
+  const previewRef = useRef<ScrollView>(null);
   const loadedRef = useRef(false);
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,6 +34,7 @@ export default function ShareCardScreen() {
   const [shareProgress, setShareProgress] = useState('');
   const [options, setOptions] = useState<Record<Option, boolean>>({ image: true, mood: true, weather: true, location: false, tags: false, followUps: false });
   const [contentMode, setContentMode] = useState<ContentMode>('summary');
+  const [previewPage, setPreviewPage] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
 
   useFocusEffect(useCallback(() => {
@@ -45,6 +48,12 @@ export default function ShareCardScreen() {
 
   function toggle(key: Option) {
     setOptions((current) => ({ ...current, [key]: !current[key] }));
+  }
+
+  function selectContentMode(mode: ContentMode) {
+    setContentMode(mode);
+    setPreviewPage(0);
+    requestAnimationFrame(() => previewRef.current?.scrollTo({ x: 0, animated: false }));
   }
 
   async function share() {
@@ -83,12 +92,17 @@ export default function ShareCardScreen() {
   const imageUri = options.image ? shareCardImageUri(entry) : null;
   const pages = contentMode === 'full' ? shareCardPages(entry.content) : [shareCardText(entry.content)];
   const tooManyPages = pages.length > SHARE_CARD_MAX_PAGES;
+  const cardWidth = Math.min(340, Math.max(260, width - spacing.xl * 2));
+  const pageInterval = cardWidth + spacing.md;
+  function updatePreviewPage(event: NativeSyntheticEvent<NativeScrollEvent>) {
+    setPreviewPage(Math.min(pages.length - 1, Math.max(0, Math.round(event.nativeEvent.contentOffset.x / pageInterval))));
+  }
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>分享卡片</Text><View style={styles.headerSpace} /></View>
     <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
       <Text style={[styles.hint, { color: readingTheme.secondary }]}>预览中只会出现你主动选择的信息</Text>
-      <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cardPages}>
-        {pages.map((page, index) => <View collapsable={false} key={`${index}-${page.slice(0, 12)}`} ref={(ref) => { cardRefs.current[index] = ref; }} style={styles.card}>
+      <ScrollView ref={previewRef} horizontal decelerationRate="fast" disableIntervalMomentum snapToInterval={pageInterval} onMomentumScrollEnd={updatePreviewPage} showsHorizontalScrollIndicator={false} style={{ width: cardWidth }} contentContainerStyle={styles.cardPages}>
+        {pages.map((page, index) => <View collapsable={false} key={`${index}-${page.slice(0, 12)}`} ref={(ref) => { cardRefs.current[index] = ref; }} style={[styles.card, { width: cardWidth }]}>
           <View style={styles.cardTop}><Text style={styles.brand}>拾时</Text><Text style={styles.date}>{formatFullDate(entry.occurredAt)}</Text></View>
           {imageUri && index === 0 ? <Image source={imageUri} contentFit="cover" style={styles.hero} /> : null}
           <Text style={styles.content}>{page}</Text>
@@ -96,10 +110,11 @@ export default function ShareCardScreen() {
           <View style={styles.signature}><View style={styles.signatureLine} /><Text style={styles.signatureText}>{pages.length > 1 ? `${index + 1} / ${pages.length}　` : ''}把日子慢慢收好</Text></View>
         </View>)}
       </ScrollView>
+      {pages.length > 1 ? <Text accessibilityLiveRegion="polite" style={[styles.pageIndicator, { color: readingTheme.secondary }]}>{previewPage + 1} / {pages.length}　左右滑动预览</Text> : null}
       <Text style={[styles.optionsTitle, { color: readingTheme.secondary }]}>卡片内容</Text>
       <View style={styles.options}>
-        <Choice label="开头 420 字" enabled={contentMode === 'summary'} unavailable={false} onPress={() => setContentMode('summary')} />
-        <Choice label={entry.content.length > SHARE_CARD_CONTENT_LIMIT ? `全文${shareCardPages(entry.content).length > 1 ? '多图' : ''}` : '全文'} enabled={contentMode === 'full'} unavailable={false} onPress={() => setContentMode('full')} />
+        <Choice label="开头 420 字" enabled={contentMode === 'summary'} unavailable={false} onPress={() => selectContentMode('summary')} />
+        <Choice label={entry.content.length > SHARE_CARD_CONTENT_LIMIT ? `全文${shareCardPages(entry.content).length > 1 ? '多图' : ''}` : '全文'} enabled={contentMode === 'full'} unavailable={false} onPress={() => selectContentMode('full')} />
         <Choice label="首张图片" enabled={options.image} unavailable={!shareCardImageUri(entry)} onPress={() => toggle('image')} />
         <Choice label="心情" enabled={options.mood} unavailable={!entry.mood} onPress={() => toggle('mood')} />
         <Choice label="天气" enabled={options.weather} unavailable={!entry.weather} onPress={() => toggle('weather')} />
@@ -121,7 +136,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center' }, loadErrorText: { marginTop: spacing.sm, fontSize: 11 }, loadErrorActions: { flexDirection: 'row', gap: spacing.xl, marginTop: spacing.md }, backLink: { color: colors.primary },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, title: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 },
   scroll: { alignItems: 'center', padding: spacing.xl, paddingBottom: spacing.xxxl }, hint: { alignSelf: 'stretch', marginBottom: spacing.md, fontSize: 11, textAlign: 'center' },
-  cardPages: { gap: spacing.md }, card: { width: 340, overflow: 'hidden', padding: spacing.xxl, borderRadius: radii.lg, backgroundColor: '#FFFDF8', shadowColor: '#22332B', shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 4 },
+  cardPages: { gap: spacing.md }, card: { overflow: 'hidden', padding: spacing.xxl, borderRadius: radii.lg, backgroundColor: '#FFFDF8', shadowColor: '#22332B', shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 4 }, pageIndicator: { marginTop: spacing.sm, fontSize: 10, textAlign: 'center' },
   cardTop: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }, brand: { color: colors.primary, fontFamily: fonts.serif, fontSize: 18, fontWeight: '700', letterSpacing: 2 }, date: { color: colors.textSecondary, fontSize: 10 },
   hero: { width: '100%', height: 190, marginTop: spacing.lg, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, content: { marginTop: spacing.xl, color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 27, letterSpacing: 0.35 }, metadata: { marginTop: spacing.md, color: colors.textSecondary, fontSize: 10, lineHeight: 17 },
   followUps: { marginTop: spacing.lg, paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, followTitle: { color: colors.primary, fontFamily: fonts.serif, fontSize: 13, fontWeight: '700' }, followItem: { marginTop: spacing.sm }, followTime: { color: colors.textFaint, fontSize: 9 }, followText: { marginTop: 2, color: colors.textSecondary, fontSize: 11, lineHeight: 18 }, more: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 9 },

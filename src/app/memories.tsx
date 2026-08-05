@@ -5,7 +5,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { SymbolView } from 'expo-symbols';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { getEntry, listMemoryEntryIndex, listMemoryTagIndex, listSuppressedMemoryEntryIds, suppressMemoryEntry } from '@/database/journal-repository';
+import { getEntry, getRandomMemoryEntry, listMemoryEntryIndex, listMemoryTagIndex, listSuppressedMemoryEntryIds, suppressMemoryEntry } from '@/database/journal-repository';
 import type { Entry, MemoryEntryIndex } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { useAppPreferences } from '@/preferences/app-preferences';
@@ -41,6 +41,7 @@ export default function MemoriesScreen() {
   const [tagIndex, setTagIndex] = useState<{ entryId: string; label: string }[] | null>(null);
   const [tagsLoading, setTagsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [indexReady, setIndexReady] = useState(false);
   const [insightsReady, setInsightsReady] = useState(false);
   const [mode, setMode] = useState<MemoryMode>('random');
   const [modePickerVisible, setModePickerVisible] = useState(false);
@@ -59,29 +60,45 @@ export default function MemoriesScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
+    let indexTimer: ReturnType<typeof setTimeout> | null = null;
     const firstLoad = !loadedRef.current;
     if (firstLoad) { setLoading(true); setInsightsReady(false); }
     const task = InteractionManager.runAfterInteractions(() => {
-      void Promise.all([listMemoryEntryIndex(db), listSuppressedMemoryEntryIds(db)]).then(([items, hiddenIds]) => {
-        if (!active) return;
-        loadedRef.current = true;
-        setEntries(items); setSuppressed(new Set(hiddenIds)); setLoading(false);
-      }).catch(async () => {
-        if (!active) return;
-        if (firstLoad) setLoading(false);
-        await showAppDialog({ title: '暂时无法拾起记录', message: '请稍后再试。' });
-      });
+      void (async () => {
+        try {
+          if (firstLoad) {
+            const initialEntry = await getRandomMemoryEntry(db, new Date().toISOString());
+            if (!active) return;
+            if (initialEntry) {
+              pickedIdRef.current = initialEntry.id;
+              setPickedId(initialEntry.id);
+              setPickedResult({ id: initialEntry.id, entry: initialEntry, failed: false });
+              setLoading(false);
+              await new Promise<void>((resolve) => { indexTimer = setTimeout(resolve, 240); });
+              if (!active) return;
+            }
+          }
+          const [items, hiddenIds] = await Promise.all([listMemoryEntryIndex(db), listSuppressedMemoryEntryIds(db)]);
+          if (!active) return;
+          loadedRef.current = true;
+          setEntries(items); setSuppressed(new Set(hiddenIds)); setIndexReady(true); setLoading(false);
+        } catch {
+          if (!active) return;
+          if (firstLoad) setLoading(false);
+          await showAppDialog({ title: '暂时无法拾起记录', message: '请稍后再试。' });
+        }
+      })();
     });
-    return () => { active = false; task.cancel(); };
+    return () => { active = false; task.cancel(); if (indexTimer) clearTimeout(indexTimer); };
   }, [db]));
   useEffect(() => {
-    if (loading) return;
+    if (loading || !indexReady) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const frame = requestAnimationFrame(() => {
       timer = setTimeout(() => setInsightsReady(true), 80);
     });
     return () => { cancelAnimationFrame(frame); if (timer) clearTimeout(timer); };
-  }, [loading]);
+  }, [indexReady, loading]);
   useFocusEffect(useCallback(() => {
     const current = new Date();
     const previousYear = currentYearRef.current;
@@ -125,17 +142,19 @@ export default function MemoriesScreen() {
   }, [entries, mode, now, selectedTagEntryIds, suppressed, tag]);
   const candidateIds = useMemo(() => candidates.map((entry) => entry.id), [candidates]);
   useEffect(() => {
+    if (!indexReady) return;
+    if (pickedIdRef.current && candidateIds.includes(pickedIdRef.current)) return;
     const nextId = pickRandomMemoryId(candidateIds, pickedIdRef.current);
     pickedIdRef.current = nextId;
     setPickedId(nextId);
-  }, [candidateIds]);
+  }, [candidateIds, indexReady]);
 
   useEffect(() => {
     let active = true;
-    if (!pickedId) return;
+    if (!pickedId || pickedResult?.id === pickedId) return;
     void getEntry(db, pickedId).then((entry) => { if (active) setPickedResult({ id: pickedId, entry, failed: !entry }); }).catch(() => { if (active) setPickedResult({ id: pickedId, entry: null, failed: true }); });
     return () => { active = false; };
-  }, [db, pickedId, pickedRetry]);
+  }, [db, pickedId, pickedResult?.id, pickedRetry]);
   const picked = pickedResult?.id === pickedId ? pickedResult.entry : null;
   const pickedLoading = Boolean(pickedId && pickedResult?.id !== pickedId);
   const pickedFailed = Boolean(pickedId && pickedResult?.id === pickedId && pickedResult.failed);
@@ -192,7 +211,7 @@ export default function MemoriesScreen() {
   return <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" onPress={() => router.back()} hitSlop={12}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>拾起一刻</Text><View style={styles.headerSpace} /></View>
     <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-      <View style={styles.modeRow}><Pressable ref={modeButtonRef} accessibilityLabel="选择拾取方式" onPress={openModePicker} style={[styles.modeButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.modeButtonText}>{modeLabel}</Text><View style={[styles.modeChevron, modePickerVisible && styles.modeChevronOpen]} /></Pressable><Text style={[styles.candidateCount, { color: readingTheme.secondary }]}>{candidates.length ? `${candidates.length} 条可拾起` : '暂无记录'}</Text><Pressable accessibilityLabel="再拾一条" onPress={pickNext} style={styles.shuffleButton}><SymbolView name={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }} size={17} tintColor="#FFFFFF" /></Pressable></View>
+      <View style={styles.modeRow}><Pressable ref={modeButtonRef} accessibilityLabel="选择拾取方式" disabled={!indexReady} onPress={openModePicker} style={[styles.modeButton, { backgroundColor: readingTheme.surface }, !indexReady && styles.modeButtonDisabled]}><Text style={styles.modeButtonText}>{modeLabel}</Text><View style={[styles.modeChevron, modePickerVisible && styles.modeChevronOpen]} /></Pressable><Text style={[styles.candidateCount, { color: readingTheme.secondary }]}>{indexReady ? candidates.length ? `${candidates.length} 条可拾起` : '暂无记录' : '正在整理回忆…'}</Text><Pressable accessibilityLabel="再拾一条" disabled={!indexReady} onPress={pickNext} style={[styles.shuffleButton, !indexReady && styles.modeButtonDisabled]}><SymbolView name={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }} size={17} tintColor="#FFFFFF" /></Pressable></View>
       {mode === 'tag' ? tagsLoading ? <ActivityIndicator color={colors.primary} style={styles.tagLoader} /> : <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagRow}>{tags.map((item) => <Pressable key={item} onPress={() => setTag(item)} style={[styles.tagChip, { backgroundColor: tag === item ? colors.primary : readingTheme.surface }]}><Text style={[styles.tagText, { color: tag === item ? '#FFFFFF' : readingTheme.secondary }, tag === item && styles.tagTextActive]}>#{item}</Text></Pressable>)}</ScrollView> : null}
 
       {pickedLoading ? <View style={[styles.memoryCard, styles.memoryCardLoading, { backgroundColor: readingTheme.surface }]}><ActivityIndicator color={colors.primary} /></View> : pickedFailed ? <View style={[styles.empty, { backgroundColor: readingTheme.surface }]}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>这条回忆暂时没有打开</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>记录仍保存在本机，可以重试或换一条看看。</Text><View style={styles.memoryErrorActions}><Pressable onPress={() => { setPickedResult(null); setPickedRetry((value) => value + 1); }} style={[styles.memoryErrorButton, { backgroundColor: readingTheme.background }]}><Text style={styles.memoryErrorButtonText}>重试</Text></Pressable><Pressable onPress={pickNext} style={[styles.memoryErrorButton, styles.memoryErrorButtonPrimary]}><Text style={styles.memoryErrorButtonPrimaryText}>换一条</Text></Pressable></View></View> : picked ? <View style={[styles.memoryCard, { backgroundColor: readingTheme.surface }]}>
@@ -320,7 +339,7 @@ function Heatmap({ entries, year }: { entries: MemoryEntryIndex[]; year: number 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background }, loader: { marginTop: 100 }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 }, scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.sm, paddingBottom: 40 },
   modeRow: { height: 32, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }, modeButton: { height: 28, flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, modeButtonText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, modeChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, candidateCount: { flex: 1, color: colors.textFaint, fontSize: 9, textAlign: 'right' }, shuffleButton: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary }, shuffleText: { color: '#FFFFFF', fontSize: 16, lineHeight: 19, textAlign: 'center', includeFontPadding: false }, tagLoader: { height: 30 }, tagRow: { gap: spacing.xs, paddingBottom: spacing.sm }, tagChip: { paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, tagText: { color: colors.textSecondary, fontSize: 10 }, tagTextActive: { fontWeight: '700' },
-  modeChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] },
+  modeChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] }, modeButtonDisabled: { opacity: 0.45 },
   memoryCard: { padding: spacing.md, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted }, memoryCardLoading: { minHeight: 128, alignItems: 'center', justifyContent: 'center' }, memoryHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, memoryDate: { color: colors.primary, fontSize: 10, fontWeight: '700' }, memoryMenu: { color: colors.textSecondary, fontSize: 13, letterSpacing: 1 }, memoryBody: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md, marginTop: spacing.sm }, memoryBodyWithoutImage: { marginTop: spacing.xs }, memoryText: { flex: 1, minHeight: 88 }, memoryContent: { color: colors.text, fontFamily: fonts.serif, fontSize: 15, lineHeight: 23 }, meta: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 10 }, singleThumbnail: { width: 88, height: 88, borderRadius: radii.md, backgroundColor: colors.border }, thumbnailGrid: { width: 88, height: 88, flexDirection: 'row', flexWrap: 'wrap', gap: 4 }, thumbnailCell: { position: 'relative', width: 42, height: 42 }, thumbnailImage: { width: 42, height: 42, borderRadius: radii.sm, backgroundColor: colors.border }, thumbnailMore: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm, backgroundColor: '#00000073' }, thumbnailMoreText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, empty: { alignItems: 'center', paddingVertical: 32, borderRadius: radii.lg, backgroundColor: colors.surfaceMuted }, emptyTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16 }, emptyText: { marginTop: spacing.sm, color: colors.textFaint, fontSize: 10 }, memoryErrorActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg }, memoryErrorButton: { minWidth: 76, minHeight: 34, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.pill }, memoryErrorButtonPrimary: { backgroundColor: colors.primary }, memoryErrorButtonText: { color: colors.primary, fontSize: 11, fontWeight: '700' }, memoryErrorButtonPrimaryText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   sectionTitle: { marginTop: spacing.xl, marginBottom: spacing.sm, color: colors.text, fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' }, reviewGroup: { overflow: 'hidden', borderRadius: radii.lg }, reviewStrip: { minHeight: 78, flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.md }, reviewMetric: { flex: 1, alignItems: 'center', justifyContent: 'center' }, reviewDivider: { width: StyleSheet.hairlineWidth, height: 42, backgroundColor: colors.border }, reviewTitle: { color: colors.primary, fontSize: 10, lineHeight: 13, fontWeight: '700' }, reviewValue: { marginTop: 3, color: colors.text, fontFamily: fonts.serif, fontSize: 14, lineHeight: 18 }, reviewLabel: { marginTop: 2, color: colors.textFaint, fontSize: 9, lineHeight: 12 },
   summaryLink: { minHeight: 64, flexDirection: 'row', alignItems: 'center', marginTop: spacing.md, paddingHorizontal: spacing.md, borderRadius: radii.lg }, summaryLinkPressed: { opacity: 0.62 }, summaryIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: colors.primarySoft }, summaryCopy: { flex: 1, marginLeft: spacing.md }, summaryLinkTitle: { color: colors.primary, fontSize: 13, lineHeight: 17, fontWeight: '700' }, summaryLinkDescription: { marginTop: 2, fontSize: 10, lineHeight: 13 },
