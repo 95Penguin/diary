@@ -94,6 +94,14 @@
           "microphonePermission": "允许拾时在拍摄视频时录制声音。"
         }
       ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": false,
+          "savePhotosPermission": "允许拾时把你生成的分享卡片保存到系统相册。",
+          "granularPermissions": []
+        }
+      ],
       "expo-sqlite",
       "react-native-compressor",
       [

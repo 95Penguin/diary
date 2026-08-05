@@ -21,12 +21,16 @@ export default function FavoritesScreen() {
   const loadingMoreRef = useRef(false);
   const [nextCursor, setNextCursor] = useState<{ favoritedAt: string; id: string } | null>(null);
   const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const loadedRef = useRef(false);
   useFocusEffect(useCallback(() => {
+    void reloadKey;
     let active = true;
-    setLoading(true); setLoadError(false);
-    void listFavoriteEntryPage(db).then((page) => { if (active) { setEntries(page.entries); setNextCursor(page.nextCursor); setLoading(false); } }).catch(() => { if (active) { setLoadError(true); setLoading(false); } });
+    const firstLoad = !loadedRef.current;
+    if (firstLoad) { setLoading(true); setLoadError(false); }
+    void listFavoriteEntryPage(db).then((page) => { if (active) { loadedRef.current = true; setEntries(page.entries); setNextCursor(page.nextCursor); setLoadError(false); setLoading(false); } }).catch(() => { if (active && firstLoad) { setLoadError(true); setLoading(false); } });
     return () => { active = false; };
-  }, [db]));
+  }, [db, reloadKey]));
 
   async function loadMore() {
     if (!nextCursor || loadingMoreRef.current) return;
@@ -40,7 +44,7 @@ export default function FavoritesScreen() {
     finally { loadingMoreRef.current = false; setLoadingMore(false); }
   }
 
-  if (loadError) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}><View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>我的收藏</Text><View style={styles.space} /></View><View style={styles.failure}><Text style={[styles.failureTitle, { color: readingTheme.text }]}>收藏暂时没有加载出来</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>记录仍保存在本机，请返回后重试。</Text></View></SafeAreaView>;
+  if (loadError) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}><View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>我的收藏</Text><View style={styles.space} /></View><View style={styles.failure}><Text style={[styles.failureTitle, { color: readingTheme.text }]}>收藏暂时没有加载出来</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>记录仍保存在本机，可以重新加载。</Text><Pressable onPress={() => setReloadKey((value) => value + 1)} style={styles.retryButton}><Text style={styles.retryText}>重新加载</Text></Pressable></View></SafeAreaView>;
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>我的收藏</Text><View style={styles.space} /></View>
@@ -50,5 +54,5 @@ export default function FavoritesScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, space: { width: 42 }, loader: { marginTop: 80 }, moreLoader: { marginVertical: spacing.lg }, list: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, count: { paddingVertical: spacing.md, color: colors.textSecondary, fontSize: 10 }, failure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, failureTitle: { fontFamily: fonts.serif, fontSize: 18 }, failureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' },
+  back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, space: { width: 42 }, loader: { marginTop: 80 }, moreLoader: { marginVertical: spacing.lg }, list: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, count: { paddingVertical: spacing.md, color: colors.textSecondary, fontSize: 10 }, failure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, failureTitle: { fontFamily: fonts.serif, fontSize: 18 }, failureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { minHeight: 42, justifyContent: 'center', marginTop: spacing.lg, paddingHorizontal: spacing.xl, borderRadius: 21, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
 });

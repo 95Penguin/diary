@@ -5,6 +5,7 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { captureRef } from 'react-native-view-shot';
+import { Asset, requestPermissionsAsync } from 'expo-media-library';
 
 import { showAppDialog } from '@/components/app-dialog-host';
 import { getEntry } from '@/database/journal-repository';
@@ -23,6 +24,7 @@ export default function ShareCardScreen() {
   const db = useSQLiteContext();
   const { readingTheme } = useAppPreferences();
   const cardRefs = useRef<(View | null)[]>([]);
+  const loadedRef = useRef(false);
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -30,14 +32,16 @@ export default function ShareCardScreen() {
   const [shareProgress, setShareProgress] = useState('');
   const [options, setOptions] = useState<Record<Option, boolean>>({ image: true, mood: true, weather: true, location: false, tags: false, followUps: false });
   const [contentMode, setContentMode] = useState<ContentMode>('summary');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useFocusEffect(useCallback(() => {
+    void reloadKey;
     let active = true;
-    setLoading(true);
-    setLoadError(false);
-    void getEntry(db, id).then((item) => { if (active) { setEntry(item); setLoading(false); } }).catch(() => { if (active) { setLoadError(true); setLoading(false); } });
+    const firstLoad = !loadedRef.current;
+    if (firstLoad) { setLoading(true); setLoadError(false); }
+    void getEntry(db, id).then((item) => { if (active) { loadedRef.current = true; setEntry(item); setLoadError(false); setLoading(false); } }).catch(() => { if (active && firstLoad) { setLoadError(true); setLoading(false); } });
     return () => { active = false; };
-  }, [db, id]));
+  }, [db, id, reloadKey]));
 
   function toggle(key: Option) {
     setOptions((current) => ({ ...current, [key]: !current[key] }));
@@ -48,10 +52,24 @@ export default function ShareCardScreen() {
     setSharing(true);
     try {
       const refs = cardRefs.current.slice(0, pages.length);
+      const uris: string[] = [];
       for (const [index, ref] of refs.entries()) if (ref) {
-        setShareProgress(`正在生成并分享 ${index + 1}/${pages.length}`);
+        setShareProgress(`正在生成 ${index + 1}/${pages.length}`);
         const uri = await captureRef(ref, { format: 'png', quality: 1, result: 'tmpfile' });
-        await shareCardFiles([uri]);
+        uris.push(uri);
+      }
+      if (uris.length > 1) {
+        setShareProgress(`正在保存 ${uris.length} 张图片`);
+        const permission = await requestPermissionsAsync(true, ['photo']);
+        if (permission.status !== 'granted') {
+          await showAppDialog({ title: '需要相册权限', message: '允许拾时添加照片后，才能把全文卡片保存到系统相册。' });
+          return;
+        }
+        for (const uri of uris) await Asset.create(uri);
+        await showAppDialog({ title: '已保存到相册', message: `${uris.length} 张全文卡片已经保存，可以在系统相册中查看和分享。` });
+      } else if (uris[0]) {
+        setShareProgress('正在打开系统分享');
+        await shareCardFiles(uris);
       }
     } catch {
       await showAppDialog({ title: '生成失败', message: '分享卡片暂时没有生成，请稍后再试。' });
@@ -59,7 +77,7 @@ export default function ShareCardScreen() {
   }
 
   if (loading) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><ActivityIndicator color={colors.primary} style={styles.center} /></SafeAreaView>;
-  if (loadError) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><View style={styles.center}><Text style={{ color: readingTheme.text }}>记录暂时没有加载出来</Text><Text style={[styles.loadErrorText, { color: readingTheme.secondary }]}>内容仍保存在本机，请返回后重试。</Text><Pressable onPress={() => router.back()}><Text style={styles.backLink}>返回</Text></Pressable></View></SafeAreaView>;
+  if (loadError) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><View style={styles.center}><Text style={{ color: readingTheme.text }}>记录暂时没有加载出来</Text><Text style={[styles.loadErrorText, { color: readingTheme.secondary }]}>内容仍保存在本机，可以重新加载。</Text><View style={styles.loadErrorActions}><Pressable onPress={() => router.back()}><Text style={styles.backLink}>返回</Text></Pressable><Pressable onPress={() => setReloadKey((value) => value + 1)}><Text style={styles.backLink}>重新加载</Text></Pressable></View></View></SafeAreaView>;
   if (!entry) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><View style={styles.center}><Text style={{ color: readingTheme.text }}>记录不存在</Text><Pressable onPress={() => router.back()}><Text style={styles.backLink}>返回</Text></Pressable></View></SafeAreaView>;
 
   const imageUri = options.image ? shareCardImageUri(entry) : null;
@@ -89,8 +107,8 @@ export default function ShareCardScreen() {
         <Choice label="标签" enabled={options.tags} unavailable={!entry.tags.length} onPress={() => toggle('tags')} />
         <Choice label="后续" enabled={options.followUps} unavailable={!entry.followUps.length} onPress={() => toggle('followUps')} />
       </View>
-      <Text style={[styles.privacy, { color: tooManyPages ? colors.danger : readingTheme.secondary }]}>{tooManyPages ? `全文将生成 ${pages.length} 张图片，超过单次分享上限，请选择“开头 420 字”。` : '地点、标签和后续默认隐藏。全文较长时会自动分页；多张图片将依次打开系统分享。'}</Text>
-      <Pressable disabled={sharing || tooManyPages} onPress={() => void share()} style={[styles.shareButton, (sharing || tooManyPages) && styles.disabled]}>{sharing ? <View style={styles.progressRow}><ActivityIndicator color="#FFFFFF" /><Text style={styles.shareText}>{shareProgress}</Text></View> : <Text style={styles.shareText}>生成{pages.length > 1 ? ` ${pages.length} 张` : ''}图片并分享</Text>}</Pressable>
+      <Text style={[styles.privacy, { color: tooManyPages ? colors.danger : readingTheme.secondary }]}>{tooManyPages ? `全文将生成 ${pages.length} 张图片，超过单次生成上限，请选择“开头 420 字”。` : `地点、标签和后续默认隐藏。${pages.length > 1 ? '全文卡片会一次生成并保存到系统相册。' : '生成后会打开系统分享。'}`}</Text>
+      <Pressable disabled={sharing || tooManyPages} onPress={() => void share()} style={[styles.shareButton, (sharing || tooManyPages) && styles.disabled]}>{sharing ? <View style={styles.progressRow}><ActivityIndicator color="#FFFFFF" /><Text style={styles.shareText}>{shareProgress}</Text></View> : <Text style={styles.shareText}>{pages.length > 1 ? `生成 ${pages.length} 张图片并保存到相册` : '生成图片并分享'}</Text>}</Pressable>
     </ScrollView>
   </SafeAreaView>;
 }
@@ -100,7 +118,7 @@ function Choice({ label, enabled, unavailable, onPress }: { label: string; enabl
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center' }, loadErrorText: { marginTop: spacing.sm, fontSize: 11 }, backLink: { marginTop: spacing.md, color: colors.primary },
+  safe: { flex: 1 }, center: { flex: 1, alignItems: 'center', justifyContent: 'center' }, loadErrorText: { marginTop: spacing.sm, fontSize: 11 }, loadErrorActions: { flexDirection: 'row', gap: spacing.xl, marginTop: spacing.md }, backLink: { color: colors.primary },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, title: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 },
   scroll: { alignItems: 'center', padding: spacing.xl, paddingBottom: spacing.xxxl }, hint: { alignSelf: 'stretch', marginBottom: spacing.md, fontSize: 11, textAlign: 'center' },
   cardPages: { gap: spacing.md }, card: { width: 340, overflow: 'hidden', padding: spacing.xxl, borderRadius: radii.lg, backgroundColor: '#FFFDF8', shadowColor: '#22332B', shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 4 },

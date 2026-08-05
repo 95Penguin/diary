@@ -15,12 +15,15 @@ export default function DataHealthScreen() {
   const { preferences, readingTheme } = useAppPreferences();
   const [report, setReport] = useState<DataHealthReport | null>(null);
   const [checking, setChecking] = useState(true);
+  const [checkFailed, setCheckFailed] = useState(false);
 
   const check = useCallback(async () => {
     setChecking(true);
+    setCheckFailed(false);
     try {
       setReport(await runDataHealthCheck(db, (uri) => new File(uri).exists));
-    } finally { setChecking(false); }
+    } catch { setCheckFailed(true); }
+    finally { setChecking(false); }
   }, [db]);
 
   useFocusEffect(useCallback(() => { void check(); }, [check]));
@@ -32,7 +35,7 @@ export default function DataHealthScreen() {
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>数据与备份体检</Text><View style={styles.headerSpace} /></View>
-    {checking && !report ? <ActivityIndicator color={colors.primary} style={styles.loader} /> : report ? <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+    {checking && !report ? <ActivityIndicator color={colors.primary} style={styles.loader} /> : checkFailed && !report ? <View style={styles.loader}><Text style={[styles.failure, { color: readingTheme.secondary }]}>检查暂时没有完成，数据没有发生改变。</Text><Pressable onPress={() => void check()} style={styles.retry}><Text style={styles.retryText}>重新检查</Text></Pressable></View> : report ? <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
       <View style={[styles.hero, { backgroundColor: level === 'healthy' ? colors.primarySoft : readingTheme.surface }]}><View style={[styles.statusIcon, level === 'critical' ? styles.statusCritical : level === 'attention' ? styles.statusAttention : styles.statusHealthy]}><Text style={styles.statusIconText}>{level === 'healthy' ? '✓' : '!'}</Text></View><View style={styles.heroCopy}><Text style={[styles.heroTitle, { color: readingTheme.text }]}>{level === 'healthy' ? '当前状态良好' : level === 'critical' ? '有数据需要尽快处理' : '有几项建议处理'}</Text><Text style={[styles.heroText, { color: readingTheme.secondary }]}>检查于 {formatShortDateTime(report.checkedAt)} · 全程只读，没有修改记录</Text></View></View>
 
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>检查项目</Text>
@@ -64,7 +67,7 @@ function HealthCard({ title, status, tone, detail, action, onAction }: { title: 
 function Advice({ text }: { text: string }) { const { readingTheme } = useAppPreferences(); return <View style={styles.adviceRow}><Text style={styles.adviceBullet}>•</Text><Text style={[styles.adviceText, { color: readingTheme.secondary }]}>{text}</Text></View>; }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, title: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 }, loader: { flex: 1, alignItems: 'center', justifyContent: 'center' }, failure: { fontSize: 12 },
+  safe: { flex: 1 }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, title: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 }, loader: { flex: 1, alignItems: 'center', justifyContent: 'center' }, failure: { fontSize: 12 }, retry: { minHeight: 42, justifyContent: 'center', marginTop: spacing.lg, paddingHorizontal: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   scroll: { padding: spacing.xl, paddingBottom: spacing.xxxl }, hero: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg, borderRadius: radii.lg }, statusIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21 }, statusHealthy: { backgroundColor: colors.primary }, statusAttention: { backgroundColor: '#B88028' }, statusCritical: { backgroundColor: colors.danger }, statusIconText: { color: '#FFFFFF', fontSize: 20, fontWeight: '800' }, heroCopy: { flex: 1 }, heroTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '600' }, heroText: { marginTop: 3, fontSize: 10, lineHeight: 16 },
   sectionTitle: { marginTop: spacing.xl, marginBottom: spacing.sm, fontSize: 11, letterSpacing: 1 }, card: { marginBottom: spacing.sm, padding: spacing.md, borderRadius: radii.md }, cardHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, dot: { width: 8, height: 8, borderRadius: 4 }, dotHealthy: { backgroundColor: colors.primary }, dotAttention: { backgroundColor: '#B88028' }, dotCritical: { backgroundColor: colors.danger }, cardTitle: { flex: 1, fontSize: 13, fontWeight: '700' }, cardStatus: { fontSize: 11, fontWeight: '700' }, healthyText: { color: colors.primary }, attentionText: { color: '#9A681C' }, criticalText: { color: colors.danger }, cardDetail: { marginTop: spacing.sm, fontSize: 10, lineHeight: 17 }, cardAction: { alignSelf: 'flex-end', minHeight: 32, justifyContent: 'center', marginTop: spacing.xs }, cardActionText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
   advice: { padding: spacing.md, borderRadius: radii.md }, adviceRow: { flexDirection: 'row', gap: spacing.sm, paddingVertical: spacing.xs }, adviceBullet: { color: colors.primary, fontSize: 15 }, adviceText: { flex: 1, fontSize: 11, lineHeight: 18 }, recheck: { minHeight: 46, alignItems: 'center', justifyContent: 'center', marginTop: spacing.xl, borderRadius: radii.md, backgroundColor: colors.primary }, recheckText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' }, disabled: { opacity: 0.5 }, diagnostics: { minHeight: 44, alignItems: 'center', justifyContent: 'center' }, diagnosticsText: { fontSize: 11 },

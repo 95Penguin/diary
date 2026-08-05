@@ -12,7 +12,13 @@ export default function LocationHealthScreen() {
   const db = useSQLiteContext();
   const { preferences, readingTheme, updatePreferences } = useAppPreferences();
   const [report, setReport] = useState<LocationHealthReport | null>(null);
-  useFocusEffect(useCallback(() => { void getLocationHealthReport(db).then(setReport); }, [db]));
+  const [loadFailed, setLoadFailed] = useState(false);
+  const load = useCallback(async () => {
+    setLoadFailed(false);
+    try { setReport(await getLocationHealthReport(db)); }
+    catch { setLoadFailed(true); }
+  }, [db]);
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
 
   async function confirmCoordinateTransform(action: 'approximate' | 'remove') {
     const count = report?.savedCoordinates ?? 0;
@@ -37,7 +43,7 @@ export default function LocationHealthScreen() {
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>地点隐私与体检</Text><View style={styles.space} /></View>
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>地点体检</Text>
-      {!report ? <ActivityIndicator color={colors.primary} /> : <View style={[styles.card, { backgroundColor: readingTheme.surface }]}>
+      {!report ? loadFailed ? <View style={styles.loadFailure}><Text style={[styles.description, { color: readingTheme.secondary }]}>地点体检暂时没有加载出来，记录仍保存在本机。</Text><Pressable onPress={() => void load()} style={styles.retry}><Text style={styles.retryText}>重新加载</Text></Pressable></View> : <ActivityIndicator color={colors.primary} /> : <View style={[styles.card, { backgroundColor: readingTheme.surface }]}>
         <HealthRow label="缺少坐标" value={report.missingCoordinates} detail="可在足迹地图中批量补点" onPress={() => router.push('/footprint-map' as Href)} />
         <HealthRow label="疑似重复地点" value={report.duplicateSuggestions} detail="合并别名，避免同一地点重复点亮" onPress={() => router.push('/metadata' as Href)} />
         <HealthRow label="地点名称过长" value={report.longLocationNames} detail="建议改为易读的简称" onPress={() => router.push('/metadata' as Href)} />
@@ -80,7 +86,7 @@ function Choice({ value, options, onChange }: { value: string; options: [string,
 
 const styles = StyleSheet.create({
   safe: { flex: 1 }, header: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, title: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, space: { width: 40 },
-  content: { padding: spacing.xl, paddingBottom: spacing.xxxl }, sectionTitle: { marginTop: spacing.xl, marginBottom: spacing.sm, fontSize: 11 }, description: { marginBottom: spacing.md, fontSize: 11, lineHeight: 18 }, card: { borderRadius: radii.md, overflow: 'hidden' }, healthRow: { minHeight: 60, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm }, healthText: { flex: 1, paddingRight: spacing.md }, healthLabel: { fontSize: 12, fontWeight: '600' }, healthDetail: { marginTop: 3, fontSize: 10, lineHeight: 14 }, count: { color: '#B46B54', fontSize: 11, fontWeight: '700' }, ok: { color: colors.primary },
+  content: { padding: spacing.xl, paddingBottom: spacing.xxxl }, sectionTitle: { marginTop: spacing.xl, marginBottom: spacing.sm, fontSize: 11 }, description: { marginBottom: spacing.md, fontSize: 11, lineHeight: 18 }, loadFailure: { alignItems: 'center', paddingVertical: spacing.xl }, retry: { minHeight: 42, justifyContent: 'center', paddingHorizontal: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' }, card: { borderRadius: radii.md, overflow: 'hidden' }, healthRow: { minHeight: 60, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm }, healthText: { flex: 1, paddingRight: spacing.md }, healthLabel: { fontSize: 12, fontWeight: '600' }, healthDetail: { marginTop: 3, fontSize: 10, lineHeight: 14 }, count: { color: '#B46B54', fontSize: 11, fontWeight: '700' }, ok: { color: colors.primary },
   options: { gap: spacing.sm }, option: { minHeight: 46, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, borderRadius: radii.md }, optionActive: { borderWidth: 1, borderColor: colors.primary }, radio: { width: 16, height: 16, marginRight: spacing.md, borderRadius: 8, borderWidth: 1, borderColor: colors.textFaint }, radioActive: { borderWidth: 5, borderColor: colors.primary }, optionText: { fontSize: 12 },
   coordinateCard: { padding: spacing.lg, borderRadius: radii.lg }, coordinateCount: { fontSize: 13, fontWeight: '600' }, coordinateActions: { gap: spacing.sm, marginTop: spacing.md }, secondaryButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primarySoft }, secondaryButtonText: { color: colors.primary, fontSize: 11, fontWeight: '700' }, removeButton: { backgroundColor: '#F8E9E6' }, removeButtonText: { color: '#A85248', fontSize: 11, fontWeight: '700' },
 });

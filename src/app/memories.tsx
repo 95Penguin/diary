@@ -41,10 +41,12 @@ export default function MemoriesScreen() {
   const [tagIndex, setTagIndex] = useState<{ entryId: string; label: string }[] | null>(null);
   const [tagsLoading, setTagsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [insightsReady, setInsightsReady] = useState(false);
   const [mode, setMode] = useState<MemoryMode>('random');
   const [modePickerVisible, setModePickerVisible] = useState(false);
   const [yearPickerVisible, setYearPickerVisible] = useState(false);
   const modeButtonRef = useRef<View>(null);
+  const loadedRef = useRef(false);
   const yearListRef = useRef<ScrollView>(null);
   const [modeAnchor, setModeAnchor] = useState<{ x: number; y: number; width: number; height: number }>({ x: spacing.xl, y: 0, width: 96, height: 32 });
   const [hideConfirmationVisible, setHideConfirmationVisible] = useState(false);
@@ -57,19 +59,29 @@ export default function MemoriesScreen() {
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    setLoading(true);
+    const firstLoad = !loadedRef.current;
+    if (firstLoad) { setLoading(true); setInsightsReady(false); }
     const task = InteractionManager.runAfterInteractions(() => {
       void Promise.all([listMemoryEntryIndex(db), listSuppressedMemoryEntryIds(db)]).then(([items, hiddenIds]) => {
         if (!active) return;
+        loadedRef.current = true;
         setEntries(items); setSuppressed(new Set(hiddenIds)); setLoading(false);
       }).catch(async () => {
         if (!active) return;
-        setLoading(false);
+        if (firstLoad) setLoading(false);
         await showAppDialog({ title: '暂时无法拾起记录', message: '请稍后再试。' });
       });
     });
     return () => { active = false; task.cancel(); };
   }, [db]));
+  useEffect(() => {
+    if (loading) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const frame = requestAnimationFrame(() => {
+      timer = setTimeout(() => setInsightsReady(true), 80);
+    });
+    return () => { cancelAnimationFrame(frame); if (timer) clearTimeout(timer); };
+  }, [loading]);
   useFocusEffect(useCallback(() => {
     const current = new Date();
     const previousYear = currentYearRef.current;
@@ -134,20 +146,20 @@ export default function MemoriesScreen() {
     setPickedId(nextId);
   }
 
-  const weekEntries = useMemo(() => { const start = startOfDay(now); start.setDate(start.getDate() - 6); return entries.filter((entry) => localDate(entry.occurredAt) >= start); }, [entries, now]);
-  const monthEntries = useMemo(() => entries.filter((entry) => { const date = localDate(entry.occurredAt); return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth(); }), [entries, now]);
+  const weekEntries = useMemo(() => { if (!insightsReady) return []; const start = startOfDay(now); start.setDate(start.getDate() - 6); return entries.filter((entry) => localDate(entry.occurredAt) >= start); }, [entries, insightsReady, now]);
+  const monthEntries = useMemo(() => insightsReady ? entries.filter((entry) => { const date = localDate(entry.occurredAt); return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth(); }) : [], [entries, insightsReady, now]);
   const footprintYearData = useMemo(() => {
     const counts = new Map<number, number>();
     let firstYear = now.getFullYear();
     let lastYear = now.getFullYear();
-    for (const entry of entries) {
+    for (const entry of insightsReady ? entries : []) {
       const year = localDate(entry.occurredAt).getFullYear();
       counts.set(year, (counts.get(year) ?? 0) + 1);
       firstYear = Math.min(firstYear, year);
       lastYear = Math.max(lastYear, year);
     }
     return { counts, years: Array.from({ length: lastYear - firstYear + 1 }, (_, index) => firstYear + index) };
-  }, [entries, now]);
+  }, [entries, insightsReady, now]);
   const footprintYears = footprintYearData.years;
   const footprintYear = footprintYears.includes(selectedYear) ? selectedYear : now.getFullYear();
   const selectedYearIndex = footprintYears.indexOf(footprintYear);
@@ -193,7 +205,7 @@ export default function MemoriesScreen() {
           </View>
         </Pressable>
       </View> : <View style={[styles.empty, { backgroundColor: readingTheme.surface }]}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>{mode === 'tag' && !tag ? '先选择一个标签' : '今天没有可拾起的记录'}</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>换一种方式看看，过去会在别处等你。</Text></View>}
-      <Text style={[styles.sectionTitle, { color: readingTheme.text }]}>近况回顾</Text>
+      {insightsReady ? <><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>近况回顾</Text>
       <View style={[styles.reviewGroup, { backgroundColor: readingTheme.surface }]}>
         <ReviewStrip weekEntries={weekEntries} monthEntries={monthEntries} month={now.getMonth() + 1} />
       </View>
@@ -239,6 +251,7 @@ export default function MemoriesScreen() {
         <Pressable accessibilityLabel={nextYear ? `查看 ${nextYear} 年足迹` : '已经是最新年份'} disabled={!nextYear} onPress={() => nextYear && setSelectedYear(nextYear)} style={[styles.yearButton, { backgroundColor: readingTheme.surface }, !nextYear && styles.yearButtonDisabled]}><SymbolView name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }} size={19} tintColor={colors.primary} /></Pressable>
       </View>
       <Heatmap entries={entries} year={footprintYear} />
+      </> : null}
     </ScrollView>
     <Modal visible={modePickerVisible} transparent animationType="fade" onRequestClose={() => setModePickerVisible(false)}><Pressable onPress={() => setModePickerVisible(false)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.modePicker, { backgroundColor: readingTheme.background, left: modeAnchor.x, top: modeAnchor.y + modeAnchor.height + 2, minWidth: Math.max(modeAnchor.width, 132) }]}>{modes.map((item) => <Pressable accessibilityRole="menuitem" key={item.value} onPress={() => { setMode(item.value); setModePickerVisible(false); }} style={({ pressed }) => [styles.pickerItem, pressed && { backgroundColor: readingTheme.surface }]}><Text style={[styles.pickerItemText, { color: mode === item.value ? colors.primary : readingTheme.text }, mode === item.value && styles.pickerItemActive]}>{item.label}</Text>{mode === item.value ? <Text style={styles.check}>✓</Text> : null}</Pressable>)}</Pressable></Pressable></Modal>
     <Modal visible={yearPickerVisible} transparent animationType="fade" onRequestClose={() => setYearPickerVisible(false)} onShow={() => { const index = [...footprintYears].reverse().indexOf(footprintYear); requestAnimationFrame(() => yearListRef.current?.scrollTo({ y: Math.max(0, index * 58), animated: false })); }}><Pressable accessibilityLabel="关闭年份选择" onPress={() => setYearPickerVisible(false)} style={styles.yearOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.yearPicker, { backgroundColor: readingTheme.background }]}><Text style={[styles.yearPickerTitle, { color: readingTheme.text }]}>选择足迹年份</Text><ScrollView ref={yearListRef} style={styles.yearList} showsVerticalScrollIndicator>{[...footprintYears].reverse().map((year) => { const count = footprintYearData.counts.get(year) ?? 0; const active = year === footprintYear; return <Pressable accessibilityRole="menuitem" key={year} onPress={() => { setSelectedYear(year); setYearPickerVisible(false); }} style={[styles.yearPickerItem, { borderBottomColor: readingTheme.border }, active && { backgroundColor: readingTheme.surface }]}><View><Text style={[styles.yearPickerItemTitle, { color: active ? colors.primary : readingTheme.text }]}>{year} 年</Text><Text style={[styles.yearPickerItemCount, { color: readingTheme.secondary }]}>{count ? `${count} 条记录` : '这一年还没有记录'}</Text></View>{active ? <Text style={styles.check}>✓</Text> : null}</Pressable>; })}</ScrollView><Pressable onPress={() => setYearPickerVisible(false)} style={styles.yearPickerCancel}><Text style={[styles.yearPickerCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable></Pressable></Pressable></Modal>

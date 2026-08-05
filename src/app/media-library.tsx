@@ -29,23 +29,28 @@ export default function MediaLibraryScreen() {
   const [monthIndexYear, setMonthIndexYear] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const listRef = useRef<FlatList<MediaLibraryListItem>>(null);
+  const loadedRef = useRef(false);
 
   useFocusEffect(useCallback(() => {
+    void reloadKey;
     let active = true;
-    setLoading(true);
-    setLoadError(false);
+    const firstLoad = !loadedRef.current;
+    if (firstLoad) { setLoading(true); setLoadError(false); }
     const task = InteractionManager.runAfterInteractions(() => {
       void listJournalMedia(db).then((items) => {
         if (!active) return;
+        loadedRef.current = true;
         setMedia(items);
+        setLoadError(false);
         setLoading(false);
       }).catch(() => {
-        if (active) { setLoadError(true); setLoading(false); }
+        if (active && firstLoad) { setLoadError(true); setLoading(false); }
       });
     });
     return () => { active = false; task.cancel(); };
-  }, [db]));
+  }, [db, reloadKey]));
 
   const filtered = useMemo(() => filterLibraryMedia(media, filter), [filter, media]);
   const rows = useMemo(() => buildMediaLibraryRows(filtered), [filtered]);
@@ -93,7 +98,7 @@ export default function MediaLibraryScreen() {
         onPress={() => setFilter(item.key)} style={[styles.filter, filter === item.key && styles.filterActive]}
       ><Text style={[styles.filterText, { color: readingTheme.secondary }, filter === item.key && styles.filterTextActive]}>{item.label}</Text></Pressable>)}
     </View>
-    {loading ? <ActivityIndicator color={colors.primary} style={styles.loader} /> : loadError ? <View style={styles.empty}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>媒体暂时没有加载出来</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>内容仍保存在本机，请返回后重试。</Text></View> : rows.length ? <FlatList
+    {loading ? <ActivityIndicator color={colors.primary} style={styles.loader} /> : loadError ? <View style={styles.empty}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>媒体暂时没有加载出来</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>内容仍保存在本机，可以重新加载。</Text><Pressable onPress={() => setReloadKey((value) => value + 1)} style={styles.retryButton}><Text style={styles.retryText}>重新加载</Text></Pressable></View> : rows.length ? <FlatList
       ref={(instance) => { listRef.current = instance; }} data={rows} keyExtractor={(item) => item.key} showsVerticalScrollIndicator={false}
       onScrollToIndexFailed={({ index, averageItemLength }) => { listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: false }); setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 }), 120); }}
       contentContainerStyle={styles.list}
@@ -150,7 +155,7 @@ const styles = StyleSheet.create({
   loader: { flex: 1 }, list: { paddingHorizontal: spacing.md, paddingBottom: spacing.xxxl },
   monthHeader: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: spacing.sm, paddingBottom: 6 }, monthButton: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 7 }, month: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '600' }, monthChevron: { width: 6, height: 6, marginTop: -3, borderRightWidth: 1.4, borderBottomWidth: 1.4, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, monthCount: { fontSize: 10, lineHeight: 14 },
   mediaRow: { flexDirection: 'row', marginBottom: 4 },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, emptyTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, emptyText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, emptyTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, emptyText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { minHeight: 42, justifyContent: 'center', marginTop: spacing.lg, paddingHorizontal: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   viewer: { flex: 1, backgroundColor: '#101411' }, viewerPager: { flex: 1 }, viewerPage: { flex: 1 }, viewerTop: { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingBottom: spacing.md, backgroundColor: '#00000066' },
   viewerButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#FFFFFF22' }, viewerButtonText: { color: '#FFFFFF', fontSize: 30, lineHeight: 34, fontWeight: '300' }, viewerHeading: { flex: 1, alignItems: 'center' }, viewerDateTime: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' }, viewerCount: { marginTop: 2, color: '#FFFFFFCC', fontSize: 10, fontWeight: '600' }, viewerTopSpacer: { width: 40 },
   viewerBottom: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.md, backgroundColor: '#00000088' }, viewerCaption: { flex: 1 }, viewerSource: { marginBottom: 3, color: '#FFFFFFB3', fontSize: 10, fontWeight: '700' }, viewerDescription: { color: '#FFFFFFE6', fontSize: 13, lineHeight: 20 },

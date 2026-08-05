@@ -24,6 +24,7 @@ export default function BatchManageScreen() {
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
   const [deleteConfirmationVisible, setDeleteConfirmationVisible] = useState(false);
   const [coordinateChoiceVisible, setCoordinateChoiceVisible] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const filtered = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase();
     if (!keyword) return entries ?? [];
@@ -37,7 +38,7 @@ export default function BatchManageScreen() {
       void listEntryManagementSummaries(db).then((items) => { if (active) setEntries(items); }).catch((error) => { void recordAppError('batch-manage.load', error); if (active) { setEntries([]); setNotice({ title: '读取失败', message: '记录仍保存在本机，请返回后重新尝试。' }); } });
     });
     return () => { active = false; task.cancel(); };
-  }, [db]);
+  }, [db, reloadKey]);
   function toggle(id: string) { if (working) return; setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
   const ids = [...selected];
 
@@ -81,7 +82,7 @@ export default function BatchManageScreen() {
     <Modal visible={editor !== null} transparent animationType="fade" onRequestClose={() => setEditor(null)}><Pressable onPress={() => setEditor(null)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.modal, { backgroundColor: readingTheme.background }]}><Text style={[styles.modalTitle, { color: readingTheme.text }]}>{editor === 'addTag' ? '添加标签' : editor === 'removeTag' ? '移除标签' : '修改地点'}</Text><TextInput autoFocus value={value} onChangeText={setValue} placeholder={editor === 'location' ? '地点名称，留空可清除' : '标签名称'} placeholderTextColor={readingTheme.secondary} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><View style={styles.modalActions}><Pressable onPress={() => setEditor(null)}><Text style={[styles.cancel, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={working || (editor !== 'location' && !value.trim())} onPress={() => void saveBatchEditor()}><Text style={styles.confirm}>保存</Text></Pressable></View></Pressable></Pressable></Modal>
     <AppDialog visible={deleteConfirmationVisible} title="移入回收站？" message={`将 ${ids.length} 条记录移入回收站，可在 30 天内恢复。`} onClose={() => setDeleteConfirmationVisible(false)} actions={[{ label: '取消', onPress: () => setDeleteConfirmationVisible(false) }, { label: '移入', tone: 'danger', onPress: () => { setDeleteConfirmationVisible(false); void apply(() => batchDeleteEntries(db, ids), '记录已移入回收站。'); } }]} />
     <AppDialog visible={coordinateChoiceVisible} title="地点坐标怎样处理？" message="如果该地点已有坐标，可选择批量记录保存的精度。" onClose={() => setCoordinateChoiceVisible(false)} actions={[{ label: '只存名称', onPress: () => void applyLocation('nameOnly') }, { label: '约 1 公里', onPress: () => void applyLocation('approximate') }, { label: '精确坐标', tone: 'primary', onPress: () => void applyLocation('precise') }]} />
-    <AppDialog visible={Boolean(notice)} title={notice?.title ?? ''} message={notice?.message} onClose={() => setNotice(null)} actions={[{ label: '知道了', tone: 'primary', onPress: () => setNotice(null) }]} />
+    <AppDialog visible={Boolean(notice)} title={notice?.title ?? ''} message={notice?.message} onClose={() => setNotice(null)} actions={notice?.title === '读取失败' ? [{ label: '返回', onPress: () => setNotice(null) }, { label: '重新读取', tone: 'primary', onPress: () => { setNotice(null); setEntries(null); setReloadKey((current) => current + 1); } }] : [{ label: '知道了', tone: 'primary', onPress: () => setNotice(null) }]} />
   </SafeAreaView>;
 }
 
