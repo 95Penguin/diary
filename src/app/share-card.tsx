@@ -74,7 +74,7 @@ export default function ShareCardScreen() {
           await showAppDialog({ title: '需要相册权限', message: '允许拾时添加照片后，才能把全文卡片保存到系统相册。' });
           return;
         }
-        for (const uri of uris) await Asset.create(uri);
+        for (const uri of [...uris].reverse()) await Asset.create(uri);
         await showAppDialog({ title: '已保存到相册', message: `${uris.length} 张全文卡片已经保存，可以在系统相册中查看和分享。` });
       } else if (uris[0]) {
         setShareProgress('正在打开系统分享');
