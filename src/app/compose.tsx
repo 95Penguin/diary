@@ -31,10 +31,10 @@ import { wgs84ToGcj02 } from '@/utils/china-coordinates';
 import { rankNearbyPois } from '@/utils/location-poi';
 
 type SelectedImage = { id?: string; uri: string; width: number; height: number; fileName?: string | null; draftOwned?: boolean; mediaType?: JournalMediaType; pairedVideoUri?: string | null; pairedVideoFileName?: string | null; duration?: number | null; thumbnailUri?: string | null };
-const MOODS = ['开心', '平静', '期待', '难过', '疲惫', '生气'] as const;
-const MOOD_ICONS: Record<string, string> = { 开心: '😊', 平静: '😌', 期待: '✨', 难过: '😔', 疲惫: '😴', 生气: '😤' };
-const WEATHERS = ['晴', '多云', '阴', '雨', '雷雨', '雪', '雾'] as const;
-const WEATHER_ICONS: Record<string, string> = { 晴: '☀️', 多云: '⛅', 阴: '☁️', 雨: '🌧️', 雷雨: '⛈️', 雪: '🌨️', 雾: '🌫️' };
+const MOODS = ['开心', '平静', '期待', '激动', '感动', '紧张', '焦虑', '难过', '疲惫', '生气'] as const;
+const MOOD_ICONS: Record<string, string> = { 开心: '😊', 平静: '😌', 期待: '✨', 激动: '🤩', 感动: '🥹', 紧张: '😰', 焦虑: '😟', 难过: '😔', 疲惫: '😴', 生气: '😤' };
+const WEATHERS = ['晴', '多云', '阴', '雨', '雷雨', '雪', '雾', '风', '霾'] as const;
+const WEATHER_ICONS: Record<string, string> = { 晴: '☀️', 多云: '⛅', 阴: '☁️', 雨: '🌧️', 雷雨: '⛈️', 雪: '🌨️', 雾: '🌫️', 风: '🌬️', 霾: '😷' };
 const EMPTY_SUGGESTIONS: EntryFilterOptions = { locations: [], tags: [], moods: [], weather: [] };
 
 export default function ComposeScreen() {
