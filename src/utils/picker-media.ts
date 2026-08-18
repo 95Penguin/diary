@@ -72,7 +72,9 @@ export async function preparePickedMedia(
       const compressedUri = await compressVideo(asset.uri, (progress) => {
         onProgress?.(`正在压缩视频 ${videoNumber}/${videoCount} · ${Math.round(progress * 100)}%`);
       });
-      next.push({ ...asset, uri: compressedUri, fileSize: undefined });
+      const compressed = { ...asset, uri: compressedUri, fileSize: undefined };
+      const compressedBytes = await getPickedMediaSize(compressed);
+      next.push({ ...compressed, fileSize: compressedBytes ?? undefined });
     }
     return next;
   } catch {

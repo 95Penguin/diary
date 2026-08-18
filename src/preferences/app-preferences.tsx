@@ -13,6 +13,7 @@ export type BackupHealth = 'healthy' | 'warning' | 'failed' | null;
 export type AppLockDelaySeconds = 0 | 60 | 300;
 export type LocationPrivacyMode = 'precise' | 'approximate' | 'nameOnly' | 'ask';
 export type ExportLocationMode = 'include' | 'hidden';
+export type ImageSaveQuality = 'original' | 'high' | 'compact';
 export type AppPreferences = {
   nickname: string;
   signature: string;
@@ -33,6 +34,7 @@ export type AppPreferences = {
   lastAutomaticBackupAt: string | null;
   locationPrivacyMode: LocationPrivacyMode;
   exportLocationMode: ExportLocationMode;
+  imageSaveQuality: ImageSaveQuality;
 };
 
 const defaults: AppPreferences = {
@@ -55,6 +57,7 @@ const defaults: AppPreferences = {
   lastAutomaticBackupAt: null,
   locationPrivacyMode: 'precise',
   exportLocationMode: 'include',
+  imageSaveQuality: 'high',
 };
 export const readingThemes = {
   cream: { label: '米白', background: '#FFFDF8', surface: '#F4F6F2', text: '#27332E', secondary: '#7F8A84', border: '#E7EBE6' },

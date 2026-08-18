@@ -1,5 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { JournalMediaType } from '@/domain/journal';
+import { cleanupOrphanMediaMetadata } from './media-maintenance.ts';
 
 export type TimeCapsuleStatus = 'locked' | 'ready' | 'opened';
 export type TimeCapsule = {
@@ -97,6 +98,7 @@ export async function restoreTimeCapsule(db: SQLiteDatabase, id: string, now = n
 export async function permanentlyDeleteTimeCapsule(db: SQLiteDatabase, id: string) {
   const rows = await db.getAllAsync<{ uri: string }>(`SELECT uri FROM time_capsule_images WHERE capsule_id = ? UNION ALL SELECT paired_video_uri AS uri FROM time_capsule_images WHERE capsule_id = ? AND paired_video_uri IS NOT NULL UNION ALL SELECT thumbnail_uri AS uri FROM time_capsule_images WHERE capsule_id = ? AND thumbnail_uri IS NOT NULL`, id, id, id);
   await db.runAsync('DELETE FROM time_capsules WHERE id = ? AND deleted_at IS NOT NULL', id);
+  await cleanupOrphanMediaMetadata(db).catch(() => undefined);
   return rows.map((row) => row.uri);
 }
 
@@ -106,5 +108,6 @@ export async function cleanupExpiredTimeCapsules(db: SQLiteDatabase, retentionDa
     UNION ALL SELECT i.paired_video_uri AS uri FROM time_capsule_images i JOIN time_capsules c ON c.id = i.capsule_id WHERE c.deleted_at IS NOT NULL AND c.deleted_at < ? AND i.paired_video_uri IS NOT NULL
     UNION ALL SELECT i.thumbnail_uri AS uri FROM time_capsule_images i JOIN time_capsules c ON c.id = i.capsule_id WHERE c.deleted_at IS NOT NULL AND c.deleted_at < ? AND i.thumbnail_uri IS NOT NULL`, cutoff, cutoff, cutoff);
   await db.runAsync('DELETE FROM time_capsules WHERE deleted_at IS NOT NULL AND deleted_at < ?', cutoff);
+  await cleanupOrphanMediaMetadata(db).catch(() => undefined);
   return rows.map((row) => row.uri);
 }

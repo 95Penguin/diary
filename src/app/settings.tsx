@@ -11,7 +11,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { getDraftCount, getJournalStats, getLastExportAt } from '@/database/journal-repository';
 import type { JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
-import { readingThemes, useAppPreferences, type AppLockDelaySeconds, type BackupReminderDays, type FontSizeMode, type ReadingComfortName, type ReadingFontName, type ReadingThemeName } from '@/preferences/app-preferences';
+import { readingThemes, useAppPreferences, type AppLockDelaySeconds, type BackupReminderDays, type FontSizeMode, type ImageSaveQuality, type ReadingComfortName, type ReadingFontName, type ReadingThemeName } from '@/preferences/app-preferences';
 import { setBackupReminder } from '@/utils/backup-reminder';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 
@@ -146,6 +146,7 @@ export default function SettingsScreen() {
         <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>备份与导出</Text><Text style={[styles.rowDescription, { color: preferences.lastBackupHealth === 'failed' || (!lastExportAt && !preferences.lastAutomaticBackupAt && stats.entries >= 20) ? colors.danger : readingTheme.secondary }]}>{backupStatusLabel(lastExportAt, preferences.lastAutomaticBackupAt, preferences.lastBackupHealth, stats.entries)}</Text></View>
         <View style={styles.rowRight}>{preferences.lastBackupHealth === 'healthy' ? <Text style={styles.healthy}>✓</Text> : preferences.lastBackupHealth === 'failed' || (!lastExportAt && !preferences.lastAutomaticBackupAt && stats.entries >= 20) ? <View style={styles.warningDot} /> : null}<Text style={styles.arrow}>›</Text></View>
       </Pressable>
+      <Pressable onPress={() => router.push('/storage' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>存储空间</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>查看原始媒体与缩略图占用，安全清理缓存</Text></View><Text style={styles.arrow}>›</Text></Pressable>
       <View style={styles.reminderGap} />
       <SettingChoice
         title="备份提醒"
@@ -176,6 +177,8 @@ export default function SettingsScreen() {
         />
       </> : null}
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>外观与阅读</Text>
+      <SettingChoice title="图片保存质量" value={preferences.imageSaveQuality} options={[["original", "原图"], ["high", "高清"], ["compact", "节省空间"]]} onChange={(value) => void updatePreferences({ imageSaveQuality: value as ImageSaveQuality })} />
+      <Text style={[styles.qualityHint, { color: readingTheme.secondary }]}>原图使用系统提供的最高质量；高清最长边 4096px；节省空间最长边 2048px。选择媒体后会显示预计占用。</Text>
       <ThemeChoice value={preferences.readingTheme} onChange={(value) => void updatePreferences({ readingTheme: value })} />
       <SettingChoice title="正文字体" value={preferences.readingFont} options={[["serif", "宋体"], ["sans", "黑体"], ["light", "细黑"], ["mono", "等宽"], ["system", "系统"]]} onChange={(value) => void updatePreferences({ readingFont: value as ReadingFontName })} />
       <SettingChoice title="字体大小" value={preferences.fontSize} options={[["verySmall", "很小"], ["small", "小"], ["standard", "标准"], ["large", "大"], ["veryLarge", "很大"]]} onChange={(value) => void updatePreferences({ fontSize: value as FontSizeMode })} />
@@ -242,6 +245,7 @@ const styles = StyleSheet.create({
   avatarText: { color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' },
   brand: { flex: 1, color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 21, fontWeight: '600' }, slogan: { flex: 1, color: colors.textSecondary, fontSize: 12, lineHeight: 16 },
   sectionTitle: { marginTop: spacing.xxl, marginBottom: spacing.sm, color: colors.textFaint, fontSize: 11, lineHeight: 16, letterSpacing: 1 },
+  qualityHint: { marginTop: spacing.sm, paddingHorizontal: spacing.sm, fontSize: 10, lineHeight: 16 },
   statsCard: { height: 64, flexDirection: 'row', alignItems: 'center', borderRadius: radii.md, backgroundColor: colors.surfaceMuted },
   stat: { flex: 1, alignItems: 'center', justifyContent: 'center' }, statValue: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 21, fontWeight: '600', includeFontPadding: false }, statLabel: { marginTop: 1, color: colors.textSecondary, fontSize: 11 },
   statDivider: { width: StyleSheet.hairlineWidth, height: 24, backgroundColor: colors.border },

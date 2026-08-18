@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { showAppDialog } from '@/components/app-dialog-host';
 import { addTimeCapsuleImages, createTimeCapsule, setTimeCapsuleNotification } from '@/database/time-capsule-repository';
+import { saveMediaMetadata } from '@/database/journal-repository';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatFullDate, parseLocalDateTime, toLocalDateTimeInput } from '@/utils/date';
@@ -16,13 +17,16 @@ import { MediaThumbnail } from '@/components/media-view';
 import { getPickerMediaType, preparePickedMedia } from '@/utils/picker-media';
 import { persistJournalImage, deleteJournalImage } from '@/utils/image-storage';
 import { createPersistentVideoThumbnail } from '@/utils/video-thumbnail-cache';
+import { createPersistentImageThumbnail } from '@/utils/image-thumbnail-cache';
+import { journalPickerOptions, pickedMediaMetadata, pickedMediaSizeLabel } from '@/utils/image-quality';
+import { prepareImagesForStorage } from '@/utils/image-processing';
 import type { JournalMediaType } from '@/domain/journal';
 
-type PendingMedia = { uri: string; width: number; height: number; mediaType: JournalMediaType; pairedVideoUri: string | null; duration: number | null; thumbnailUri: string | null; fileName?: string | null };
+type PendingMedia = { uri: string; width: number; height: number; mediaType: JournalMediaType; pairedVideoUri: string | null; duration: number | null; thumbnailUri: string | null; fileName?: string | null; pickerMetadata?: ReturnType<typeof pickedMediaMetadata> };
 
 export default function TimeCapsuleComposeScreen() {
   const db = useSQLiteContext();
-  const { readingTheme, readingFontFamily, readingBodyStyle, fontScale } = useAppPreferences();
+  const { preferences, readingTheme, readingFontFamily, readingBodyStyle, fontScale } = useAppPreferences();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [openValue, setOpenValue] = useState(() => { const date = new Date(); date.setFullYear(date.getFullYear() + 1); return toLocalDateTimeInput(date.toISOString()); });
@@ -34,10 +38,12 @@ export default function TimeCapsuleComposeScreen() {
 
   async function pickMedia() {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images', 'videos'], allowsMultipleSelection: true, selectionLimit: 5 - images.length, quality: 0.9 });
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images', 'videos'], allowsMultipleSelection: true, selectionLimit: 5 - images.length, ...journalPickerOptions(preferences.imageSaveQuality) });
       if (result.canceled) return;
-      const prepared = await preparePickedMedia(result.assets);
-      if (prepared) setImages((current) => [...current, ...prepared.slice(0, 5 - current.length).map((item) => ({ uri: item.uri, width: item.width, height: item.height, mediaType: getPickerMediaType(item), pairedVideoUri: null, duration: item.duration ?? null, thumbnailUri: null, fileName: item.fileName }))]);
+      const qualityPrepared = await prepareImagesForStorage(result.assets, preferences.imageSaveQuality);
+      const prepared = await preparePickedMedia(qualityPrepared);
+      if (prepared) await showAppDialog({ title: '媒体已准备好', message: pickedMediaSizeLabel(prepared, preferences.imageSaveQuality), actions: [{ label: '继续', value: 'ok', tone: 'primary' }] });
+      if (prepared) setImages((current) => [...current, ...prepared.slice(0, 5 - current.length).map((item) => ({ uri: item.uri, width: item.width, height: item.height, mediaType: getPickerMediaType(item), pairedVideoUri: null, duration: item.duration ?? null, thumbnailUri: null, fileName: item.fileName, pickerMetadata: pickedMediaMetadata(item) }))]);
     } catch { await showAppDialog({ title: '无法添加媒体', message: '相册暂时无法打开，请检查照片权限后重试。' }); }
   }
 
@@ -69,9 +75,10 @@ export default function TimeCapsuleComposeScreen() {
         const saved = [];
         for (const image of images) {
           const uri = await persistJournalImage(image.uri, image.fileName); persisted.push(uri);
+          if (image.pickerMetadata) await saveMediaMetadata(db, uri, image.pickerMetadata);
           const pairedVideoUri = image.pairedVideoUri ? await persistJournalImage(image.pairedVideoUri) : null;
           if (pairedVideoUri) persisted.push(pairedVideoUri);
-          const thumbnailUri = image.mediaType === 'video' ? await createPersistentVideoThumbnail(uri) : null;
+          const thumbnailUri = image.mediaType === 'video' ? await createPersistentVideoThumbnail(uri) : await createPersistentImageThumbnail(uri);
           if (thumbnailUri) persisted.push(thumbnailUri);
           saved.push({ ...image, uri, pairedVideoUri, thumbnailUri });
         }

@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, InteractionManager, Modal, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, FlatList, InteractionManager, Modal, PanResponder, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { Image } from 'expo-image';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
@@ -20,6 +20,9 @@ import {
   listCalendarMonthCounts,
   listEntriesForDate,
   listEntryFilterOptions,
+  listEntryMonthIndex,
+  findTimelineJumpTarget,
+  listNewerEntryPage,
   listEntryPage,
   listReferencedMediaUris,
   saveCalendarOrder,
@@ -27,6 +30,7 @@ import {
   type EntryFilterOptions,
   type EntryListFilters,
   type EntryPageCursor,
+  type EntryMonthIndexItem,
 } from '@/database/journal-repository';
 import type { Entry } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
@@ -146,11 +150,13 @@ const EMPTY_FILTER_OPTIONS: EntryFilterOptions = { locations: [], tags: [], mood
 
 function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress }: { refreshKey: number; entryRefresh: { id: string; revision: number } | null; scrollRequest: number; onOpen: (entry: Entry) => void; onLongPress: (entry: Entry) => void }) {
   const db = useSQLiteContext();
+  const insets = useSafeAreaInsets();
   const { readingTheme } = useAppPreferences();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [cursor, setCursor] = useState<EntryPageCursor | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingNewer, setLoadingNewer] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const requestId = useRef(0);
@@ -160,6 +166,25 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const [filterKind, setFilterKind] = useState<FilterKind>('none');
   const [filters, setFilters] = useState<EntryListFilters>({});
   const [filterPickerVisible, setFilterPickerVisible] = useState(false);
+  const [timeIndexVisible, setTimeIndexVisible] = useState(false);
+  const [monthIndex, setMonthIndex] = useState<EntryMonthIndexItem[]>([]);
+  const [pickerYear, setTimelinePickerYear] = useState(new Date().getFullYear());
+  const [pickerMonth, setTimelinePickerMonth] = useState(new Date().getMonth() + 1);
+  const [pickerDay, setTimelinePickerDay] = useState(new Date().getDate());
+  const pickerYearRef = useRef(pickerYear);
+  const pickerMonthRef = useRef(pickerMonth);
+  const pickerDayRef = useRef(pickerDay);
+  const [visibleMonth, setVisibleMonth] = useState(() => monthKey(new Date().toISOString()));
+  const [jumpStartCursor, setJumpStartCursor] = useState<EntryPageCursor | null>(null);
+  const [newerCursor, setNewerCursor] = useState<EntryPageCursor | null>(null);
+  const [hasNewer, setHasNewer] = useState(false);
+  const [historyMode, setHistoryMode] = useState(false);
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  const [jumpNotice, setJumpNotice] = useState<string | null>(null);
+  const pendingJumpRef = useRef(false);
+  const visibleEntryIdRef = useRef<string | null>(null);
+  const visibleEntryDateRef = useRef<string | null>(null);
+  const restoreEntryIdRef = useRef<string | null>(null);
   const filterButtonRef = useRef<View>(null);
   const [filterAnchor, setFilterAnchor] = useState<{ x: number; y: number; width: number; height: number }>({ x: spacing.xl, y: 0, width: 96, height: 36 });
   const availableTags = filterOptions.tags;
@@ -173,7 +198,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     const currentRequest = ++requestId.current;
     try {
       const [page, options] = await Promise.all([
-        listEntryPage(db, { limit: PAGE_SIZE, filters }),
+        listEntryPage(db, { limit: PAGE_SIZE, filters, cursor: jumpStartCursor }),
         listEntryFilterOptions(db),
       ]);
       if (currentRequest !== requestId.current) return;
@@ -182,6 +207,20 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       setCursor(page.nextCursor);
       setHasMore(Boolean(page.nextCursor));
       setFilterOptions(options);
+      if (jumpStartCursor) {
+        const first = page.entries[0];
+        setNewerCursor(first ? entryCursor(first) : jumpStartCursor);
+        setHasNewer(Boolean(first));
+      } else {
+        setNewerCursor(null);
+        setHasNewer(false);
+      }
+      if (pendingJumpRef.current && page.entries[0]) {
+        pendingJumpRef.current = false;
+        setHighlightedEntryId(page.entries[0].id);
+        setTimeout(() => setHighlightedEntryId(null), 600);
+        requestAnimationFrame(() => listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: false, viewOffset: 0 }));
+      }
       finishStartupMetric('home', initialLoadStartedAt.current);
     } catch (error) {
       void recordAppError('timeline.load', error);
@@ -189,7 +228,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     } finally {
       if (currentRequest === requestId.current) setLoading(false);
     }
-  }, [db, filters]);
+  }, [db, filters, jumpStartCursor]);
 
   useEffect(() => {
     if (refreshKey <= 0) return;
@@ -234,6 +273,20 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     }
   }, [cursor, db, filters, hasMore, loading, loadingMore]);
 
+  const loadNewer = useCallback(async () => {
+    if (!hasNewer || !newerCursor || loading || loadingNewer) return;
+    const currentRequest = requestId.current;
+    setLoadingNewer(true);
+    try {
+      const page = await listNewerEntryPage(db, { limit: PAGE_SIZE, cursor: newerCursor, filters });
+      if (currentRequest !== requestId.current) return;
+      setEntries((current) => [...page.entries.filter((item) => !current.some((entry) => entry.id === item.id)), ...current]);
+      const first = page.entries[0];
+      setNewerCursor(page.nextCursor ?? (first ? entryCursor(first) : newerCursor));
+      setHasNewer(Boolean(page.nextCursor));
+    } finally { if (currentRequest === requestId.current) setLoadingNewer(false); }
+  }, [db, filters, hasNewer, loading, loadingNewer, newerCursor]);
+
   const groups = useMemo(() => {
     const result: { label: string; weekday: string; data: Entry[] }[] = [];
     for (const entry of entries) {
@@ -244,6 +297,98 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     }
     return result;
   }, [entries]);
+
+  const years = useMemo(() => [...new Set(monthIndex.map((item) => Number(item.key.slice(0, 4))))], [monthIndex]);
+  const monthCounts = useMemo(() => new Map(monthIndex.map((item) => [item.key, item.count])), [monthIndex]);
+  const pickerMonths = useMemo(() => Array.from({ length: 12 }, (_, index) => index + 1), []);
+  const pickerDays = useMemo(() => Array.from({ length: daysInMonth(pickerYear, pickerMonth) }, (_, index) => index + 1), [pickerMonth, pickerYear]);
+  const visibleMonthLabel = `${Number(visibleMonth.slice(0, 4))}年${Number(visibleMonth.slice(5))}月`;
+  const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 20 }), []);
+  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: { item: Entry }[] }) => {
+    const first = viewableItems.find((item) => item.item?.occurredAt)?.item;
+    if (first) { visibleEntryIdRef.current = first.id; visibleEntryDateRef.current = first.occurredAt; setVisibleMonth(monthKey(first.occurredAt)); }
+  }, []);
+
+  const openTimelineEntry = useCallback((entry: Entry) => {
+    restoreEntryIdRef.current = visibleEntryIdRef.current ?? entry.id;
+    onOpen(entry);
+  }, [onOpen]);
+
+  useEffect(() => {
+    if (!entryRefresh || !restoreEntryIdRef.current) return;
+    const id = restoreEntryIdRef.current;
+    const sectionIndex = groups.findIndex((section) => section.data.some((entry) => entry.id === id));
+    if (sectionIndex < 0) return;
+    const itemIndex = groups[sectionIndex].data.findIndex((entry) => entry.id === id);
+    requestAnimationFrame(() => listRef.current?.scrollToLocation({ sectionIndex, itemIndex, animated: false, viewOffset: 0 }));
+  }, [entryRefresh, groups]);
+
+  async function openTimeIndex() {
+    try {
+      const items = await listEntryMonthIndex(db, filters);
+      setMonthIndex(items);
+      const visibleDate = new Date(visibleEntryDateRef.current ?? `${visibleMonth}-01T12:00:00`);
+      const availableYears = [...new Set(items.map((item) => Number(item.key.slice(0, 4))))];
+      const year = availableYears.includes(visibleDate.getFullYear()) ? visibleDate.getFullYear() : availableYears[0] ?? new Date().getFullYear();
+      setTimelinePickerYear(year);
+      setTimelinePickerMonth(visibleDate.getMonth() + 1);
+      setTimelinePickerDay(Math.min(visibleDate.getDate(), daysInMonth(year, visibleDate.getMonth() + 1)));
+      pickerYearRef.current = year;
+      pickerMonthRef.current = visibleDate.getMonth() + 1;
+      pickerDayRef.current = Math.min(visibleDate.getDate(), daysInMonth(year, visibleDate.getMonth() + 1));
+      setTimeIndexVisible(true);
+    } catch {
+      await showAppDialog({ title: '时间索引暂时不可用', message: '时间轴内容没有受到影响，请稍后重试。' });
+    }
+  }
+
+  async function jumpToTimelineDate(year?: number, month?: number, day?: number) {
+    const selectedYear = year ?? pickerYearRef.current;
+    const selectedMonth = month ?? pickerMonthRef.current;
+    const selectedDay = Math.min(day ?? pickerDayRef.current, daysInMonth(selectedYear, selectedMonth));
+    const requestedBoundary = new Date(selectedYear, selectedMonth - 1, selectedDay + 1).toISOString();
+    const target = await findTimelineJumpTarget(db, requestedBoundary, filters);
+    if (!target) { setTimeIndexVisible(false); return; }
+    const targetDate = new Date(target.occurredAt);
+    const boundary = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate() + 1).toISOString();
+    setVisibleMonth(monthKey(target.occurredAt));
+    setJumpStartCursor({ occurredAt: boundary, createdAt: boundary, id: '\uffff' });
+    setHistoryMode(true);
+    pendingJumpRef.current = true;
+    setTimeIndexVisible(false);
+    setLoading(true);
+    if (!target.exact) {
+      setJumpNotice('当天没有记录，已定位到附近记录');
+      setTimeout(() => setJumpNotice(null), 1800);
+    }
+  }
+
+  function selectTimelinePickerYear(year: number) {
+    pickerYearRef.current = year;
+    setTimelinePickerYear(year);
+    const day = Math.min(pickerDayRef.current, daysInMonth(year, pickerMonthRef.current));
+    pickerDayRef.current = day;
+    setTimelinePickerDay(day);
+  }
+
+  function selectTimelinePickerMonth(month: number) {
+    pickerMonthRef.current = month;
+    setTimelinePickerMonth(month);
+    const day = Math.min(pickerDayRef.current, daysInMonth(pickerYearRef.current, month));
+    pickerDayRef.current = day;
+    setTimelinePickerDay(day);
+  }
+
+  function selectTimelinePickerDay(day: number) { pickerDayRef.current = day; setTimelinePickerDay(day); }
+
+  function jumpToToday() {
+    setVisibleMonth(monthKey(new Date().toISOString()));
+    setJumpStartCursor(null);
+    setHistoryMode(false);
+    setTimeIndexVisible(false);
+    if (jumpStartCursor) setLoading(true);
+    else requestAnimationFrame(() => listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: true, viewOffset: 0 }));
+  }
 
   useEffect(() => {
     if (!scrollRequest || !groups.length) return;
@@ -286,6 +431,8 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
 
   return <View style={styles.timelineContainer}>
     {loadError && entries.length ? <Pressable onPress={() => void loadFirstPage()} style={styles.refreshFailure}><Text style={styles.refreshFailureText}>暂时无法刷新，正在显示上次内容　重试</Text></Pressable> : null}
+    <View style={styles.timelineMonthBar}><Pressable accessibilityLabel={`当前浏览 ${visibleMonthLabel}，点击跳转时间`} onPress={() => void openTimeIndex()} style={styles.timelineMonthButton}><Text style={[styles.timelineMonthTitle, { color: readingTheme.text }]}>{visibleMonthLabel}</Text></Pressable>{historyMode ? <Pressable accessibilityLabel="回到最新记录" onPress={jumpToToday} style={[styles.backToLatest, { backgroundColor: readingTheme.surface }]}><Text style={styles.backToLatestText}>回到最新</Text></Pressable> : null}</View>
+    {jumpNotice ? <View pointerEvents="none" style={styles.timelineNotice}><Text style={styles.timelineNoticeText}>{jumpNotice}</Text></View> : null}
     <View style={styles.timelineTools}><ScrollView horizontal style={styles.filterBarScroll} contentContainerStyle={styles.filterBar} showsHorizontalScrollIndicator={false}>
         <Pressable ref={filterButtonRef} accessibilityLabel="选择筛选方式" onPress={openFilterPicker} style={[styles.filterMenuButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.filterMenuText}>{activeFilterCount ? `${activeFilterCount} 项筛选` : filterLabels[filterKind]}</Text><View style={[styles.filterChevron, filterPickerVisible && styles.filterChevronOpen]} /></Pressable>
         {filterKind !== 'none' ? <><Pressable onPress={() => setFilterValue(null)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, !filters[filterKind] && styles.filterChipActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, !filters[filterKind] && styles.filterTextActive]}>不限{filterLabels[filterKind]}</Text></Pressable>{valueOptions.map((option) => <Pressable key={option.value} onPress={() => setFilterValue(option.value)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, filters[filterKind] === option.value && styles.filterChipActive]}><Text numberOfLines={1} style={[styles.filterText, { color: readingTheme.secondary }, filters[filterKind] === option.value && styles.filterTextActive]}>{option.label}</Text></Pressable>)}</> : null}
@@ -297,7 +444,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       sections={groups}
       keyExtractor={(entry) => entry.id}
       renderSectionHeader={({ section }) => <View style={[styles.dayHeader, { backgroundColor: readingTheme.background }]}><Text style={[styles.dayTitle, { color: readingTheme.text }]}>{section.label}</Text><Text style={[styles.weekday, { color: readingTheme.secondary }]}>{section.weekday}</Text></View>}
-      renderItem={({ item }) => <EntryCard entry={item} onPress={() => onOpen(item)} onLongPress={() => onLongPress(item)} />}
+      renderItem={({ item }) => <EntryCard entry={item} highlighted={item.id === highlightedEntryId} onPress={() => openTimelineEntry(item)} onLongPress={() => onLongPress(item)} />}
       ListEmptyComponent={<EmptyState title={!activeFilterCount ? '从此刻开始' : '没有相关记录'} description={!activeFilterCount ? '写下第一条记录，把日子慢慢收好。' : '减少一个筛选条件试试。'} />}
       contentContainerStyle={styles.timeline}
       showsVerticalScrollIndicator={false}
@@ -309,6 +456,11 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       removeClippedSubviews={Platform.OS === 'android'}
       onEndReached={() => { void loadMore(); }}
       onEndReachedThreshold={0.6}
+      refreshing={loadingNewer}
+      onRefresh={() => { if (hasNewer) void loadNewer(); }}
+      onViewableItemsChanged={onViewableItemsChanged}
+      viewabilityConfig={viewabilityConfig}
+      maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       ListFooterComponent={loadingMore ? <ActivityIndicator style={styles.pageLoader} color={colors.primary} /> : null}
     />
     <Modal visible={filterPickerVisible} transparent animationType="fade" onRequestClose={() => setFilterPickerVisible(false)}>
@@ -318,7 +470,61 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
         </View>
       </Pressable></Pressable>
     </Modal>
+    <Modal visible={timeIndexVisible} transparent animationType="fade" onRequestClose={() => setTimeIndexVisible(false)}>
+      <Pressable accessibilityLabel="关闭时间索引" onPress={() => setTimeIndexVisible(false)} style={styles.timeIndexOverlay}>
+        <Pressable onPress={(event) => event.stopPropagation()} style={[styles.timeIndexSheet, { backgroundColor: readingTheme.background, height: 360 + insets.bottom, paddingBottom: Math.max(insets.bottom, spacing.xl) }]}>
+          <View style={[styles.timeIndexHeader, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => setTimeIndexVisible(false)}><Text style={[styles.timeIndexHeaderAction, { color: readingTheme.secondary }]}>取消</Text></Pressable><Text style={[styles.timeIndexTitle, { color: readingTheme.text }]}>选择日期</Text><Pressable hitSlop={12} onPress={() => void jumpToTimelineDate()}><Text style={styles.timeIndexHeaderAction}>确定</Text></Pressable></View>
+          <View style={styles.timeWheel}><View pointerEvents="none" style={[styles.timeWheelSelection, { borderColor: readingTheme.border }]} /><WheelColumn values={years} selected={pickerYear} suffix="年" onPreview={(value) => { pickerYearRef.current = value; }} onSelect={selectTimelinePickerYear} /><WheelColumn values={pickerMonths} selected={pickerMonth} suffix="月" onPreview={(value) => { pickerMonthRef.current = value; }} onSelect={selectTimelinePickerMonth} /><WheelColumn values={pickerDays} selected={pickerDay} suffix="日" onPreview={(value) => { pickerDayRef.current = value; }} onSelect={selectTimelinePickerDay} /></View>
+          <Text style={[styles.timeIndexSummary, { color: readingTheme.secondary }]}>{pickerYear}年{pickerMonth}月 · {monthCounts.get(`${pickerYear}-${String(pickerMonth).padStart(2, '0')}`) ?? 0}条记录</Text>
+          <View style={styles.timeIndexActions}><Pressable disabled={!monthIndex.length} onPress={() => { const earliest = monthIndex.at(-1); if (!earliest) return; const [year, month] = earliest.key.split('-').map(Number); void jumpToTimelineDate(year, month, 1); }}><Text style={[styles.timeIndexAction, !monthIndex.length && styles.timeIndexActionDisabled]}>最早记录</Text></Pressable><Pressable onPress={jumpToToday}><Text style={styles.timeIndexAction}>今天</Text></Pressable></View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   </View>;
+}
+
+function monthKey(iso: string) {
+  const date = new Date(iso);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function entryCursor(entry: Entry): EntryPageCursor {
+  return { occurredAt: entry.occurredAt, createdAt: entry.createdAt, id: entry.id };
+}
+
+const WHEEL_ITEM_HEIGHT = 44;
+function WheelColumn({ values, selected, suffix, onPreview, onSelect }: { values: number[]; selected: number; suffix: string; onPreview: (value: number) => void; onSelect: (value: number) => void }) {
+  const { readingTheme } = useAppPreferences();
+  const ref = useRef<ScrollView>(null);
+  useEffect(() => {
+    const index = Math.max(0, values.indexOf(selected));
+    requestAnimationFrame(() => ref.current?.scrollTo({ y: index * WHEEL_ITEM_HEIGHT, animated: false }));
+  }, [selected, values]);
+  const valueAtOffset = (offset: number) => values[Math.max(0, Math.min(values.length - 1, Math.round(offset / WHEEL_ITEM_HEIGHT)))];
+  const selectedIndex = Math.max(0, values.indexOf(selected));
+  return <ScrollView
+    ref={ref} accessibilityRole="adjustable" accessibilityValue={{ text: `${selected}${suffix}` }}
+    accessibilityActions={[{ name: 'increment', label: '下一个' }, { name: 'decrement', label: '上一个' }]}
+    onAccessibilityAction={(event) => {
+      const delta = event.nativeEvent.actionName === 'increment' ? 1 : event.nativeEvent.actionName === 'decrement' ? -1 : 0;
+      const value = values[Math.max(0, Math.min(values.length - 1, selectedIndex + delta))];
+      if (value != null) onSelect(value);
+    }}
+    showsVerticalScrollIndicator={false}
+    snapToInterval={WHEEL_ITEM_HEIGHT} decelerationRate="fast"
+    contentContainerStyle={styles.timeWheelColumnContent}
+    scrollEventThrottle={16}
+    onScroll={(event) => { const value = valueAtOffset(event.nativeEvent.contentOffset.y); if (value != null) onPreview(value); }}
+    onMomentumScrollEnd={(event) => {
+      const value = valueAtOffset(event.nativeEvent.contentOffset.y);
+      if (value != null) onSelect(value);
+    }}
+    style={styles.timeWheelColumn}
+  >{values.map((value) => <Pressable key={value} onPress={() => onSelect(value)} style={styles.timeWheelItem}><Text style={[styles.timeWheelText, { color: value === selected ? readingTheme.text : readingTheme.secondary }, value === selected && styles.timeWheelTextSelected]}>{value}{suffix}</Text></Pressable>)}</ScrollView>;
+}
+
+function daysInMonth(year: number, month: number) {
+  return new Date(year, month, 0).getDate();
 }
 
 function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, onOpen, onLongPress }: { refreshKey: number; entryRefresh: { id: string; revision: number } | null; selected: string; onSelect: (date: string) => void; onOpen: (entry: Entry) => void; onLongPress: (entry: Entry) => void }) {
@@ -337,9 +543,18 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
   const [monthLoadError, setMonthLoadError] = useState(false);
   const [dateLoadError, setDateLoadError] = useState(false);
   const [calendarRetry, setCalendarRetry] = useState(0);
+  const [monthTransition] = useState(() => new Animated.Value(1));
+  const [monthDirection, setMonthDirection] = useState(1);
+  const monthTransitionReady = useRef(false);
   useEffect(() => { void getCalendarOrder(db).then(setCalendarOrder); }, [db]);
   const month = useMemo(() => new Date(now.getFullYear(), now.getMonth() + monthOffset, 1), [monthOffset, now]);
   const year = month.getFullYear(); const monthIndex = month.getMonth();
+  useEffect(() => {
+    if (!monthTransitionReady.current) { monthTransitionReady.current = true; return; }
+    monthTransition.stopAnimation();
+    monthTransition.setValue(0);
+    Animated.timing(monthTransition, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+  }, [monthOffset, monthTransition]);
   useEffect(() => {
     if (refreshKey === 0) return;
     const start = new Date(year, monthIndex, 1);
@@ -390,14 +605,16 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
   const dateLoading = loadedDate !== selected;
   const awayFromToday = monthOffset !== 0 || selected !== dateKey(now.toISOString());
 
-  function changeMonth(delta: number) {
+  const changeMonth = useCallback((delta: number) => {
+    setMonthDirection(delta < 0 ? -1 : 1);
     const nextOffset = monthOffset + delta;
     const nextMonth = new Date(now.getFullYear(), now.getMonth() + nextOffset, 1);
     setMonthOffset(nextOffset);
     onSelect(`${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-01`);
-  }
+  }, [monthOffset, now, onSelect]);
 
   function jumpToMonth(targetYear: number, targetMonth: number) {
+    setMonthDirection((targetYear - year) * 12 + targetMonth - monthIndex < 0 ? -1 : 1);
     setMonthOffset((targetYear - now.getFullYear()) * 12 + targetMonth - now.getMonth());
     onSelect(`${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-01`);
     setMonthPickerVisible(false);
@@ -409,7 +626,23 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
     void saveCalendarOrder(db, next).catch(() => setCalendarOrder(calendarOrder));
   }
 
+  const monthSwipeResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, gesture) => (
+      Math.abs(gesture.dx) > 12
+      && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.35
+    ),
+    onPanResponderRelease: (_, gesture) => {
+      const intentionalSwipe = Math.abs(gesture.dx) >= 48 || (Math.abs(gesture.vx) >= 0.45 && Math.abs(gesture.dx) >= 24);
+      if (intentionalSwipe) changeMonth(gesture.dx < 0 ? 1 : -1);
+    },
+    onPanResponderTerminationRequest: () => true,
+  }), [changeMonth]);
+
   const cellSize = Math.floor(calendarWidth / 7);
+  const monthTransitionStyle = {
+    opacity: monthTransition.interpolate({ inputRange: [0, 1], outputRange: [0.82, 1] }),
+    transform: [{ translateX: monthTransition.interpolate({ inputRange: [0, 1], outputRange: [monthDirection * 16, 0] }) }],
+  };
 
   const calendarHeader = <><View style={styles.monthHeader}>
       <Pressable accessibilityLabel="上个月" onPress={() => changeMonth(-1)} style={[styles.monthButton, { backgroundColor: readingTheme.surface }]}><View style={[styles.monthArrow, styles.monthArrowLeft, { borderColor: readingTheme.text }]} /></Pressable>
@@ -417,7 +650,7 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
       <Pressable accessibilityLabel="下个月" onPress={() => changeMonth(1)} style={[styles.monthButton, { backgroundColor: readingTheme.surface }]}><View style={[styles.monthArrow, styles.monthArrowRight, { borderColor: readingTheme.text }]} /></Pressable>
     </View>
     {monthLoadError ? <Pressable onPress={() => setCalendarRetry((value) => value + 1)} style={styles.calendarFailure}><Text style={styles.calendarFailureText}>月份标记暂时无法刷新　重试</Text></Pressable> : null}
-    <View style={styles.calendarBoard} onLayout={(event) => setCalendarWidth(event.nativeEvent.layout.width)}>
+    <Animated.View accessibilityLabel="日历，可左右滑动切换月份" {...monthSwipeResponder.panHandlers} style={[styles.calendarBoard, monthTransitionStyle]} onLayout={(event) => setCalendarWidth(event.nativeEvent.layout.width)}>
       {cellSize > 0 ? <>
         <View style={[styles.weekRow, { width: cellSize * 7 }]}>{['一','二','三','四','五','六','日'].map((item) => <Text allowFontScaling={false} key={item} style={[styles.weekLabel, { width: cellSize, color: readingTheme.secondary }]}>{item}</Text>)}</View>
         <View style={[styles.grid, { width: cellSize * 7 }]}>{cells.map((cell, index) => {
@@ -428,7 +661,7 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
           </Pressable>;
         })}</View>
       </> : null}
-    </View>
+    </Animated.View>
     <View style={[styles.selectedHeader, { borderTopColor: readingTheme.border }]}> 
       <Text style={[styles.selectedCount, { color: readingTheme.secondary }]}>{dateLoading ? '读取中…' : `${orderedSelectedEntries.length} 条记录`}</Text>
       {orderedSelectedEntries.length > 1 ? <Pressable accessibilityLabel={`当前${calendarOrder === 'asc' ? '正序' : '倒序'}，点击切换`} hitSlop={8} onPress={toggleCalendarOrder} style={[styles.calendarOrderButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.calendarOrderText}>{calendarOrder === 'asc' ? '正序' : '倒序'}</Text><View style={styles.calendarOrderChevron} /></Pressable> : null}
@@ -467,11 +700,14 @@ const styles = StyleSheet.create({
   loadFailure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxxl }, loadFailureTitle: { fontFamily: fonts.serif, fontSize: 18 }, loadFailureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { marginTop: spacing.xl, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, retryButtonText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, refreshFailure: { alignItems: 'center', paddingVertical: spacing.xs, backgroundColor: colors.primarySoft }, refreshFailureText: { color: colors.primary, fontSize: 10 },
   quickHint: { position: 'absolute', left: spacing.xl, right: spacing.xl, bottom: 86, zIndex: 30, minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md, elevation: 4, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }, quickHintText: { fontSize: 11 }, quickHintClose: { marginLeft: spacing.md, color: colors.primary, fontSize: 11, fontWeight: '700' },
   timelineContainer: { flex: 1 }, timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
+  timelineMonthBar: { minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl }, timelineMonthButton: { minHeight: 36, alignItems: 'center', justifyContent: 'center' }, timelineMonthTitle: { fontFamily: fonts.serif, fontSize: 17, lineHeight: 24, fontWeight: '600' }, backToLatest: { position: 'absolute', right: spacing.xl, paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill }, backToLatestText: { color: colors.primary, fontSize: 9, fontWeight: '700' },
+  timelineNotice: { position: 'absolute', zIndex: 20, top: 38, alignSelf: 'center', paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: '#25302CEB' }, timelineNoticeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '600' },
   timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.xl, paddingRight: spacing.xl, gap: spacing.sm }, filterBarScroll: { flex: 1, flexGrow: 1 }, filterBar: { alignItems: 'center', gap: spacing.sm }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '600' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] }, clearFilter: { paddingHorizontal: spacing.xs, color: colors.textFaint, fontSize: 10 },
   filterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterChipActive: { backgroundColor: colors.primary },
   filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
   activeFilterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill }, activeFilterText: { color: colors.primary, fontSize: 10, fontWeight: '600' },
   filterOverlay: { flex: 1, backgroundColor: '#00000014' }, filterPicker: { position: 'absolute', overflow: 'hidden', borderRadius: radii.md, backgroundColor: colors.background, elevation: 8, shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } }, filterKinds: { paddingVertical: spacing.xs }, filterKind: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 10, fontWeight: '600' }, filterCheck: { marginLeft: spacing.xs, color: colors.primary, fontSize: 12, fontWeight: '700' },
+  timeIndexOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, timeIndexSheet: { height: 360, paddingBottom: spacing.xl, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, timeIndexHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, timeIndexHeaderAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, timeWheel: { height: 176, flexDirection: 'row', marginTop: spacing.md, paddingHorizontal: spacing.lg }, timeWheelSelection: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: 66, height: WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, timeWheelColumn: { flex: 1 }, timeWheelColumnContent: { paddingVertical: 66 }, timeWheelItem: { height: WHEEL_ITEM_HEIGHT, alignItems: 'center', justifyContent: 'center' }, timeWheelText: { fontSize: 16 }, timeWheelTextSelected: { fontSize: 20, fontWeight: '600' }, timeIndexSummary: { marginTop: spacing.sm, fontSize: 10, textAlign: 'center' }, timeIndexActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 'auto', paddingHorizontal: spacing.xxl }, timeIndexAction: { color: colors.primary, fontSize: 12, fontWeight: '700' }, timeIndexActionDisabled: { opacity: 0.35 },
   dayHeader: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm, paddingTop: 3, paddingBottom: 3 },
   dayTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 23, fontWeight: '600', includeFontPadding: false },
   weekday: { color: colors.textFaint, fontFamily: fonts.sans, fontSize: 9, lineHeight: 14, includeFontPadding: false },

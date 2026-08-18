@@ -3,6 +3,7 @@ import { Directory, EncodingType, File, Paths } from 'expo-file-system';
 import { shouldDeleteUnusedMedia } from '@/utils/media-cleanup-policy';
 
 const imageDirectory = new Directory(Paths.document, 'journal-images');
+const thumbnailDirectory = new Directory(Paths.cache, 'journal-thumbnails');
 let lastCleanupAt = 0;
 
 export async function persistJournalImage(sourceUri: string, suggestedName?: string | null) {
@@ -31,14 +32,40 @@ export async function persistJournalImageBytes(data: Uint8Array, extension = '.j
   return destination.uri;
 }
 
+export async function persistJournalThumbnail(sourceUri: string) {
+  thumbnailDirectory.create({ idempotent: true, intermediates: true });
+  const destination = new File(thumbnailDirectory, `${Date.now()}-${Math.random().toString(36).slice(2, 9)}.jpg`);
+  await new File(sourceUri).copy(destination);
+  return destination.uri;
+}
+
 export function deleteJournalImage(uri: string) {
-  if (!uri.startsWith(imageDirectory.uri)) return;
+  if (!uri.startsWith(imageDirectory.uri) && !uri.startsWith(thumbnailDirectory.uri)) return;
   try {
     const file = new File(uri);
     if (file.exists) file.delete();
   } catch {
     // A missing file is already in the desired state.
   }
+}
+
+function directoryUsage(directory: Directory) {
+  if (!directory.exists) return { files: 0, bytes: 0 };
+  let files = 0; let bytes = 0;
+  for (const item of directory.list()) if (item instanceof File) { files += 1; bytes += item.size ?? 0; }
+  return { files, bytes };
+}
+
+export function getJournalStorageBreakdown() {
+  const original = directoryUsage(imageDirectory);
+  const thumbnails = directoryUsage(thumbnailDirectory);
+  return { original, thumbnails, totalBytes: original.bytes + thumbnails.bytes };
+}
+
+export function clearJournalThumbnailFiles() {
+  const usage = directoryUsage(thumbnailDirectory);
+  if (thumbnailDirectory.exists) thumbnailDirectory.delete();
+  return usage;
 }
 
 export async function getJournalMediaStorageUsage() {

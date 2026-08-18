@@ -3,6 +3,7 @@ import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, En
 import { getJournalTemplateSettings, saveJournalTemplateSettings } from './template-repository.ts';
 import { mergeJournalTemplateSettings } from '../utils/journal-templates.ts';
 import { findLocationDuplicates, type LocationDuplicateSuggestion } from '../utils/location-duplicates.ts';
+import { cleanupOrphanMediaMetadata, deleteMediaMetadataForUris } from './media-maintenance.ts';
 
 type EntryRow = { id: string; content: string; occurred_at: string; created_at: string; updated_at: string; mood: string | null; weather: string | null; favorited_at: string | null; location_name: string | null; latitude: number | null; longitude: number | null };
 type FollowUpRow = { id: string; entry_id: string; content: string; created_at: string; updated_at: string };
@@ -14,6 +15,7 @@ export type EntryListFilter = { kind: EntryFilterKind; value: string | null };
 export type EntryListFilters = Partial<Record<Exclude<EntryFilterKind, 'none'>, string | null>>;
 export type EntryPageCursor = { occurredAt: string; createdAt: string; id: string };
 export type EntryPage = { entries: Entry[]; nextCursor: EntryPageCursor | null };
+export type EntryMonthIndexItem = { key: string; count: number };
 export type EntryFilterOptions = { locations: string[]; tags: string[]; moods: string[]; weather: string[] };
 export type EntryManagementSummary = Pick<Entry, 'id' | 'content' | 'occurredAt' | 'locationName' | 'tags'>;
 export type DeletedEntrySummary = Pick<DeletedEntry, 'id' | 'content' | 'occurredAt' | 'deletedAt'>;
@@ -188,21 +190,26 @@ export async function listJournalMedia(db: SQLiteDatabase): Promise<LibraryMedia
     uri: string; width: number; height: number; sort_order: number; media_type: JournalMediaType;
     paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null;
     occurred_at: string; attached_at: string; entry_content: string; source_content: string;
+    captured_at: string | null; mime_type: string | null; original_filename: string | null;
   }>(`
     SELECT * FROM (
     SELECT i.id, i.entry_id, 'entry' AS source, i.entry_id AS source_id,
       i.uri, i.width, i.height, i.sort_order, i.media_type, i.paired_video_uri, i.duration, i.thumbnail_uri,
-      e.occurred_at, i.created_at AS attached_at, SUBSTR(e.content, 1, 500) AS entry_content, SUBSTR(e.content, 1, 500) AS source_content
+      e.occurred_at, i.created_at AS attached_at, SUBSTR(e.content, 1, 500) AS entry_content, SUBSTR(e.content, 1, 500) AS source_content,
+      m.captured_at, m.mime_type, m.original_filename
     FROM entry_images i
     INNER JOIN entries e ON e.id = i.entry_id
+    LEFT JOIN media_metadata m ON m.uri = i.uri
     WHERE e.deleted_at IS NULL
     UNION ALL
     SELECT i.id, f.entry_id, 'followUp' AS source, i.follow_up_id AS source_id,
       i.uri, i.width, i.height, i.sort_order, i.media_type, i.paired_video_uri, i.duration, i.thumbnail_uri,
-      e.occurred_at, i.created_at AS attached_at, SUBSTR(e.content, 1, 500) AS entry_content, SUBSTR(f.content, 1, 500) AS source_content
+      e.occurred_at, i.created_at AS attached_at, SUBSTR(e.content, 1, 500) AS entry_content, SUBSTR(f.content, 1, 500) AS source_content,
+      m.captured_at, m.mime_type, m.original_filename
     FROM follow_up_images i
     INNER JOIN follow_ups f ON f.id = i.follow_up_id
     INNER JOIN entries e ON e.id = f.entry_id
+    LEFT JOIN media_metadata m ON m.uri = i.uri
     WHERE f.deleted_at IS NULL AND e.deleted_at IS NULL
     )
     ORDER BY occurred_at DESC,
@@ -216,7 +223,16 @@ export async function listJournalMedia(db: SQLiteDatabase): Promise<LibraryMedia
     uri: row.uri, width: row.width, height: row.height, sortOrder: row.sort_order, mediaType: row.media_type,
     pairedVideoUri: row.paired_video_uri, duration: row.duration, thumbnailUri: row.thumbnail_uri,
     occurredAt: row.occurred_at, attachedAt: row.attached_at, entryContent: row.entry_content, sourceContent: row.source_content,
+    capturedAt: row.captured_at, mimeType: row.mime_type, originalFilename: row.original_filename,
   }));
+}
+
+export async function saveMediaMetadata(db: SQLiteDatabase, uri: string, metadata: { capturedAt: string | null; mimeType: string | null; originalFilename: string | null }) {
+  await db.runAsync(
+    `INSERT INTO media_metadata (uri, captured_at, mime_type, original_filename) VALUES (?, ?, ?, ?)
+     ON CONFLICT(uri) DO UPDATE SET captured_at = excluded.captured_at, mime_type = excluded.mime_type, original_filename = excluded.original_filename`,
+    uri, metadata.capturedAt, metadata.mimeType, metadata.originalFilename,
+  );
 }
 
 function startOfLocalDay(date: Date) {
@@ -312,6 +328,82 @@ export async function listEntryPage(
       ? { occurredAt: last.occurred_at, createdAt: last.created_at, id: last.id }
       : null,
   };
+}
+
+export async function listNewerEntryPage(
+  db: SQLiteDatabase,
+  options: { limit?: number; cursor: EntryPageCursor; filters?: EntryListFilters },
+): Promise<EntryPage> {
+  const limit = Math.max(1, Math.min(options.limit ?? 30, 100));
+  const where = ['e.deleted_at IS NULL', `(
+    e.occurred_at > ? OR
+    (e.occurred_at = ? AND e.created_at > ?) OR
+    (e.occurred_at = ? AND e.created_at = ? AND e.id > ?)
+  )`];
+  const params: (string | number)[] = [
+    options.cursor.occurredAt, options.cursor.occurredAt, options.cursor.createdAt,
+    options.cursor.occurredAt, options.cursor.createdAt, options.cursor.id,
+  ];
+  if (options.filters) {
+    (Object.entries(options.filters) as [Exclude<EntryFilterKind, 'none'>, string | null][])
+      .forEach(([kind, value]) => appendEntryFilter(where, params, { kind, value }));
+  }
+  params.push(limit + 1);
+  const rows = await db.getAllAsync<EntryRow>(
+    `SELECT e.id, e.content, e.occurred_at, e.created_at, e.updated_at, e.mood, e.weather,
+       e.favorited_at, e.location_name, e.latitude, e.longitude
+     FROM entries e WHERE ${where.join(' AND ')}
+     ORDER BY e.occurred_at ASC, e.created_at ASC, e.id ASC LIMIT ?`, params,
+  );
+  const hasMore = rows.length > limit;
+  const pageRows = (hasMore ? rows.slice(0, limit) : rows).reverse();
+  const entries = await attachFollowUps(db, pageRows);
+  const first = pageRows[0];
+  return {
+    entries,
+    nextCursor: hasMore && first ? { occurredAt: first.occurred_at, createdAt: first.created_at, id: first.id } : null,
+  };
+}
+
+export async function listEntryMonthIndex(db: SQLiteDatabase, filters: EntryListFilters = {}): Promise<EntryMonthIndexItem[]> {
+  const where = ['e.deleted_at IS NULL'];
+  const params: (string | number)[] = [];
+  (Object.entries(filters) as [Exclude<EntryFilterKind, 'none'>, string | null][])
+    .forEach(([kind, value]) => appendEntryFilter(where, params, { kind, value }));
+  const rows = await db.getAllAsync<{ occurred_at: string }>(
+    `SELECT e.occurred_at FROM entries e WHERE ${where.join(' AND ')} ORDER BY e.occurred_at DESC`, params,
+  );
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const date = new Date(row.occurred_at);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts].map(([key, count]) => ({ key, count }));
+}
+
+export async function findTimelineJumpTarget(db: SQLiteDatabase, before: string, filters: EntryListFilters = {}) {
+  const where = ['e.deleted_at IS NULL', 'e.occurred_at < ?'];
+  const params: (string | number)[] = [before];
+  (Object.entries(filters) as [Exclude<EntryFilterKind, 'none'>, string | null][])
+    .forEach(([kind, value]) => appendEntryFilter(where, params, { kind, value }));
+  const previous = await db.getFirstAsync<{ occurred_at: string }>(
+    `SELECT e.occurred_at FROM entries e WHERE ${where.join(' AND ')} ORDER BY e.occurred_at DESC, e.created_at DESC, e.id DESC LIMIT 1`, params,
+  );
+  if (previous) return { occurredAt: previous.occurred_at, exact: sameLocalDay(previous.occurred_at, new Date(new Date(before).getFullYear(), new Date(before).getMonth(), new Date(before).getDate() - 1).toISOString()) };
+  const fallbackWhere = ['e.deleted_at IS NULL'];
+  const fallbackParams: (string | number)[] = [];
+  (Object.entries(filters) as [Exclude<EntryFilterKind, 'none'>, string | null][])
+    .forEach(([kind, value]) => appendEntryFilter(fallbackWhere, fallbackParams, { kind, value }));
+  const earliest = await db.getFirstAsync<{ occurred_at: string }>(
+    `SELECT e.occurred_at FROM entries e WHERE ${fallbackWhere.join(' AND ')} ORDER BY e.occurred_at ASC, e.created_at ASC, e.id ASC LIMIT 1`, fallbackParams,
+  );
+  return earliest ? { occurredAt: earliest.occurred_at, exact: false } : null;
+}
+
+function sameLocalDay(left: string, right: string) {
+  const a = new Date(left); const b = new Date(right);
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
 export async function listEntryFilterOptions(db: SQLiteDatabase): Promise<EntryFilterOptions> {
@@ -1250,6 +1342,7 @@ export async function permanentlyDeleteEntry(db: SQLiteDatabase, id: string) {
     id, id, id, id, id, id,
   );
   await db.runAsync('DELETE FROM entries WHERE id = ? AND deleted_at IS NOT NULL', id);
+  await cleanupOrphanMediaMetadata(db).catch(() => undefined);
   return images.map((image) => image.uri);
 }
 
@@ -1285,6 +1378,7 @@ export async function cleanupExpiredTrash(db: SQLiteDatabase, retentionDays = 30
     cutoff, cutoff, cutoff, cutoff, cutoff, cutoff,
   );
   await db.runAsync('DELETE FROM entries WHERE deleted_at IS NOT NULL AND deleted_at < ?', cutoff);
+  await cleanupOrphanMediaMetadata(db).catch(() => undefined);
   return images.map((image) => image.uri);
 }
 
@@ -1327,6 +1421,11 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
   const capsules = await db.getAllAsync<{ id: string; title: string; content: string; open_at: string; opened_at: string | null; created_at: string; updated_at: string; deleted_at: string | null; notification_enabled: number }>('SELECT id, title, content, open_at, opened_at, created_at, updated_at, deleted_at, notification_enabled FROM time_capsules ORDER BY created_at ASC');
   const capsuleReplies = await db.getAllAsync<{ id: string; capsule_id: string; content: string; created_at: string; updated_at: string }>('SELECT id, capsule_id, content, created_at, updated_at FROM time_capsule_replies ORDER BY created_at ASC');
   const capsuleImages = await db.getAllAsync<{ id: string; capsule_id: string; uri: string; width: number; height: number; sort_order: number; created_at: string; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null }>('SELECT id, capsule_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri FROM time_capsule_images ORDER BY capsule_id, sort_order ASC');
+  const mediaMetadata = await db.getAllAsync<{ id: string; source: 'entry' | 'followUp' | 'timeCapsule'; captured_at: string | null; mime_type: string | null; original_filename: string | null }>(`
+    SELECT i.id, 'entry' AS source, m.captured_at, m.mime_type, m.original_filename FROM entry_images i INNER JOIN media_metadata m ON m.uri = i.uri
+    UNION ALL SELECT i.id, 'followUp' AS source, m.captured_at, m.mime_type, m.original_filename FROM follow_up_images i INNER JOIN media_metadata m ON m.uri = i.uri
+    UNION ALL SELECT i.id, 'timeCapsule' AS source, m.captured_at, m.mime_type, m.original_filename FROM time_capsule_images i INNER JOIN media_metadata m ON m.uri = i.uri
+  `);
   const metadataCatalog = await getMetadataCatalog(db);
   const journalTemplates = await getJournalTemplateSettings(db);
   const preferencesRow = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'app-preferences'");
@@ -1355,7 +1454,7 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
   }
   return {
     format: 'shishi-journal',
-    version: 13,
+    version: 14,
     exportedAt: new Date().toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     entries: entries.map((entry) => ({
@@ -1370,21 +1469,22 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
     images: images.map((image) => ({
       id: image.id, entryId: image.entry_id, localUri: image.uri, width: image.width, height: image.height,
       sortOrder: image.sort_order, createdAt: image.created_at, mediaType: image.media_type,
-      pairedVideoLocalUri: image.paired_video_uri, duration: image.duration, thumbnailLocalUri: image.thumbnail_uri,
+      pairedVideoLocalUri: image.paired_video_uri, duration: image.duration, thumbnailLocalUri: null,
     })),
     followUpImages: followUpImages.map((image) => ({
       id: image.id, followUpId: image.follow_up_id, localUri: image.uri, width: image.width, height: image.height,
       sortOrder: image.sort_order, createdAt: image.created_at, mediaType: image.media_type,
-      pairedVideoLocalUri: image.paired_video_uri, duration: image.duration, thumbnailLocalUri: image.thumbnail_uri,
+      pairedVideoLocalUri: image.paired_video_uri, duration: image.duration, thumbnailLocalUri: null,
     })),
     tags: tags.map((tag) => ({ entryId: tag.entry_id, label: tag.label, sortOrder: tag.sort_order })),
+    mediaMetadata: mediaMetadata.map((item) => ({ id: item.id, source: item.source, capturedAt: item.captured_at, mimeType: item.mime_type, originalFilename: item.original_filename })),
     versions: versions.map((version) => ({ id: version.id, entryId: version.entry_id, content: version.content,
       occurredAt: version.occurred_at, mood: version.mood, weather: version.weather, locationName: version.location_name,
       latitude: version.latitude, longitude: version.longitude, tags: parseJsonArray<string>(version.tags_json), createdAt: version.created_at })),
     suppressedMemoryEntryIds: suppressed.map((item) => item.entry_id),
     timeCapsules: capsules.map((item) => ({ id: item.id, title: item.title, content: item.content, openAt: item.open_at, openedAt: item.opened_at, createdAt: item.created_at, updatedAt: item.updated_at, deletedAt: item.deleted_at, notificationEnabled: item.notification_enabled === 1 })),
     timeCapsuleReplies: capsuleReplies.map((item) => ({ id: item.id, capsuleId: item.capsule_id, content: item.content, createdAt: item.created_at, updatedAt: item.updated_at })),
-    timeCapsuleImages: capsuleImages.map((item) => ({ id: item.id, capsuleId: item.capsule_id, localUri: item.uri, width: item.width, height: item.height, sortOrder: item.sort_order, createdAt: item.created_at, mediaType: item.media_type, pairedVideoLocalUri: item.paired_video_uri, duration: item.duration, thumbnailLocalUri: item.thumbnail_uri })),
+    timeCapsuleImages: capsuleImages.map((item) => ({ id: item.id, capsuleId: item.capsule_id, localUri: item.uri, width: item.width, height: item.height, sortOrder: item.sort_order, createdAt: item.created_at, mediaType: item.media_type, pairedVideoLocalUri: item.paired_video_uri, duration: item.duration, thumbnailLocalUri: null })),
     metadataCatalog,
     journalTemplates,
     appPreferences,
@@ -1525,6 +1625,15 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
       await txn.runAsync(`INSERT INTO time_capsule_images (id, capsule_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET uri = excluded.uri, width = excluded.width, height = excluded.height, sort_order = excluded.sort_order, media_type = excluded.media_type, paired_video_uri = excluded.paired_video_uri, duration = excluded.duration, thumbnail_uri = excluded.thumbnail_uri`, image.id, image.capsuleId, image.localUri, image.width, image.height, image.sortOrder, image.createdAt, image.mediaType ?? 'image', image.pairedVideoLocalUri ?? null, image.duration ?? null, image.thumbnailLocalUri ?? null);
     }
+    for (const metadata of backup.mediaMetadata ?? []) {
+      const table = metadata.source === 'entry' ? 'entry_images' : metadata.source === 'followUp' ? 'follow_up_images' : 'time_capsule_images';
+      const row = await txn.getFirstAsync<{ uri: string }>(`SELECT uri FROM ${table} WHERE id = ?`, metadata.id);
+      if (row?.uri) await txn.runAsync(
+        `INSERT INTO media_metadata (uri, captured_at, mime_type, original_filename) VALUES (?, ?, ?, ?)
+         ON CONFLICT(uri) DO UPDATE SET captured_at = excluded.captured_at, mime_type = excluded.mime_type, original_filename = excluded.original_filename`,
+        row.uri, metadata.capturedAt, metadata.mimeType, metadata.originalFilename,
+      );
+    }
     if (backup.metadataCatalog) {
       const current = await getMetadataCatalog(txn);
       const restored: MetadataCatalog = {
@@ -1607,6 +1716,7 @@ export async function updateFollowUpWithImages(
       image.id ?? createId(), id, image.uri, image.width, image.height, index, image.id ? existingById.get(image.id)?.created_at ?? now : now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null, image.thumbnailUri ?? null,
     );
   });
+  await cleanupOrphanMediaMetadata(db).catch(() => undefined);
   return removedUris;
 }
 
@@ -1619,6 +1729,7 @@ export async function deleteFollowUp(db: SQLiteDatabase, id: string) {
   );
   const now = new Date().toISOString();
   await db.runAsync('UPDATE follow_ups SET deleted_at = ?, updated_at = ? WHERE id = ?', now, now, id);
+  await deleteMediaMetadataForUris(db, images.map((image) => image.uri)).catch(() => undefined);
   return images.map((image) => image.uri);
 }
 
@@ -1644,6 +1755,7 @@ export async function replaceEntryImages(
       );
     }
   });
+  await cleanupOrphanMediaMetadata(db).catch(() => undefined);
   return existing.filter((image) => !keptUris.has(image.uri)).map((image) => image.uri);
 }
 
@@ -1721,6 +1833,7 @@ export async function saveDraft(db: SQLiteDatabase, draft: Omit<Draft, 'createdA
 export async function deleteDraft(db: SQLiteDatabase, id: string, keepImages = false) {
   const draft = await getDraft(db, id);
   await db.runAsync('DELETE FROM drafts WHERE id = ?', id);
+  if (!keepImages) await cleanupOrphanMediaMetadata(db).catch(() => undefined);
   return keepImages ? [] : draft?.images.flatMap((image) => [image.uri, image.pairedVideoUri, image.thumbnailUri].filter((uri): uri is string => Boolean(uri))) ?? [];
 }
 

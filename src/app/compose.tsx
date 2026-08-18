@@ -8,7 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
-import { createDraftId, createEntryWithDetails, deleteDraft, getDraft, getEntry, getLocationPageDetail, isNewFootprintLocation, listEntryFilterOptions, saveDraft, saveLocationDetail, updateEntryWithDetails, type EntryFilterOptions } from '@/database/journal-repository';
+import { createDraftId, createEntryWithDetails, deleteDraft, getDraft, getEntry, getLocationPageDetail, isNewFootprintLocation, listEntryFilterOptions, saveDraft, saveLocationDetail, saveMediaMetadata, updateEntryWithDetails, type EntryFilterOptions } from '@/database/journal-repository';
 import { listJournalTemplates } from '@/database/template-repository';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatShortDateTime, occurrenceTimeForDate, parseLocalDateTime, toLocalDateTimeInput } from '@/utils/date';
@@ -22,6 +22,9 @@ import { MediaThumbnail } from '@/components/media-view';
 import type { JournalMediaType } from '@/domain/journal';
 import { getPickerMediaType, preparePickedMedia } from '@/utils/picker-media';
 import { createPersistentVideoThumbnail } from '@/utils/video-thumbnail-cache';
+import { createPersistentImageThumbnail } from '@/utils/image-thumbnail-cache';
+import { journalPickerOptions, pickedMediaMetadata, pickedMediaSizeLabel } from '@/utils/image-quality';
+import { prepareImagesForStorage } from '@/utils/image-processing';
 import { formatLocationName } from '@/utils/location-name';
 import { LocationPickerModal } from '@/components/location-picker-modal';
 import { applyJournalTemplate, JOURNAL_TEMPLATES, type JournalTemplate } from '@/utils/journal-templates';
@@ -382,7 +385,8 @@ export default function ComposeScreen() {
       const persisted = await Promise.all(assets.slice(0, 9 - images.length).map(async (asset) => {
         const mediaType = getPickerMediaType(asset);
         const uri = await persistJournalImage(asset.uri, asset.fileName);
-        const thumbnailUri = mediaType === 'video' ? await createPersistentVideoThumbnail(uri) : null;
+        await saveMediaMetadata(db, uri, pickedMediaMetadata(asset));
+        const thumbnailUri = mediaType === 'video' ? await createPersistentVideoThumbnail(uri) : await createPersistentImageThumbnail(uri);
         return { id: 'draft-image', uri, width: asset.width, height: asset.height, draftOwned: true,
           mediaType, pairedVideoUri: null, duration: asset.duration ?? null, thumbnailUri };
       }));
@@ -401,23 +405,37 @@ export default function ComposeScreen() {
   }
 
   async function chooseFromLibrary() {
-    const remaining = 9 - images.length;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'], allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.85,
-    });
-    if (!result.canceled) {
-      const prepared = await preparePickedMedia(result.assets, (message) => setToast(message ?? ''));
-      if (prepared) await addImages(prepared);
+    try {
+      const remaining = 9 - images.length;
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images', 'videos'], allowsMultipleSelection: true, selectionLimit: remaining, ...journalPickerOptions(preferences.imageSaveQuality),
+      });
+      if (result.canceled) return;
+      const qualityPrepared = await prepareImagesForStorage(result.assets, preferences.imageSaveQuality, (message) => setToast(message ?? ''));
+      const prepared = await preparePickedMedia(qualityPrepared, (message) => setToast(message ?? ''));
+      if (!prepared) return;
+      setToast(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
+      await addImages(prepared);
+    } catch {
+      setToast('');
+      await showAppDialog({ title: '无法添加媒体', message: '图片或视频处理失败，可能是文件格式暂不支持或文件已损坏。请换一个文件后重试。' });
     }
   }
 
   async function openCamera() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) { await showAppDialog({ title: '无法使用相机', message: '请在系统设置中允许拾时使用相机。' }); return; }
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images', 'videos'], videoMaxDuration: 60, quality: 0.85 });
-    if (!result.canceled) {
-      const prepared = await preparePickedMedia(result.assets, (message) => setToast(message ?? ''));
-      if (prepared) await addImages(prepared);
+    try {
+      const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images', 'videos'], videoMaxDuration: 60, ...journalPickerOptions(preferences.imageSaveQuality) });
+      if (result.canceled) return;
+      const qualityPrepared = await prepareImagesForStorage(result.assets, preferences.imageSaveQuality, (message) => setToast(message ?? ''));
+      const prepared = await preparePickedMedia(qualityPrepared, (message) => setToast(message ?? ''));
+      if (!prepared) return;
+      setToast(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
+      await addImages(prepared);
+    } catch {
+      setToast('');
+      await showAppDialog({ title: '无法添加媒体', message: '拍摄的媒体处理失败，请重新拍摄后再试。' });
     }
   }
 

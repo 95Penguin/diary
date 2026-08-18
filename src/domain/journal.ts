@@ -9,6 +9,7 @@ export type LibraryMedia = {
   uri: string; width: number; height: number; sortOrder: number; mediaType: JournalMediaType;
   pairedVideoUri: string | null; duration: number | null; thumbnailUri: string | null;
   occurredAt: string; attachedAt: string; entryContent: string; sourceContent: string;
+  capturedAt: string | null; mimeType: string | null; originalFilename: string | null;
 };
 export type Entry = {
   id: string; content: string; occurredAt: string; createdAt: string; updatedAt: string;
@@ -26,7 +27,7 @@ export type FootprintEntry = { id: string; content: string; occurredAt: string; 
 export type PendingFootprintEntry = Pick<FootprintEntry, 'id' | 'content' | 'occurredAt' | 'locationName'>;
 export type PendingLocationGroup = { locationName: string; count: number };
 export type JournalBackup = {
-  format: 'shishi-journal'; version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13; exportedAt: string; timezone: string;
+  format: 'shishi-journal'; version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14; exportedAt: string; timezone: string;
   entries: { id: string; content: string; occurredAt: string; createdAt: string; updatedAt: string; deletedAt: string | null; mood?: string | null; weather?: string | null; favoritedAt?: string | null; locationName?: string | null; latitude?: number | null; longitude?: number | null }[];
   followUps: { id: string; entryId: string; content: string; createdAt: string; updatedAt: string; deletedAt: string | null }[];
   images: { id: string; entryId: string; localUri: string; width: number; height: number; sortOrder: number; createdAt: string; mediaType?: JournalMediaType; pairedVideoLocalUri?: string | null; duration?: number | null; thumbnailLocalUri?: string | null; dataBase64?: string | null; mimeType?: string | null; pairedVideoDataBase64?: string | null; pairedVideoMimeType?: string | null; thumbnailDataBase64?: string | null; thumbnailMimeType?: string | null }[];
@@ -35,6 +36,7 @@ export type JournalBackup = {
   timeCapsuleReplies?: { id: string; capsuleId: string; content: string; createdAt: string; updatedAt: string }[];
   timeCapsuleImages?: { id: string; capsuleId: string; localUri: string; width: number; height: number; sortOrder: number; createdAt: string; mediaType?: JournalMediaType; pairedVideoLocalUri?: string | null; duration?: number | null; thumbnailLocalUri?: string | null; dataBase64?: string | null; mimeType?: string | null; pairedVideoDataBase64?: string | null; pairedVideoMimeType?: string | null; thumbnailDataBase64?: string | null; thumbnailMimeType?: string | null }[];
   tags: { entryId: string; label: string; sortOrder: number }[];
+  mediaMetadata?: { id: string; source: 'entry' | 'followUp' | 'timeCapsule'; capturedAt: string | null; mimeType: string | null; originalFilename: string | null }[];
   versions?: { id: string; entryId: string; content: string; occurredAt: string; mood: string | null; weather: string | null; locationName: string | null; latitude: number | null; longitude: number | null; tags: string[]; createdAt: string }[];
   suppressedMemoryEntryIds?: string[];
   journalTemplates?: JournalTemplateSettings;

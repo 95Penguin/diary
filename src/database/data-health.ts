@@ -40,13 +40,10 @@ export async function runDataHealthCheck(
     db.getAllAsync<{ uri: string | null }>(`
       SELECT uri FROM entry_images
       UNION ALL SELECT paired_video_uri AS uri FROM entry_images WHERE paired_video_uri IS NOT NULL
-      UNION ALL SELECT thumbnail_uri AS uri FROM entry_images WHERE thumbnail_uri IS NOT NULL
       UNION ALL SELECT uri FROM follow_up_images
       UNION ALL SELECT paired_video_uri AS uri FROM follow_up_images WHERE paired_video_uri IS NOT NULL
-      UNION ALL SELECT thumbnail_uri AS uri FROM follow_up_images WHERE thumbnail_uri IS NOT NULL
       UNION ALL SELECT uri FROM time_capsule_images
       UNION ALL SELECT paired_video_uri AS uri FROM time_capsule_images WHERE paired_video_uri IS NOT NULL
-      UNION ALL SELECT thumbnail_uri AS uri FROM time_capsule_images WHERE thumbnail_uri IS NOT NULL
     `),
     getLastExportAt(db),
     getJournalStats(db),

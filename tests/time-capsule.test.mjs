@@ -63,7 +63,7 @@ test('backup and restore preserve capsules, opened state and replies', async (t)
   await openTimeCapsule(source, id, new Date('2026-09-01T00:00:00.000Z'));
   await createTimeCapsuleReply(source, id, '未来回应', new Date('2026-09-02T00:00:00.000Z'));
   const backup = await createJournalExport(source);
-  assert.equal(backup.version, 13);
+  assert.equal(backup.version, 14);
   assert.equal(backup.timeCapsules.length, 1);
   assert.equal(backup.timeCapsuleReplies.length, 1);
   assert.equal(backup.timeCapsuleImages.length, 1);

@@ -7,7 +7,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
  * migrated in production: data from those builds must first be exported by the
  * old build and restored through the validated ZIP backup flow.
  */
-export const DATABASE_VERSION = 17;
+export const DATABASE_VERSION = 18;
 export const DATABASE_BASELINE_VERSION = 13;
 
 const BASELINE_SCHEMA = `
@@ -151,6 +151,13 @@ const BASELINE_SCHEMA = `
     FOREIGN KEY (capsule_id) REFERENCES time_capsules(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE media_metadata (
+    uri TEXT PRIMARY KEY NOT NULL,
+    captured_at TEXT,
+    mime_type TEXT,
+    original_filename TEXT
+  );
+
   CREATE INDEX idx_entries_occurred_at
     ON entries(occurred_at DESC) WHERE deleted_at IS NULL;
   CREATE INDEX idx_follow_ups_entry_id
@@ -249,6 +256,15 @@ const MIGRATION_16_TO_17 = `
     ON time_capsule_images(capsule_id, sort_order ASC);
 `;
 
+const MIGRATION_17_TO_18 = `
+  CREATE TABLE media_metadata (
+    uri TEXT PRIMARY KEY NOT NULL,
+    captured_at TEXT,
+    mime_type TEXT,
+    original_filename TEXT
+  );
+`;
+
 export async function migrateDatabase(db: SQLiteDatabase) {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
@@ -268,11 +284,12 @@ export async function migrateDatabase(db: SQLiteDatabase) {
   try {
     if (currentVersion === 0) {
       await db.execAsync(BASELINE_SCHEMA);
-    } else if (currentVersion >= 13 && currentVersion <= 16) {
+    } else if (currentVersion >= 13 && currentVersion <= 17) {
       if (currentVersion === 13) await db.execAsync(MIGRATION_13_TO_14);
       if (currentVersion <= 14) await db.execAsync(MIGRATION_14_TO_15);
       if (currentVersion <= 15) await db.execAsync(MIGRATION_15_TO_16);
-      await db.execAsync(MIGRATION_16_TO_17);
+      if (currentVersion <= 16) await db.execAsync(MIGRATION_16_TO_17);
+      await db.execAsync(MIGRATION_17_TO_18);
     } else {
       throw new Error(`没有可用的数据库迁移路径：${currentVersion} → ${DATABASE_VERSION}`);
     }

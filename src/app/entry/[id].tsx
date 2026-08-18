@@ -8,7 +8,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
 
-import { createFollowUpWithImages, deleteEntry, deleteFollowUp, getEntry, getFollowUpOrder, saveFollowUpOrder, setEntryFavorite, updateFollowUpWithImages } from '@/database/journal-repository';
+import { createFollowUpWithImages, deleteEntry, deleteFollowUp, getEntry, getFollowUpOrder, saveFollowUpOrder, saveMediaMetadata, setEntryFavorite, updateFollowUpWithImages } from '@/database/journal-repository';
 import { EntryActionModal } from '@/components/entry-action-modal';
 import type { Entry, FollowUp } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
@@ -22,12 +22,15 @@ import { DraggableMediaItem } from '@/components/draggable-media-item';
 import { MediaThumbnail, MediaViewer, type JournalMedia } from '@/components/media-view';
 import { getPickerMediaType, preparePickedMedia } from '@/utils/picker-media';
 import { createPersistentVideoThumbnail } from '@/utils/video-thumbnail-cache';
+import { createPersistentImageThumbnail } from '@/utils/image-thumbnail-cache';
+import { journalPickerOptions, pickedMediaMetadata, pickedMediaSizeLabel } from '@/utils/image-quality';
+import { prepareImagesForStorage } from '@/utils/image-processing';
 
-type PendingMedia = JournalMedia & { width: number; height: number; fileName?: string | null; pairedVideoFileName?: string | null };
+type PendingMedia = JournalMedia & { width: number; height: number; fileName?: string | null; pairedVideoFileName?: string | null; pickerMetadata?: ReturnType<typeof pickedMediaMetadata> };
 
 export default function EntryDetailScreen() {
   const db = useSQLiteContext();
-  const { fontScale, readingBodyStyle, readingFontFamily, readingTheme } = useAppPreferences();
+  const { preferences, fontScale, readingBodyStyle, readingFontFamily, readingTheme } = useAppPreferences();
   const { id, lit, saved, match, followUpId } = useLocalSearchParams<{ id: string; lit?: string; saved?: string; match?: string; followUpId?: string }>();
   const [entry, setEntry] = useState<Entry | null>(null);
   const [loading, setLoading] = useState(true);
@@ -102,12 +105,13 @@ export default function EntryDetailScreen() {
       for (const image of followUpImages) {
         const uri = await persistJournalImage(image.uri, image.fileName);
         persisted.push(uri);
+        if (image.pickerMetadata) await saveMediaMetadata(db, uri, image.pickerMetadata);
         let pairedVideoUri: string | null = null;
         if (image.pairedVideoUri) {
           pairedVideoUri = await persistJournalImage(image.pairedVideoUri, image.pairedVideoFileName);
           persisted.push(pairedVideoUri);
         }
-        const thumbnailUri = image.mediaType === 'video' ? await createPersistentVideoThumbnail(uri) : null;
+        const thumbnailUri = image.mediaType === 'video' ? await createPersistentVideoThumbnail(uri) : await createPersistentImageThumbnail(uri);
         if (thumbnailUri) persisted.push(thumbnailUri);
         savedMedia.push({ ...image, uri, pairedVideoUri, thumbnailUri });
       }
@@ -135,6 +139,7 @@ export default function EntryDetailScreen() {
         pairedVideoFileName: null,
         duration: asset.duration ?? null,
         thumbnailUri: null,
+        pickerMetadata: pickedMediaMetadata(asset),
       })),
     ]);
   }
@@ -152,15 +157,22 @@ export default function EntryDetailScreen() {
   async function pickFollowUpImages() {
     const remaining = 5 - followUpImages.length;
     if (remaining <= 0) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
-      allowsMultipleSelection: true,
-      selectionLimit: remaining,
-      quality: 0.9,
-    });
-    if (!result.canceled) {
-      const prepared = await preparePickedMedia(result.assets, setCompressionStatus);
-      if (prepared) appendFollowUpMedia(prepared, remaining);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images', 'videos'],
+        allowsMultipleSelection: true,
+        selectionLimit: remaining,
+        ...journalPickerOptions(preferences.imageSaveQuality),
+      });
+      if (result.canceled) return;
+      const qualityPrepared = await prepareImagesForStorage(result.assets, preferences.imageSaveQuality, setCompressionStatus);
+      const prepared = await preparePickedMedia(qualityPrepared, setCompressionStatus);
+      if (!prepared) return;
+      setCompressionStatus(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
+      appendFollowUpMedia(prepared, remaining);
+    } catch {
+      setCompressionStatus(null);
+      await showAppDialog({ title: '无法添加媒体', message: '图片或视频处理失败，可能是文件格式暂不支持或文件已损坏。请换一个文件后重试。' });
     }
   }
 
@@ -169,14 +181,21 @@ export default function EntryDetailScreen() {
     if (remaining <= 0) return;
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) { await showAppDialog({ title: '无法使用相机', message: '请在系统设置中允许拾时使用相机。' }); return; }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images', 'videos'],
-      videoMaxDuration: 60,
-      quality: 0.9,
-    });
-    if (!result.canceled) {
-      const prepared = await preparePickedMedia(result.assets, setCompressionStatus);
-      if (prepared) appendFollowUpMedia(prepared, remaining);
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images', 'videos'],
+        videoMaxDuration: 60,
+        ...journalPickerOptions(preferences.imageSaveQuality),
+      });
+      if (result.canceled) return;
+      const qualityPrepared = await prepareImagesForStorage(result.assets, preferences.imageSaveQuality, setCompressionStatus);
+      const prepared = await preparePickedMedia(qualityPrepared, setCompressionStatus);
+      if (!prepared) return;
+      setCompressionStatus(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
+      appendFollowUpMedia(prepared, remaining);
+    } catch {
+      setCompressionStatus(null);
+      await showAppDialog({ title: '无法添加媒体', message: '拍摄的媒体处理失败，请重新拍摄后再试。' });
     }
   }
 

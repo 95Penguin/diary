@@ -2,8 +2,8 @@
 
 拾时是一款本地优先的生活记录应用，用来记下此刻，并在未来重新拾起它。
 
-当前版本为 `1.0.6`，Android 应用包名为 `com.penguin95.shishi`，Android
-`versionCode` 为 `8`，iOS `buildNumber` 为 `7`。版本规则与数据库基线见
+当前版本为 `1.0.8`，Android 应用包名为 `com.penguin95.shishi`，Android
+`versionCode` 为 `10`，iOS `buildNumber` 为 `9`。版本规则与数据库基线见
 [docs/versioning.md](docs/versioning.md)，构建前建议按
 [构建前真机检查](docs/prebuild-device-checklist.md)完成一次关键流程验收。
 
@@ -38,7 +38,7 @@
 - 足迹地图用于大致回看去过的区域，不替代专业地图或导航应用
 - 暂不加入社交、连续轨迹、自动停留识别和复杂旅行规划
 
-`1.0.6` 之后优先处理稳定性、兼容性和界面细节；长期功能规划见
+`1.0.8` 之后优先处理稳定性、兼容性和界面细节；长期功能规划见
 [拾时未来路线](docs/roadmap.md)。
 
 ## 技术栈
@@ -71,8 +71,8 @@ npx expo-doctor
 ```
 
 当前项目固定使用 Expo SDK 57；依赖版本以 `expo-doctor` 的兼容性检查结果为准。
-发布 `v1.0.6` 前请保持 `package.json`、`app.json` 中的应用版本为 `1.0.6`，
-Android `versionCode` 为 8，iOS `buildNumber` 为 7；后续再次构建发布时继续递增。
+发布 `v1.0.8` 前请保持 `package.json`、`app.json` 中的应用版本为 `1.0.8`，
+Android `versionCode` 为 10，iOS `buildNumber` 为 9；后续再次构建发布时继续递增。
 
 ## 高德地图配置
 
@@ -82,7 +82,7 @@ Android 地图构建需要在 EAS 的 `preview` 环境中配置
 检查变量是否存在：
 
 ```bash
-npx eas-cli env:list preview
+npx eas-cli env:list --environment preview
 ```
 
 高德控制台中的 Android Key 还需要与以下信息匹配：
@@ -113,8 +113,8 @@ npm run build:android:preview
 
 构建完成后从 EAS 结果页分别下载并建议重命名为：
 
-- `shishi-v1.0.6-personal-arm64.apk`
-- `shishi-v1.0.6-preview-universal.apk`
+- `shishi-v1.0.8-personal-arm64.apk`
+- `shishi-v1.0.8-preview-universal.apk`
 
 ## 提交与发布
 
@@ -123,7 +123,7 @@ npm run build:android:preview
 ```bash
 git status --short
 git add -A
-git commit -m "feat: release v1.0.6 with time capsules and long-term memories"
+git commit -m "feat: release v1.0.8"
 git push origin main
 ```
 
@@ -137,36 +137,36 @@ npm run build:android:preview
 确认两个 APK 已下载到 `Downloads` 并按上面的名称保存后，创建 GitHub Release：
 
 ```bash
-gh release create v1.0.6 \
-  /Users/95penguin/Downloads/shishi-v1.0.6-personal-arm64.apk \
-  /Users/95penguin/Downloads/shishi-v1.0.6-preview-universal.apk \
+gh release create v1.0.8 \
+  /Users/95penguin/Downloads/shishi-v1.0.8-personal-arm64.apk \
+  /Users/95penguin/Downloads/shishi-v1.0.8-preview-universal.apk \
   --repo 95Penguin/diary \
-  --title "拾时 v1.0.6" \
+  --title "拾时 v1.0.8" \
   --generate-notes
 ```
 
 如果 Release 已经创建，只需要补传文件：
 
 ```bash
-gh release upload v1.0.6 \
-  /Users/95penguin/Downloads/shishi-v1.0.6-personal-arm64.apk \
-  /Users/95penguin/Downloads/shishi-v1.0.6-preview-universal.apk \
+gh release upload v1.0.8 \
+  /Users/95penguin/Downloads/shishi-v1.0.8-personal-arm64.apk \
+  /Users/95penguin/Downloads/shishi-v1.0.8-preview-universal.apk \
   --repo 95Penguin/diary
 ```
 
 检查 Release 是否已经存在：
 
 ```bash
-gh release view v1.0.6 --repo 95Penguin/diary
+gh release view v1.0.8 --repo 95Penguin/diary
 ```
 
-`v1.0.6` tag 或 Release 已存在时不要再次运行 `gh release create`，使用
+`v1.0.8` tag 或 Release 已存在时不要再次运行 `gh release create`，使用
 `gh release upload ... --clobber` 替换同名 APK：
 
 ```bash
-gh release upload v1.0.6 \
-  /Users/95penguin/Downloads/shishi-v1.0.6-personal-arm64.apk \
-  /Users/95penguin/Downloads/shishi-v1.0.6-preview-universal.apk \
+gh release upload v1.0.8 \
+  /Users/95penguin/Downloads/shishi-v1.0.8-personal-arm64.apk \
+  /Users/95penguin/Downloads/shishi-v1.0.8-preview-universal.apk \
   --repo 95Penguin/diary \
   --clobber
 ```

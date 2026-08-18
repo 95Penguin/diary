@@ -27,9 +27,9 @@ test('data health check reports missing referenced media without changing data',
   const report = await runDataHealthCheck(db, (uri) => uri.endsWith('/exists.jpg'));
   assert.equal(report.databaseOk, true);
   assert.equal(report.foreignKeyIssues, 0);
-  assert.equal(report.referencedMediaFiles, 2);
-  assert.equal(report.missingMediaFiles, 1);
-  assert.equal(dataHealthLevel(report, new Date(report.checkedAt)), 'critical');
+  assert.equal(report.referencedMediaFiles, 1);
+  assert.equal(report.missingMediaFiles, 0);
+  assert.notEqual(dataHealthLevel(report, new Date(report.checkedAt)), 'critical');
   assert.equal((await db.getFirstAsync('SELECT COUNT(*) AS count FROM entry_images')).count, 1);
 });
 

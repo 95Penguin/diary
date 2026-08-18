@@ -6,11 +6,11 @@ import { formatShortDateTime, formatTime } from '@/utils/date';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { MediaThumbnail } from '@/components/media-view';
 
-export function EntryCard({ entry, onPress, onLongPress }: { entry: Entry; onPress: () => void; onLongPress?: () => void }) {
+export function EntryCard({ entry, onPress, onLongPress, highlighted = false }: { entry: Entry; onPress: () => void; onLongPress?: () => void; highlighted?: boolean }) {
   const { fontScale, readingBodyStyle, readingFontFamily, readingTheme } = useAppPreferences();
   const latest = entry.followUps.at(-1);
   return (
-    <Pressable accessibilityRole="button" accessibilityHint={onLongPress ? '长按可编辑或删除' : undefined} delayLongPress={450} onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
+    <Pressable accessibilityRole="button" accessibilityHint={onLongPress ? '长按可编辑或删除' : undefined} delayLongPress={450} onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.card, highlighted && styles.highlighted, pressed && styles.pressed]}>
       <View style={styles.rail}><View style={[styles.dot, { borderColor: readingTheme.background }]} /><View style={[styles.line, { backgroundColor: readingTheme.border }]} /></View>
       <View style={[styles.content, { borderBottomColor: readingTheme.border }]}> 
         <View style={styles.meta}><Text style={styles.time}>{formatTime(entry.occurredAt)}</Text><View style={styles.badges}>{entry.mood || entry.weather ? <Text style={[styles.mood, { color: readingTheme.secondary }]}>{[entry.mood, entry.weather].filter(Boolean).join(' · ')}</Text> : null}{entry.favoritedAt ? <SymbolView name={{ ios: 'bookmark.fill', android: 'bookmark', web: 'bookmark' }} size={14} tintColor={colors.primary} /> : null}</View></View>
@@ -33,6 +33,7 @@ export function EntryCard({ entry, onPress, onLongPress }: { entry: Entry; onPre
 const styles = StyleSheet.create({
   card: { flexDirection: 'row', minHeight: 72 },
   pressed: { opacity: 0.68 },
+  highlighted: { backgroundColor: colors.primarySoft },
   rail: { width: 26, alignItems: 'center' },
   dot: { width: 9, height: 9, marginTop: 13, borderRadius: 5, backgroundColor: colors.primary, borderWidth: 3, borderColor: colors.primarySoft },
   line: { width: 1, flex: 1, marginTop: 4, backgroundColor: colors.border },

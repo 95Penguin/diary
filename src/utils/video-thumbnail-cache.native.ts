@@ -1,8 +1,9 @@
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import { File } from 'expo-file-system';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { createVideoPlayer, type VideoPlayer } from 'expo-video';
 
-import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
+import { deleteJournalImage, persistJournalThumbnail } from '@/utils/image-storage';
 
 async function waitUntilReady(player: VideoPlayer) {
   if (player.status === 'readyToPlay') return true;
@@ -35,7 +36,7 @@ export async function createPersistentVideoThumbnail(videoUri: string): Promise<
         const context = ImageManipulator.manipulate(thumbnail);
         const rendered = await context.renderAsync();
         const cached = await rendered.saveAsync({ compress: 0.82, format: SaveFormat.JPEG });
-        return await persistJournalImage(cached.uri, 'video-cover.jpg');
+        return await persistJournalThumbnail(cached.uri);
       } catch {
         // A few Android codecs cannot seek to the exact first frame.
       }
@@ -46,22 +47,26 @@ export async function createPersistentVideoThumbnail(videoUri: string): Promise<
   }
 }
 
-type MissingThumbnail = { id: string; source: 'entry' | 'follow-up'; uri: string };
+type MissingThumbnail = { id: string; source: 'entry' | 'follow-up' | 'capsule'; uri: string; thumbnail_uri: string | null };
 
 export async function backfillVideoThumbnails(db: SQLiteDatabase) {
   const rows = await db.getAllAsync<MissingThumbnail>(
-    `SELECT id, 'entry' AS source, uri FROM entry_images
-       WHERE media_type = 'video' AND thumbnail_uri IS NULL
+    `SELECT id, 'entry' AS source, uri, thumbnail_uri FROM entry_images
+       WHERE media_type = 'video'
      UNION ALL
-     SELECT id, 'follow-up' AS source, uri FROM follow_up_images
-       WHERE media_type = 'video' AND thumbnail_uri IS NULL`,
+     SELECT id, 'follow-up' AS source, uri, thumbnail_uri FROM follow_up_images
+       WHERE media_type = 'video'
+     UNION ALL
+     SELECT id, 'capsule' AS source, uri, thumbnail_uri FROM time_capsule_images
+       WHERE media_type = 'video'`,
   );
   for (const row of rows) {
+    if (row.thumbnail_uri && new File(row.thumbnail_uri).exists) continue;
     const thumbnailUri = await createPersistentVideoThumbnail(row.uri);
     if (!thumbnailUri) continue;
     try {
-      const table = row.source === 'entry' ? 'entry_images' : 'follow_up_images';
-      await db.runAsync(`UPDATE ${table} SET thumbnail_uri = ? WHERE id = ? AND thumbnail_uri IS NULL`, thumbnailUri, row.id);
+      const table = row.source === 'entry' ? 'entry_images' : row.source === 'follow-up' ? 'follow_up_images' : 'time_capsule_images';
+      await db.runAsync(`UPDATE ${table} SET thumbnail_uri = ? WHERE id = ?`, thumbnailUri, row.id);
     } catch {
       deleteJournalImage(thumbnailUri);
     }

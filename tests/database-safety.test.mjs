@@ -16,6 +16,9 @@ import {
   importJournalBackup,
   isNewFootprintLocation,
   listEntryPage,
+  listEntryMonthIndex,
+  findTimelineJumpTarget,
+  listNewerEntryPage,
   listEntryFilterOptions,
   listFavoriteEntryPage,
   listFootprintEntries,
@@ -39,6 +42,7 @@ import {
   setEntryFavorite,
 } from '../src/database/journal-repository.ts';
 import { DATABASE_VERSION, migrateDatabase } from '../src/database/migrate.ts';
+import { cleanupOrphanMediaMetadata, removeMissingLibraryMediaReference, updateLibraryMediaThumbnail } from '../src/database/media-maintenance.ts';
 import { getJournalTemplateSettings, saveJournalTemplate } from '../src/database/template-repository.ts';
 import { createTestDatabase } from './sqlite-test-adapter.mjs';
 
@@ -279,8 +283,8 @@ test('backup import/export preserves records, media, tags, versions and suppress
   const exported = await createJournalExport(db);
   assert.equal(exported.entries[0].content, source.entries[0].content);
   assert.equal(exported.followUps[0].content, source.followUps[0].content);
-  assert.deepEqual(exported.images[0], source.images[0]);
-  assert.deepEqual(exported.followUpImages[0], source.followUpImages[0]);
+  assert.deepEqual(exported.images[0], { ...source.images[0], thumbnailLocalUri: null });
+  assert.deepEqual(exported.followUpImages[0], { ...source.followUpImages[0], thumbnailLocalUri: null });
   assert.deepEqual(exported.tags, source.tags);
   assert.deepEqual(exported.versions, source.versions);
   assert.deepEqual(exported.suppressedMemoryEntryIds, source.suppressedMemoryEntryIds);
@@ -314,7 +318,7 @@ test('current backup preserves location details and portable app preferences', a
   await saveJournalTemplate(sourceDb, null, { title: '周复盘', description: '每周使用', content: '本周：' });
 
   const backup = await createJournalExport(sourceDb);
-  assert.equal(backup.version, 13);
+  assert.equal(backup.version, 14);
   assert.equal(backup.appPreferences.nickname, '小拾');
   assert.equal(backup.appPreferences.avatarLocalUri, 'file:///avatar.png');
   assert.equal(backup.appPreferences.readingTheme, 'green');
@@ -678,4 +682,67 @@ test('trash cleanup rejects invalid retention values without changing data', asy
   await assert.rejects(() => cleanupExpiredTrash(db, -1), /retentionDays/);
   await assert.rejects(() => cleanupExpiredTrash(db, Number.NaN), /retentionDays/);
   assert.equal((await db.getFirstAsync('SELECT id FROM entries WHERE id = ?', 'entry-1')).id, 'entry-1');
+});
+
+test('media maintenance removes orphan metadata but keeps referenced and draft metadata', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  await db.runAsync('INSERT INTO media_metadata (uri, captured_at, mime_type, original_filename) VALUES (?, NULL, NULL, NULL)', 'file:///orphan.jpg');
+  await db.runAsync('INSERT INTO media_metadata (uri, captured_at, mime_type, original_filename) VALUES (?, NULL, NULL, NULL)', 'file:///draft.jpg');
+  await db.runAsync(`INSERT INTO drafts (id, content, occurred_at, mood, weather, tags_json, images_json, location_name, latitude, longitude, created_at, updated_at) VALUES (?, '', ?, NULL, NULL, '[]', ?, NULL, NULL, NULL, ?, ?)`, 'draft-media', new Date().toISOString(), JSON.stringify([{ uri: 'file:///draft.jpg' }]), new Date().toISOString(), new Date().toISOString());
+
+  assert.equal(await cleanupOrphanMediaMetadata(db), 1);
+  const uris = (await db.getAllAsync('SELECT uri FROM media_metadata ORDER BY uri')).map((row) => row.uri);
+  assert.deepEqual(uris, ['file:///draft.jpg']);
+});
+
+test('missing media reference can be removed and its thumbnail can be replaced', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  assert.equal(await updateLibraryMediaThumbnail(db, 'entry', 'image-1', 'file:///new-thumbnail.jpg'), true);
+  assert.equal((await db.getFirstAsync('SELECT thumbnail_uri FROM entry_images WHERE id = ?', 'image-1')).thumbnail_uri, 'file:///new-thumbnail.jpg');
+  const removed = await removeMissingLibraryMediaReference(db, 'entry', 'image-1');
+  assert.deepEqual(new Set(removed), new Set(['file:///journal-images/video.mp4', 'file:///new-thumbnail.jpg']));
+  assert.equal(await db.getFirstAsync('SELECT id FROM entry_images WHERE id = ?', 'image-1'), undefined);
+});
+
+test('timeline month index counts only active records and respects filters', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  const index = await listEntryMonthIndex(db);
+  assert.deepEqual(index, [{ key: '2026-07', count: 1 }]);
+  assert.deepEqual(await listEntryMonthIndex(db, { tag: '测试' }), [{ key: '2026-07', count: 1 }]);
+  assert.deepEqual(await listEntryMonthIndex(db, { tag: '不存在' }), []);
+  await deleteEntry(db, 'entry-1');
+  assert.deepEqual(await listEntryMonthIndex(db), []);
+});
+
+test('newer timeline pages load nearest records first without reversing display order', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const source = backupFixture();
+  for (const [id, occurredAt] of [['entry-2', '2026-07-27T13:00:00.000Z'], ['entry-3', '2026-07-27T14:00:00.000Z'], ['entry-4', '2026-07-27T15:00:00.000Z']]) {
+    source.entries.push({ ...source.entries[0], id, content: id, occurredAt, createdAt: occurredAt, updatedAt: occurredAt });
+  }
+  await importJournalBackup(db, source);
+  const first = await listNewerEntryPage(db, { limit: 2, cursor: { occurredAt: source.entries[0].occurredAt, createdAt: source.entries[0].createdAt, id: source.entries[0].id } });
+  assert.deepEqual(first.entries.map((entry) => entry.id), ['entry-3', 'entry-2']);
+  assert.ok(first.nextCursor);
+  const second = await listNewerEntryPage(db, { limit: 2, cursor: first.nextCursor });
+  assert.deepEqual(second.entries.map((entry) => entry.id), ['entry-4']);
+  assert.equal(second.nextCursor, null);
+});
+
+test('timeline date jump chooses the nearest earlier record and falls back to the earliest', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  const occurred = new Date('2026-07-26T12:00:00.000Z');
+  const nextLocalDay = new Date(occurred.getFullYear(), occurred.getMonth(), occurred.getDate() + 1).toISOString();
+  assert.deepEqual(await findTimelineJumpTarget(db, nextLocalDay), { occurredAt: '2026-07-26T12:00:00.000Z', exact: true });
+  assert.deepEqual(await findTimelineJumpTarget(db, '2020-01-01T00:00:00.000Z'), { occurredAt: '2026-07-26T12:00:00.000Z', exact: false });
+  assert.equal(await findTimelineJumpTarget(db, '2026-07-28T00:00:00.000Z', { tag: '不存在' }), null);
 });

@@ -1,7 +1,7 @@
 import { useEvent } from 'expo';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { EntryImage, FollowUpImage } from '@/domain/journal';
@@ -11,7 +11,7 @@ export type JournalMedia = Pick<EntryImage | FollowUpImage, 'uri' | 'mediaType' 
 
 export function MediaThumbnail({ media, style, allowRuntimeVideoPoster = false }: { media: JournalMedia; style?: StyleProp<ViewStyle>; allowRuntimeVideoPoster?: boolean }) {
   if (isVideo(media)) return <VideoThumbnail media={media} style={style} allowRuntimePoster={allowRuntimeVideoPoster} />;
-  return <View style={[styles.mediaThumb, style]}><Image source={media.uri} cachePolicy="memory-disk" contentFit="cover" style={StyleSheet.absoluteFill} /></View>;
+  return <View style={[styles.mediaThumb, style]}><CachedThumbnail originalUri={media.uri} thumbnailUri={media.thumbnailUri} /></View>;
 }
 
 export function MediaViewer({ media, onPress }: { media: JournalMedia; onPress?: () => void }) {
@@ -26,10 +26,21 @@ function isVideo(media: JournalMedia) {
 }
 
 function VideoThumbnail({ media, style, allowRuntimePoster }: { media: JournalMedia; style?: StyleProp<ViewStyle>; allowRuntimePoster: boolean }) {
+  return <VideoThumbnailContent key={media.thumbnailUri ?? media.uri} media={media} style={style} allowRuntimePoster={allowRuntimePoster} />;
+}
+
+function VideoThumbnailContent({ media, style, allowRuntimePoster }: { media: JournalMedia; style?: StyleProp<ViewStyle>; allowRuntimePoster: boolean }) {
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
   return <View style={[styles.videoThumb, style]}>
-    {media.thumbnailUri ? <Image source={media.thumbnailUri} cachePolicy="memory-disk" contentFit="cover" style={StyleSheet.absoluteFill} /> : allowRuntimePoster ? <RuntimeVideoPoster uri={media.uri} /> : null}
+    {media.thumbnailUri && !thumbnailFailed ? <Image source={media.thumbnailUri} onError={() => setThumbnailFailed(true)} cachePolicy="memory-disk" contentFit="cover" style={StyleSheet.absoluteFill} /> : allowRuntimePoster ? <RuntimeVideoPoster uri={media.uri} /> : null}
     <VideoBadge duration={media.duration} />
   </View>;
+}
+
+function CachedThumbnail({ originalUri, thumbnailUri }: { originalUri: string; thumbnailUri: string | null }) {
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  const source = thumbnailUri && failedUri !== thumbnailUri ? thumbnailUri : originalUri;
+  return <Image source={source} onError={() => { if (source === thumbnailUri) setFailedUri(thumbnailUri); }} cachePolicy="memory-disk" contentFit="cover" style={StyleSheet.absoluteFill} />;
 }
 
 function RuntimeVideoPoster({ uri }: { uri: string }) {

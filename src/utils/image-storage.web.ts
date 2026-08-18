@@ -14,6 +14,9 @@ export async function persistJournalImageBytes(data: Uint8Array, extension = '.j
   }
   return persistJournalImageBase64(btoa(binary), extension);
 }
+export async function persistJournalThumbnail(sourceUri: string) { return sourceUri; }
+export function getJournalStorageBreakdown() { return { original: { files: 0, bytes: 0 }, thumbnails: { files: 0, bytes: 0 }, totalBytes: 0 }; }
+export function clearJournalThumbnailFiles() { return { files: 0, bytes: 0 }; }
 
 export function deleteJournalImage(_uri: string) {
   // Browser object URLs are managed by the picker/browser lifecycle.

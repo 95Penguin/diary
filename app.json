@@ -2,7 +2,7 @@
   "expo": {
     "name": "拾时",
     "slug": "shishi-journal",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/images/shishi-icon-v3.png",
     "scheme": "shishi",
@@ -10,7 +10,7 @@
     "ios": {
       "icon": "./assets/images/shishi-icon-v3.png",
       "bundleIdentifier": "com.penguin95.shishi",
-      "buildNumber": "8",
+      "buildNumber": "9",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -31,7 +31,7 @@
         "android.permission.USE_FINGERPRINT"
       ],
       "package": "com.penguin95.shishi",
-      "versionCode": 9
+      "versionCode": 10
     },
     "web": {
       "output": "static",

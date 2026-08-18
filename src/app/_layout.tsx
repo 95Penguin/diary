@@ -10,10 +10,12 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AppLockGate } from '@/components/app-lock-gate';
 import { AppDialogHost } from '@/components/app-dialog-host';
 import { migrateDatabase } from '@/database/migrate';
+import { cleanupOrphanMediaMetadata } from '@/database/media-maintenance';
 import { useAppFonts } from '@/hooks/use-app-fonts';
 import { AppPreferencesProvider, useAppPreferences } from '@/preferences/app-preferences';
 import { colors } from '@/theme/tokens';
 import { backfillVideoThumbnails } from '@/utils/video-thumbnail-cache';
+import { backfillImageThumbnails } from '@/utils/image-thumbnail-cache';
 import { AUTOMATIC_BACKUP_INTERVAL_MS, runAutomaticBackup } from '@/utils/automatic-backup';
 import { recordAppError } from '@/utils/app-error-log';
 import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
@@ -95,10 +97,14 @@ async function initializeDatabase(db: Parameters<typeof migrateDatabase>[0]) {
   await migrateDatabase(db);
   finishStartupMetric('database', startedAt);
   InteractionManager.runAfterInteractions(() => {
-    void backfillVideoThumbnails(db).catch((error) => {
-      void recordAppError('video-thumbnail-backfill', error);
-      console.warn('Video thumbnail backfill failed', error);
-    });
+    void (async () => {
+      try { await cleanupOrphanMediaMetadata(db); }
+      catch (error) { void recordAppError('media-metadata-cleanup', error); }
+      try { await backfillImageThumbnails(db); }
+      catch (error) { void recordAppError('image-thumbnail-backfill', error); console.warn('Image thumbnail backfill failed', error); }
+      try { await backfillVideoThumbnails(db); }
+      catch (error) { void recordAppError('video-thumbnail-backfill', error); console.warn('Video thumbnail backfill failed', error); }
+    })();
   });
   void syncTimeCapsuleNotifications(db).catch((error) => void recordAppError('time-capsule.notification-sync', error));
 }
