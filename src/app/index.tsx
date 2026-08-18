@@ -13,6 +13,7 @@ import { EntryCard } from '@/components/entry-card';
 import { EntryActionModal } from '@/components/entry-action-modal';
 import {
   cleanupExpiredTrash,
+  countEntriesForLocalDate,
   deleteEntry,
   getDraftCount,
   getEntry,
@@ -171,6 +172,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const [pickerYear, setTimelinePickerYear] = useState(new Date().getFullYear());
   const [pickerMonth, setTimelinePickerMonth] = useState(new Date().getMonth() + 1);
   const [pickerDay, setTimelinePickerDay] = useState(new Date().getDate());
+  const [pickerDayCount, setPickerDayCount] = useState<number | null>(null);
   const pickerYearRef = useRef(pickerYear);
   const pickerMonthRef = useRef(pickerMonth);
   const pickerDayRef = useRef(pickerDay);
@@ -299,15 +301,22 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   }, [entries]);
 
   const years = useMemo(() => [...new Set(monthIndex.map((item) => Number(item.key.slice(0, 4))))], [monthIndex]);
-  const monthCounts = useMemo(() => new Map(monthIndex.map((item) => [item.key, item.count])), [monthIndex]);
   const pickerMonths = useMemo(() => Array.from({ length: 12 }, (_, index) => index + 1), []);
   const pickerDays = useMemo(() => Array.from({ length: daysInMonth(pickerYear, pickerMonth) }, (_, index) => index + 1), [pickerMonth, pickerYear]);
-  const visibleMonthLabel = `${Number(visibleMonth.slice(0, 4))}年${Number(visibleMonth.slice(5))}月`;
   const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 20 }), []);
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: { item: Entry }[] }) => {
     const first = viewableItems.find((item) => item.item?.occurredAt)?.item;
     if (first) { visibleEntryIdRef.current = first.id; visibleEntryDateRef.current = first.occurredAt; setVisibleMonth(monthKey(first.occurredAt)); }
   }, []);
+
+  useEffect(() => {
+    if (!timeIndexVisible) return;
+    let active = true;
+    void countEntriesForLocalDate(db, pickerYear, pickerMonth, pickerDay, filters)
+      .then((count) => { if (active) setPickerDayCount(count); })
+      .catch(() => { if (active) setPickerDayCount(0); });
+    return () => { active = false; };
+  }, [db, filters, pickerDay, pickerMonth, pickerYear, timeIndexVisible]);
 
   const openTimelineEntry = useCallback((entry: Entry) => {
     restoreEntryIdRef.current = visibleEntryIdRef.current ?? entry.id;
@@ -323,11 +332,11 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     requestAnimationFrame(() => listRef.current?.scrollToLocation({ sectionIndex, itemIndex, animated: false, viewOffset: 0 }));
   }, [entryRefresh, groups]);
 
-  async function openTimeIndex() {
+  async function openTimeIndex(initialDate?: string) {
     try {
       const items = await listEntryMonthIndex(db, filters);
       setMonthIndex(items);
-      const visibleDate = new Date(visibleEntryDateRef.current ?? `${visibleMonth}-01T12:00:00`);
+      const visibleDate = new Date(initialDate ?? visibleEntryDateRef.current ?? `${visibleMonth}-01T12:00:00`);
       const availableYears = [...new Set(items.map((item) => Number(item.key.slice(0, 4))))];
       const year = availableYears.includes(visibleDate.getFullYear()) ? visibleDate.getFullYear() : availableYears[0] ?? new Date().getFullYear();
       setTimelinePickerYear(year);
@@ -336,6 +345,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       pickerYearRef.current = year;
       pickerMonthRef.current = visibleDate.getMonth() + 1;
       pickerDayRef.current = Math.min(visibleDate.getDate(), daysInMonth(year, visibleDate.getMonth() + 1));
+      setPickerDayCount(null);
       setTimeIndexVisible(true);
     } catch {
       await showAppDialog({ title: '时间索引暂时不可用', message: '时间轴内容没有受到影响，请稍后重试。' });
@@ -364,6 +374,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   }
 
   function selectTimelinePickerYear(year: number) {
+    if (pickerYearRef.current !== year) setPickerDayCount(null);
     pickerYearRef.current = year;
     setTimelinePickerYear(year);
     const day = Math.min(pickerDayRef.current, daysInMonth(year, pickerMonthRef.current));
@@ -372,6 +383,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   }
 
   function selectTimelinePickerMonth(month: number) {
+    if (pickerMonthRef.current !== month) setPickerDayCount(null);
     pickerMonthRef.current = month;
     setTimelinePickerMonth(month);
     const day = Math.min(pickerDayRef.current, daysInMonth(pickerYearRef.current, month));
@@ -379,7 +391,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     setTimelinePickerDay(day);
   }
 
-  function selectTimelinePickerDay(day: number) { pickerDayRef.current = day; setTimelinePickerDay(day); }
+  function selectTimelinePickerDay(day: number) { if (pickerDayRef.current !== day) setPickerDayCount(null); pickerDayRef.current = day; setTimelinePickerDay(day); }
 
   function jumpToToday() {
     setVisibleMonth(monthKey(new Date().toISOString()));
@@ -431,7 +443,6 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
 
   return <View style={styles.timelineContainer}>
     {loadError && entries.length ? <Pressable onPress={() => void loadFirstPage()} style={styles.refreshFailure}><Text style={styles.refreshFailureText}>暂时无法刷新，正在显示上次内容　重试</Text></Pressable> : null}
-    <View style={styles.timelineMonthBar}><Pressable accessibilityLabel={`当前浏览 ${visibleMonthLabel}，点击跳转时间`} onPress={() => void openTimeIndex()} style={styles.timelineMonthButton}><Text style={[styles.timelineMonthTitle, { color: readingTheme.text }]}>{visibleMonthLabel}</Text></Pressable>{historyMode ? <Pressable accessibilityLabel="回到最新记录" onPress={jumpToToday} style={[styles.backToLatest, { backgroundColor: readingTheme.surface }]}><Text style={styles.backToLatestText}>回到最新</Text></Pressable> : null}</View>
     {jumpNotice ? <View pointerEvents="none" style={styles.timelineNotice}><Text style={styles.timelineNoticeText}>{jumpNotice}</Text></View> : null}
     <View style={styles.timelineTools}><ScrollView horizontal style={styles.filterBarScroll} contentContainerStyle={styles.filterBar} showsHorizontalScrollIndicator={false}>
         <Pressable ref={filterButtonRef} accessibilityLabel="选择筛选方式" onPress={openFilterPicker} style={[styles.filterMenuButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.filterMenuText}>{activeFilterCount ? `${activeFilterCount} 项筛选` : filterLabels[filterKind]}</Text><View style={[styles.filterChevron, filterPickerVisible && styles.filterChevronOpen]} /></Pressable>
@@ -443,7 +454,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       ref={listRef}
       sections={groups}
       keyExtractor={(entry) => entry.id}
-      renderSectionHeader={({ section }) => <View style={[styles.dayHeader, { backgroundColor: readingTheme.background }]}><Text style={[styles.dayTitle, { color: readingTheme.text }]}>{section.label}</Text><Text style={[styles.weekday, { color: readingTheme.secondary }]}>{section.weekday}</Text></View>}
+      renderSectionHeader={({ section }) => <Pressable accessibilityLabel={`${section.label}，${section.weekday}，点击选择其他日期`} accessibilityRole="button" onPress={() => void openTimeIndex(section.data[0]?.occurredAt)} style={({ pressed }) => [styles.dayHeader, { backgroundColor: readingTheme.background }, pressed && styles.dayHeaderPressed]}><Text style={[styles.dayTitle, { color: readingTheme.text }]}>{section.label}</Text><Text style={[styles.weekday, { color: readingTheme.secondary }]}>{section.weekday}</Text></Pressable>}
       renderItem={({ item }) => <EntryCard entry={item} highlighted={item.id === highlightedEntryId} onPress={() => openTimelineEntry(item)} onLongPress={() => onLongPress(item)} />}
       ListEmptyComponent={<EmptyState title={!activeFilterCount ? '从此刻开始' : '没有相关记录'} description={!activeFilterCount ? '写下第一条记录，把日子慢慢收好。' : '减少一个筛选条件试试。'} />}
       contentContainerStyle={styles.timeline}
@@ -463,6 +474,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       ListFooterComponent={loadingMore ? <ActivityIndicator style={styles.pageLoader} color={colors.primary} /> : null}
     />
+    {historyMode ? <Pressable accessibilityLabel="回到最新记录" onPress={jumpToToday} style={[styles.backToLatest, { backgroundColor: readingTheme.surface }]}><Text style={styles.backToLatestText}>↑ 回到最新</Text></Pressable> : null}
     <Modal visible={filterPickerVisible} transparent animationType="fade" onRequestClose={() => setFilterPickerVisible(false)}>
       <Pressable onPress={() => setFilterPickerVisible(false)} style={styles.filterOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.filterPicker, { backgroundColor: readingTheme.background, left: filterAnchor.x, top: filterAnchor.y + filterAnchor.height + 2, width: filterAnchor.width }]}>
         <View style={styles.filterKinds}>
@@ -472,10 +484,10 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     </Modal>
     <Modal visible={timeIndexVisible} transparent animationType="fade" onRequestClose={() => setTimeIndexVisible(false)}>
       <Pressable accessibilityLabel="关闭时间索引" onPress={() => setTimeIndexVisible(false)} style={styles.timeIndexOverlay}>
-        <Pressable onPress={(event) => event.stopPropagation()} style={[styles.timeIndexSheet, { backgroundColor: readingTheme.background, height: 360 + insets.bottom, paddingBottom: Math.max(insets.bottom, spacing.xl) }]}>
+        <Pressable onPress={(event) => event.stopPropagation()} style={[styles.timeIndexSheet, { backgroundColor: readingTheme.background, height: 324 + insets.bottom, paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
           <View style={[styles.timeIndexHeader, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => setTimeIndexVisible(false)}><Text style={[styles.timeIndexHeaderAction, { color: readingTheme.secondary }]}>取消</Text></Pressable><Text style={[styles.timeIndexTitle, { color: readingTheme.text }]}>选择日期</Text><Pressable hitSlop={12} onPress={() => void jumpToTimelineDate()}><Text style={styles.timeIndexHeaderAction}>确定</Text></Pressable></View>
-          <View style={styles.timeWheel}><View pointerEvents="none" style={[styles.timeWheelSelection, { borderColor: readingTheme.border }]} /><WheelColumn values={years} selected={pickerYear} suffix="年" onPreview={(value) => { pickerYearRef.current = value; }} onSelect={selectTimelinePickerYear} /><WheelColumn values={pickerMonths} selected={pickerMonth} suffix="月" onPreview={(value) => { pickerMonthRef.current = value; }} onSelect={selectTimelinePickerMonth} /><WheelColumn values={pickerDays} selected={pickerDay} suffix="日" onPreview={(value) => { pickerDayRef.current = value; }} onSelect={selectTimelinePickerDay} /></View>
-          <Text style={[styles.timeIndexSummary, { color: readingTheme.secondary }]}>{pickerYear}年{pickerMonth}月 · {monthCounts.get(`${pickerYear}-${String(pickerMonth).padStart(2, '0')}`) ?? 0}条记录</Text>
+          <View style={styles.timeWheel}><View pointerEvents="none" style={[styles.timeWheelSelection, { borderColor: readingTheme.border }]} /><WheelColumn values={years} selected={pickerYear} suffix="年" onPreview={(value) => { if (pickerYearRef.current !== value) setPickerDayCount(null); pickerYearRef.current = value; }} onSelect={selectTimelinePickerYear} /><WheelColumn values={pickerMonths} selected={pickerMonth} suffix="月" onPreview={(value) => { if (pickerMonthRef.current !== value) setPickerDayCount(null); pickerMonthRef.current = value; }} onSelect={selectTimelinePickerMonth} /><WheelColumn values={pickerDays} selected={pickerDay} suffix="日" onPreview={(value) => { if (pickerDayRef.current !== value) setPickerDayCount(null); pickerDayRef.current = value; }} onSelect={selectTimelinePickerDay} /></View>
+          <Text style={[styles.timeIndexSummary, { color: readingTheme.secondary }]}>{pickerDayCount === null ? '正在统计当天记录…' : pickerDayCount > 0 ? `当天有 ${pickerDayCount} 条记录` : '当天没有记录'}</Text>
           <View style={styles.timeIndexActions}><Pressable disabled={!monthIndex.length} onPress={() => { const earliest = monthIndex.at(-1); if (!earliest) return; const [year, month] = earliest.key.split('-').map(Number); void jumpToTimelineDate(year, month, 1); }}><Text style={[styles.timeIndexAction, !monthIndex.length && styles.timeIndexActionDisabled]}>最早记录</Text></Pressable><Pressable onPress={jumpToToday}><Text style={styles.timeIndexAction}>今天</Text></Pressable></View>
         </Pressable>
       </Pressable>
@@ -646,7 +658,7 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
 
   const calendarHeader = <><View style={styles.monthHeader}>
       <Pressable accessibilityLabel="上个月" onPress={() => changeMonth(-1)} style={[styles.monthButton, { backgroundColor: readingTheme.surface }]}><View style={[styles.monthArrow, styles.monthArrowLeft, { borderColor: readingTheme.text }]} /></Pressable>
-      <View style={styles.monthCenter}><Pressable accessibilityLabel={`选择年月，当前 ${year} 年 ${monthIndex + 1} 月`} onPress={() => { setPickerYear(year); setMonthPickerVisible(true); }} style={styles.monthTitleButton}><Text style={[styles.monthTitle, { color: readingTheme.text }]}>{year} 年 {monthIndex + 1} 月</Text><SymbolView name={{ ios: 'chevron.down', android: 'keyboard_arrow_down', web: 'keyboard_arrow_down' }} size={16} tintColor={readingTheme.text} /></Pressable>{awayFromToday ? <Pressable accessibilityLabel="回到今天" onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); }} style={[styles.todayButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.todayText}>今天</Text></Pressable> : null}</View>
+      <View style={styles.monthCenter}><Pressable accessibilityLabel={`选择年月，当前 ${year} 年 ${monthIndex + 1} 月`} onPress={() => { setPickerYear(year); setMonthPickerVisible(true); }} style={styles.monthTitleButton}><Text style={[styles.monthTitle, { color: readingTheme.text }]}>{year} 年 {monthIndex + 1} 月</Text></Pressable>{awayFromToday ? <Pressable accessibilityLabel="回到今天" onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); }} style={[styles.todayButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.todayText}>今天</Text></Pressable> : null}</View>
       <Pressable accessibilityLabel="下个月" onPress={() => changeMonth(1)} style={[styles.monthButton, { backgroundColor: readingTheme.surface }]}><View style={[styles.monthArrow, styles.monthArrowRight, { borderColor: readingTheme.text }]} /></Pressable>
     </View>
     {monthLoadError ? <Pressable onPress={() => setCalendarRetry((value) => value + 1)} style={styles.calendarFailure}><Text style={styles.calendarFailureText}>月份标记暂时无法刷新　重试</Text></Pressable> : null}
@@ -700,15 +712,15 @@ const styles = StyleSheet.create({
   loadFailure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxxl }, loadFailureTitle: { fontFamily: fonts.serif, fontSize: 18 }, loadFailureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { marginTop: spacing.xl, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, retryButtonText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, refreshFailure: { alignItems: 'center', paddingVertical: spacing.xs, backgroundColor: colors.primarySoft }, refreshFailureText: { color: colors.primary, fontSize: 10 },
   quickHint: { position: 'absolute', left: spacing.xl, right: spacing.xl, bottom: 86, zIndex: 30, minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md, elevation: 4, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }, quickHintText: { fontSize: 11 }, quickHintClose: { marginLeft: spacing.md, color: colors.primary, fontSize: 11, fontWeight: '700' },
   timelineContainer: { flex: 1 }, timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
-  timelineMonthBar: { minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl }, timelineMonthButton: { minHeight: 36, alignItems: 'center', justifyContent: 'center' }, timelineMonthTitle: { fontFamily: fonts.serif, fontSize: 17, lineHeight: 24, fontWeight: '600' }, backToLatest: { position: 'absolute', right: spacing.xl, paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill }, backToLatestText: { color: colors.primary, fontSize: 9, fontWeight: '700' },
-  timelineNotice: { position: 'absolute', zIndex: 20, top: 38, alignSelf: 'center', paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: '#25302CEB' }, timelineNoticeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '600' },
+  backToLatest: { position: 'absolute', zIndex: 15, right: spacing.xl, bottom: spacing.lg, minHeight: 36, justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.pill, elevation: 4, shadowColor: '#000000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }, backToLatestText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
+  timelineNotice: { position: 'absolute', zIndex: 20, top: 46, alignSelf: 'center', paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: '#25302CEB' }, timelineNoticeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '600' },
   timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.xl, paddingRight: spacing.xl, gap: spacing.sm }, filterBarScroll: { flex: 1, flexGrow: 1 }, filterBar: { alignItems: 'center', gap: spacing.sm }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '600' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] }, clearFilter: { paddingHorizontal: spacing.xs, color: colors.textFaint, fontSize: 10 },
   filterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterChipActive: { backgroundColor: colors.primary },
   filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
   activeFilterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill }, activeFilterText: { color: colors.primary, fontSize: 10, fontWeight: '600' },
   filterOverlay: { flex: 1, backgroundColor: '#00000014' }, filterPicker: { position: 'absolute', overflow: 'hidden', borderRadius: radii.md, backgroundColor: colors.background, elevation: 8, shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } }, filterKinds: { paddingVertical: spacing.xs }, filterKind: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 10, fontWeight: '600' }, filterCheck: { marginLeft: spacing.xs, color: colors.primary, fontSize: 12, fontWeight: '700' },
-  timeIndexOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, timeIndexSheet: { height: 360, paddingBottom: spacing.xl, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, timeIndexHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, timeIndexHeaderAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, timeWheel: { height: 176, flexDirection: 'row', marginTop: spacing.md, paddingHorizontal: spacing.lg }, timeWheelSelection: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: 66, height: WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, timeWheelColumn: { flex: 1 }, timeWheelColumnContent: { paddingVertical: 66 }, timeWheelItem: { height: WHEEL_ITEM_HEIGHT, alignItems: 'center', justifyContent: 'center' }, timeWheelText: { fontSize: 16 }, timeWheelTextSelected: { fontSize: 20, fontWeight: '600' }, timeIndexSummary: { marginTop: spacing.sm, fontSize: 10, textAlign: 'center' }, timeIndexActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 'auto', paddingHorizontal: spacing.xxl }, timeIndexAction: { color: colors.primary, fontSize: 12, fontWeight: '700' }, timeIndexActionDisabled: { opacity: 0.35 },
-  dayHeader: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm, paddingTop: 3, paddingBottom: 3 },
+  timeIndexOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, timeIndexSheet: { height: 324, paddingBottom: spacing.lg, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, timeIndexHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, timeIndexHeaderAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, timeWheel: { height: 176, flexDirection: 'row', marginTop: spacing.md, paddingHorizontal: spacing.lg }, timeWheelSelection: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: 66, height: WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, timeWheelColumn: { flex: 1 }, timeWheelColumnContent: { paddingVertical: 66 }, timeWheelItem: { height: WHEEL_ITEM_HEIGHT, alignItems: 'center', justifyContent: 'center' }, timeWheelText: { fontSize: 16 }, timeWheelTextSelected: { fontSize: 20, fontWeight: '600' }, timeIndexSummary: { marginTop: spacing.xs, fontSize: 10, lineHeight: 14, textAlign: 'center' }, timeIndexActions: { minHeight: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm, paddingHorizontal: spacing.xxl }, timeIndexAction: { color: colors.primary, fontSize: 12, fontWeight: '700' }, timeIndexActionDisabled: { opacity: 0.35 },
+  dayHeader: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: -spacing.xs, paddingHorizontal: spacing.xs, paddingTop: 3, paddingBottom: 3, borderRadius: radii.sm }, dayHeaderPressed: { opacity: 0.58 },
   dayTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 23, fontWeight: '600', includeFontPadding: false },
   weekday: { color: colors.textFaint, fontFamily: fonts.sans, fontSize: 9, lineHeight: 14, includeFontPadding: false },
   calendar: { paddingHorizontal: spacing.md, paddingBottom: spacing.xxxl },

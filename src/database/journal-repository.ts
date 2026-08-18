@@ -382,6 +382,20 @@ export async function listEntryMonthIndex(db: SQLiteDatabase, filters: EntryList
   return [...counts].map(([key, count]) => ({ key, count }));
 }
 
+export async function countEntriesForLocalDate(db: SQLiteDatabase, year: number, month: number, day: number, filters: EntryListFilters = {}) {
+  const start = new Date(year, month - 1, day);
+  const end = new Date(year, month - 1, day + 1);
+  const where = ['e.deleted_at IS NULL', 'e.occurred_at >= ?', 'e.occurred_at < ?'];
+  const params: (string | number)[] = [start.toISOString(), end.toISOString()];
+  (Object.entries(filters) as [Exclude<EntryFilterKind, 'none'>, string | null][])
+    .forEach(([kind, value]) => appendEntryFilter(where, params, { kind, value }));
+  const row = await db.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM entries e WHERE ${where.join(' AND ')}`,
+    params,
+  );
+  return row?.count ?? 0;
+}
+
 export async function findTimelineJumpTarget(db: SQLiteDatabase, before: string, filters: EntryListFilters = {}) {
   const where = ['e.deleted_at IS NULL', 'e.occurred_at < ?'];
   const params: (string | number)[] = [before];

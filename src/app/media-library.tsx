@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, InteractionManager, Modal, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, FlatList, InteractionManager, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import * as Sharing from 'expo-sharing';
 import { router, useFocusEffect } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -12,7 +12,7 @@ import { removeMissingLibraryMediaReference, updateLibraryMediaThumbnail } from 
 import type { LibraryMedia } from '@/domain/journal';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
-import { buildMediaLibraryRows, filterLibraryMedia, listMediaMonths, mediaPositionInSource, type MediaLibraryFilter, type MediaLibraryListItem } from '@/utils/media-library';
+import { buildMediaLibraryRows, filterLibraryMedia, listMediaMonths, mediaPositionInSource, type MediaLibraryFilter, type MediaLibraryListItem, type MediaMonth } from '@/utils/media-library';
 import { inspectMediaFile, type MediaMetadata } from '@/utils/media-metadata';
 import { formatFileSize } from '@/utils/media-file-info';
 import { createPersistentImageThumbnail } from '@/utils/image-thumbnail-cache';
@@ -23,6 +23,7 @@ import { showAppDialog } from '@/components/app-dialog-host';
 const FILTERS: { key: MediaLibraryFilter; label: string }[] = [
   { key: 'all', label: '全部' }, { key: 'image', label: '图片' }, { key: 'video', label: '视频' },
 ];
+const MONTH_WHEEL_ITEM_HEIGHT = 52;
 
 export default function MediaLibraryScreen() {
   const db = useSQLiteContext();
@@ -34,13 +35,15 @@ export default function MediaLibraryScreen() {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [viewerChromeVisible, setViewerChromeVisible] = useState(true);
   const [monthIndexVisible, setMonthIndexVisible] = useState(false);
-  const [monthIndexYear, setMonthIndexYear] = useState<number | null>(null);
+  const [monthIndexKey, setMonthIndexKey] = useState<string | null>(null);
   const [details, setDetails] = useState<MediaMetadata | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [detailWorking, setDetailWorking] = useState(false);
   const listRef = useRef<FlatList<MediaLibraryListItem>>(null);
+  const monthWheelRef = useRef<FlatList<MediaMonth>>(null);
+  const monthIndexKeyRef = useRef<string | null>(null);
   const loadedRef = useRef(false);
 
   useFocusEffect(useCallback(() => {
@@ -65,9 +68,6 @@ export default function MediaLibraryScreen() {
   const filtered = useMemo(() => filterLibraryMedia(media, filter), [filter, media]);
   const rows = useMemo(() => buildMediaLibraryRows(filtered), [filtered]);
   const months = useMemo(() => listMediaMonths(rows), [rows]);
-  const monthYears = useMemo(() => [...new Set(months.map((item) => Number(item.key.slice(0, 4))))], [months]);
-  const activeMonthYear = monthIndexYear && monthYears.includes(monthIndexYear) ? monthIndexYear : monthYears[0] ?? null;
-  const activeYearMonths = useMemo(() => months.filter((item) => Number(item.key.slice(0, 4)) === activeMonthYear), [activeMonthYear, months]);
   const gap = 4;
   const horizontalPadding = spacing.md;
   const tileSize = Math.floor((width - horizontalPadding * 2 - gap * 2) / 3);
@@ -135,10 +135,24 @@ export default function MediaLibraryScreen() {
     requestAnimationFrame(() => listRef.current?.scrollToIndex({ index: rowIndex, animated: true, viewPosition: 0 }));
   }
 
-  function openMonthIndex(year?: number) {
+  function openMonthIndex(key?: string) {
     if (!months.length) return;
-    setMonthIndexYear(year ?? monthYears[0] ?? null);
+    const selected = months.some((item) => item.key === key) ? key! : months[0].key;
+    monthIndexKeyRef.current = selected;
+    setMonthIndexKey(selected);
     setMonthIndexVisible(true);
+  }
+
+  function updateMonthWheel(event: NativeSyntheticEvent<NativeScrollEvent>, commit: boolean) {
+    const index = Math.max(0, Math.min(months.length - 1, Math.round(event.nativeEvent.contentOffset.y / MONTH_WHEEL_ITEM_HEIGHT)));
+    const key = months[index]?.key ?? null;
+    monthIndexKeyRef.current = key;
+    if (commit) setMonthIndexKey(key);
+  }
+
+  function confirmMonthIndex() {
+    const selected = months.find((item) => item.key === monthIndexKeyRef.current);
+    if (selected) goToMonth(selected.rowIndex);
   }
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
@@ -158,7 +172,7 @@ export default function MediaLibraryScreen() {
       onScrollToIndexFailed={({ index, averageItemLength }) => { listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: false }); setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 }), 120); }}
       contentContainerStyle={styles.list}
       renderItem={({ item }) => item.kind === 'header'
-        ? <View style={styles.monthHeader}><Pressable accessibilityLabel={`选择月份，当前${item.label}`} hitSlop={8} onPress={() => openMonthIndex(Number(item.key.slice(7, 11)))} style={styles.monthButton}><Text style={[styles.month, { color: readingTheme.text }]}>{item.label.replaceAll(' ', '')}</Text><View style={styles.monthChevron} /></Pressable><Text style={[styles.monthCount, { color: readingTheme.secondary }]}>{item.count} 项</Text></View>
+        ? <View style={styles.monthHeader}><Pressable accessibilityLabel={`选择月份，当前${item.label}`} hitSlop={8} onPress={() => openMonthIndex(item.key.replace('header-', ''))} style={styles.monthButton}><Text style={[styles.month, { color: readingTheme.text }]}>{item.label.replaceAll(' ', '')}</Text><View style={styles.monthChevron} /></Pressable><Text style={[styles.monthCount, { color: readingTheme.secondary }]}>{item.count} 项</Text></View>
         : <View style={[styles.mediaRow, { gap }]}>{item.media.map((medium) => <Pressable
           accessibilityLabel={`${formatDate(medium.occurredAt)}的${medium.mediaType === 'video' ? '视频' : '图片'}`}
           key={`${medium.source}-${medium.id}`} onPress={() => openPreview(medium)}
@@ -177,14 +191,11 @@ export default function MediaLibraryScreen() {
       </GestureHandlerRootView>
     </Modal>
     <Modal visible={details !== null} transparent animationType="fade" onRequestClose={() => setDetails(null)}><Pressable onPress={() => setDetails(null)} style={styles.detailOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.detailSheet, { backgroundColor: readingTheme.background }]}><View style={styles.detailHeader}><Text style={[styles.detailTitle, { color: readingTheme.text }]}>媒体详情</Text><Pressable onPress={() => setDetails(null)}><Text style={[styles.detailClose, { color: readingTheme.secondary }]}>×</Text></Pressable></View>{preview && details ? <><DetailRow label="分辨率" value={`${preview.width} × ${preview.height}`} /><DetailRow label="文件大小" value={details.exists ? formatFileSize(details.bytes) : '原文件缺失'} danger={!details.exists} /><DetailRow label="格式" value={preview.mimeType ?? details.format} /><DetailRow label="原始文件名" value={preview.originalFilename ?? '未提供'} /><DetailRow label="拍摄时间" value={preview.capturedAt ? formatDateTime(preview.capturedAt) : '未提供'} /><DetailRow label="文件时间" value={details.createdAt ? formatDateTime(details.createdAt) : '文件未提供'} /><DetailRow label="加入拾时" value={formatDateTime(preview.attachedAt)} />{!details.exists ? <Text style={styles.missingHint}>数据库记录仍在，但本机原文件不存在。可以先从备份恢复，或移除这条失效媒体关联。</Text> : null}{details.exists ? <Pressable disabled={detailWorking || Platform.OS === 'web'} onPress={() => void regenerateThumbnail()} style={[styles.secondaryButton, (detailWorking || Platform.OS === 'web') && styles.shareDisabled]}><Text style={styles.secondaryButtonText}>{detailWorking ? '正在生成…' : '重新生成缩略图'}</Text></Pressable> : <Pressable disabled={detailWorking} onPress={() => void removeMissingReference()} style={[styles.removeButton, detailWorking && styles.shareDisabled]}><Text style={styles.removeButtonText}>{detailWorking ? '正在处理…' : '移除失效关联'}</Text></Pressable>}<Pressable disabled={!details.exists || Platform.OS === 'web' || detailWorking} onPress={() => void shareOriginal()} style={[styles.shareButton, (!details.exists || Platform.OS === 'web' || detailWorking) && styles.shareDisabled]}><Text style={styles.shareButtonText}>分享原文件</Text></Pressable></> : null}</Pressable></Pressable></Modal>
-    <Modal visible={monthIndexVisible} transparent animationType="fade" onRequestClose={() => setMonthIndexVisible(false)}>
+    <Modal visible={monthIndexVisible} transparent animationType="fade" onRequestClose={() => setMonthIndexVisible(false)} onShow={() => { const index = Math.max(0, months.findIndex((item) => item.key === monthIndexKeyRef.current)); requestAnimationFrame(() => monthWheelRef.current?.scrollToOffset({ offset: index * MONTH_WHEEL_ITEM_HEIGHT, animated: false })); }}>
       <Pressable accessibilityLabel="关闭月份索引" onPress={() => setMonthIndexVisible(false)} style={styles.monthOverlay}>
-        <Pressable accessibilityRole="none" onPress={(event) => event.stopPropagation()} style={[styles.monthSheet, { backgroundColor: readingTheme.background }]}>
-          <View style={styles.monthSheetHeader}><Text style={[styles.monthSheetTitle, { color: readingTheme.text }]}>选择月份</Text><Pressable hitSlop={12} onPress={() => setMonthIndexVisible(false)}><Text style={[styles.monthSheetClose, { color: readingTheme.secondary }]}>×</Text></Pressable></View>
-          <View style={styles.monthColumns}>
-            <FlatList style={styles.yearColumn} data={monthYears} keyExtractor={(year) => String(year)} renderItem={({ item: year }) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: year === activeMonthYear }} onPress={() => setMonthIndexYear(year)} style={[styles.yearChoice, year === activeMonthYear && { backgroundColor: readingTheme.surface }]}><Text style={[styles.yearChoiceText, { color: year === activeMonthYear ? colors.primary : readingTheme.secondary }]}>{year}年</Text></Pressable>} />
-            <FlatList style={styles.monthColumn} data={activeYearMonths} keyExtractor={(item) => item.key} renderItem={({ item }) => <Pressable onPress={() => goToMonth(item.rowIndex)} style={[styles.monthChoice, { borderBottomColor: readingTheme.border }]}><Text style={[styles.monthChoiceLabel, { color: readingTheme.text }]}>{Number(item.key.slice(5))}月</Text><Text style={[styles.monthChoiceCount, { color: readingTheme.secondary }]}>{item.count} 项　›</Text></Pressable>} />
-          </View>
+        <Pressable accessibilityRole="none" onPress={(event) => event.stopPropagation()} style={[styles.monthSheet, { backgroundColor: readingTheme.background, paddingBottom: Math.max(insets.bottom, spacing.xl) }]}>
+          <View style={[styles.monthSheetHeader, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => setMonthIndexVisible(false)}><Text style={[styles.monthSheetAction, { color: readingTheme.secondary }]}>取消</Text></Pressable><Text style={[styles.monthSheetTitle, { color: readingTheme.text }]}>选择月份</Text><Pressable hitSlop={12} onPress={confirmMonthIndex}><Text style={styles.monthSheetAction}>确定</Text></Pressable></View>
+          <View style={styles.monthWheel}><View pointerEvents="none" style={[styles.monthWheelSelection, { borderColor: readingTheme.border }]} /><FlatList ref={monthWheelRef} data={months} keyExtractor={(item) => item.key} showsVerticalScrollIndicator={false} snapToInterval={MONTH_WHEEL_ITEM_HEIGHT} decelerationRate="fast" contentContainerStyle={styles.monthWheelContent} getItemLayout={(_, index) => ({ index, length: MONTH_WHEEL_ITEM_HEIGHT, offset: MONTH_WHEEL_ITEM_HEIGHT * index })} onScroll={(event) => updateMonthWheel(event, false)} onScrollEndDrag={(event) => updateMonthWheel(event, true)} onMomentumScrollEnd={(event) => updateMonthWheel(event, true)} scrollEventThrottle={16} renderItem={({ item }) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: item.key === monthIndexKey }} onPress={() => { monthIndexKeyRef.current = item.key; setMonthIndexKey(item.key); monthWheelRef.current?.scrollToOffset({ offset: months.findIndex((month) => month.key === item.key) * MONTH_WHEEL_ITEM_HEIGHT, animated: true }); }} style={styles.monthWheelItem}><Text style={[styles.monthWheelLabel, { color: item.key === monthIndexKey ? readingTheme.text : readingTheme.secondary }, item.key === monthIndexKey && styles.monthWheelLabelSelected]}>{Number(item.key.slice(0, 4))}年{Number(item.key.slice(5))}月</Text><Text style={[styles.monthWheelCount, { color: readingTheme.secondary }]}>{item.count} 项</Text></Pressable>} /></View>
         </Pressable>
       </Pressable>
     </Modal>
@@ -216,7 +227,7 @@ const styles = StyleSheet.create({
   viewerButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#FFFFFF22' }, viewerButtonText: { color: '#FFFFFF', fontSize: 30, lineHeight: 34, fontWeight: '300' }, infoButtonText:{color:'#FFFFFF',fontFamily:fonts.serif,fontSize:18,fontWeight:'700'}, viewerHeading: { flex: 1, alignItems: 'center' }, viewerDateTime: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' }, viewerCount: { marginTop: 2, color: '#FFFFFFCC', fontSize: 10, fontWeight: '600' }, viewerTopSpacer: { width: 40 },
   viewerBottom: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.md, backgroundColor: '#00000088' }, viewerCaption: { flex: 1 }, viewerSource: { marginBottom: 3, color: '#FFFFFFB3', fontSize: 10, fontWeight: '700' }, viewerDescription: { color: '#FFFFFFE6', fontSize: 13, lineHeight: 20 },
   openEntry: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: '#FFFFFFE8' }, openEntryText: { color: colors.text, fontSize: 11, fontWeight: '700' },
-  monthOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#00000066' }, monthSheet: { height: '56%', paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.xxxl, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, monthSheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }, monthSheetTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '700' }, monthSheetClose: { fontSize: 26 }, monthColumns: { flex: 1, flexDirection: 'row', gap: spacing.md }, yearColumn: { width: 92, flexGrow: 0 }, monthColumn: { flex: 1 }, yearChoice: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md }, yearChoiceText: { fontSize: 12, fontWeight: '700' }, monthChoice: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth }, monthChoiceLabel: { fontSize: 14 }, monthChoiceCount: { fontSize: 11 },
+  monthOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#00000066' }, monthSheet: { height: 352, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, monthSheetHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, monthSheetTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, monthSheetAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, monthWheel: { height: 260, marginTop: spacing.sm, paddingHorizontal: spacing.xl }, monthWheelSelection: { position: 'absolute', left: spacing.xl, right: spacing.xl, top: 104, height: MONTH_WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, monthWheelContent: { paddingVertical: 104 }, monthWheelItem: { height: MONTH_WHEEL_ITEM_HEIGHT, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.lg }, monthWheelLabel: { minWidth: 112, fontSize: 15, textAlign: 'right' }, monthWheelLabelSelected: { fontSize: 18, fontWeight: '700' }, monthWheelCount: { minWidth: 50, fontSize: 11 },
   detailOverlay:{flex:1,justifyContent:'flex-end',backgroundColor:'#00000066'},detailSheet:{paddingHorizontal:spacing.xl,paddingTop:spacing.lg,paddingBottom:spacing.xxxl,borderTopLeftRadius:radii.lg,borderTopRightRadius:radii.lg},detailHeader:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginBottom:spacing.md},detailTitle:{fontFamily:fonts.serif,fontSize:18,fontWeight:'700'},detailClose:{fontSize:26},detailRow:{minHeight:43,flexDirection:'row',alignItems:'center',justifyContent:'space-between',borderBottomWidth:StyleSheet.hairlineWidth,borderBottomColor:'#00000012'},detailLabel:{fontSize:12},detailValue:{fontSize:12,fontWeight:'600'},missingHint:{marginTop:spacing.md,color:colors.danger,fontSize:10,lineHeight:17},secondaryButton:{minHeight:44,alignItems:'center',justifyContent:'center',marginTop:spacing.xl,borderWidth:1,borderColor:colors.primary,borderRadius:radii.pill},secondaryButtonText:{color:colors.primary,fontSize:12,fontWeight:'700'},removeButton:{minHeight:44,alignItems:'center',justifyContent:'center',marginTop:spacing.xl,borderWidth:1,borderColor:colors.danger,borderRadius:radii.pill},removeButtonText:{color:colors.danger,fontSize:12,fontWeight:'700'},shareButton:{minHeight:44,alignItems:'center',justifyContent:'center',marginTop:spacing.md,borderRadius:radii.pill,backgroundColor:colors.primary},shareButtonText:{color:'#fff',fontSize:12,fontWeight:'700'},shareDisabled:{opacity:.4},
 });
 

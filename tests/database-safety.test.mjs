@@ -17,6 +17,7 @@ import {
   isNewFootprintLocation,
   listEntryPage,
   listEntryMonthIndex,
+  countEntriesForLocalDate,
   findTimelineJumpTarget,
   listNewerEntryPage,
   listEntryFilterOptions,
@@ -718,6 +719,15 @@ test('timeline month index counts only active records and respects filters', asy
   assert.deepEqual(await listEntryMonthIndex(db, { tag: '不存在' }), []);
   await deleteEntry(db, 'entry-1');
   assert.deepEqual(await listEntryMonthIndex(db), []);
+});
+
+test('timeline day count uses local date boundaries and respects filters', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  await importJournalBackup(db, backupFixture());
+  const occurred = new Date('2026-07-26T12:00:00.000Z');
+  assert.equal(await countEntriesForLocalDate(db, occurred.getFullYear(), occurred.getMonth() + 1, occurred.getDate()), 1);
+  assert.equal(await countEntriesForLocalDate(db, occurred.getFullYear(), occurred.getMonth() + 1, occurred.getDate(), { tag: '不存在' }), 0);
 });
 
 test('newer timeline pages load nearest records first without reversing display order', async (t) => {
