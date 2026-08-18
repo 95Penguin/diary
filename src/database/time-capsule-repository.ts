@@ -80,6 +80,14 @@ export async function createTimeCapsuleReply(db: SQLiteDatabase, capsuleId: stri
   return id;
 }
 
+export async function deleteTimeCapsuleReply(db: SQLiteDatabase, capsuleId: string, replyId: string): Promise<boolean> {
+  const result = await db.runAsync(`DELETE FROM time_capsule_replies
+    WHERE id = ? AND capsule_id = ? AND EXISTS (
+      SELECT 1 FROM time_capsules c WHERE c.id = ? AND c.deleted_at IS NULL AND c.opened_at IS NOT NULL
+    )`, replyId, capsuleId, capsuleId);
+  return result.changes > 0;
+}
+
 export async function addTimeCapsuleImages(db: SQLiteDatabase, capsuleId: string, images: { uri: string; width: number; height: number; mediaType: JournalMediaType; pairedVideoUri?: string | null; duration?: number | null; thumbnailUri?: string | null }[], now = new Date()) {
   await db.withTransactionAsync(async () => {
     for (const [index, image] of images.entries()) await db.runAsync('INSERT INTO time_capsule_images (id, capsule_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', createId(), capsuleId, image.uri, image.width, image.height, index, now.toISOString(), image.mediaType, image.pairedVideoUri ?? null, image.duration ?? null, image.thumbnailUri ?? null);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { addTimeCapsuleImages, createTimeCapsule, createTimeCapsuleReply, deleteTimeCapsule, getTimeCapsule, listTimeCapsules, openTimeCapsule } from '../src/database/time-capsule-repository.ts';
+import { addTimeCapsuleImages, createTimeCapsule, createTimeCapsuleReply, deleteTimeCapsule, deleteTimeCapsuleReply, getTimeCapsule, listTimeCapsules, openTimeCapsule } from '../src/database/time-capsule-repository.ts';
 import { migrateDatabase } from '../src/database/migrate.ts';
 import { createJournalExport, importJournalBackup } from '../src/database/journal-repository.ts';
 import { createTestDatabase } from './sqlite-test-adapter.mjs';
@@ -29,6 +29,9 @@ test('time capsule follows locked, ready and opened lifecycle', async (t) => {
   const withReply = await getTimeCapsule(db, id, new Date('2026-09-02T02:00:00.000Z'));
   assert.equal(withReply.replies.length, 1);
   assert.equal(withReply.replies[0].content, '我现在很好');
+  assert.equal(await deleteTimeCapsuleReply(db, id, withReply.replies[0].id), true);
+  assert.equal((await getTimeCapsule(db, id, new Date('2026-09-02T02:00:00.000Z'))).replies.length, 0);
+  assert.equal(await deleteTimeCapsuleReply(db, id, withReply.replies[0].id), false);
 
   await deleteTimeCapsule(db, id, new Date('2026-09-03T00:00:00.000Z'));
   assert.deepEqual(await listTimeCapsules(db), []);
