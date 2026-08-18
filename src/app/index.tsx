@@ -7,6 +7,7 @@ import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
 import { BottomNavigation, type HomeView } from '@/components/bottom-navigation';
+import { NUMBER_WHEEL_ITEM_HEIGHT, NumberWheelColumn } from '@/components/number-wheel-column';
 import { showAppDialog } from '@/components/app-dialog-host';
 import { EmptyState } from '@/components/empty-state';
 import { EntryCard } from '@/components/entry-card';
@@ -486,7 +487,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       <Pressable accessibilityLabel="关闭时间索引" onPress={() => setTimeIndexVisible(false)} style={styles.timeIndexOverlay}>
         <Pressable onPress={(event) => event.stopPropagation()} style={[styles.timeIndexSheet, { backgroundColor: readingTheme.background, height: 324 + insets.bottom, paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
           <View style={[styles.timeIndexHeader, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => setTimeIndexVisible(false)}><Text style={[styles.timeIndexHeaderAction, { color: readingTheme.secondary }]}>取消</Text></Pressable><Text style={[styles.timeIndexTitle, { color: readingTheme.text }]}>选择日期</Text><Pressable hitSlop={12} onPress={() => void jumpToTimelineDate()}><Text style={styles.timeIndexHeaderAction}>确定</Text></Pressable></View>
-          <View style={styles.timeWheel}><View pointerEvents="none" style={[styles.timeWheelSelection, { borderColor: readingTheme.border }]} /><WheelColumn values={years} selected={pickerYear} suffix="年" onPreview={(value) => { pickerYearRef.current = value; }} onSelect={selectTimelinePickerYear} /><WheelColumn values={pickerMonths} selected={pickerMonth} suffix="月" onPreview={(value) => { pickerMonthRef.current = value; }} onSelect={selectTimelinePickerMonth} /><WheelColumn values={pickerDays} selected={pickerDay} suffix="日" onPreview={(value) => { pickerDayRef.current = value; }} onSelect={selectTimelinePickerDay} /></View>
+          <View style={styles.timeWheel}><View pointerEvents="none" style={[styles.timeWheelSelection, { borderColor: readingTheme.border }]} /><NumberWheelColumn values={years} selected={pickerYear} suffix="年" onPreview={(value) => { pickerYearRef.current = value; }} onSelect={selectTimelinePickerYear} /><NumberWheelColumn values={pickerMonths} selected={pickerMonth} suffix="月" onPreview={(value) => { pickerMonthRef.current = value; }} onSelect={selectTimelinePickerMonth} /><NumberWheelColumn values={pickerDays} selected={pickerDay} suffix="日" onPreview={(value) => { pickerDayRef.current = value; }} onSelect={selectTimelinePickerDay} /></View>
           <Text style={[styles.timeIndexSummary, { color: readingTheme.secondary }]}>{pickerDayCount === null ? '正在统计当天记录…' : pickerDayCount > 0 ? `当天有 ${pickerDayCount} 条记录` : '当天没有记录'}</Text>
           <View style={styles.timeIndexActions}><Pressable disabled={!monthIndex.length} onPress={() => { const earliest = monthIndex.at(-1); if (!earliest) return; const [year, month] = earliest.key.split('-').map(Number); void jumpToTimelineDate(year, month, 1); }}><Text style={[styles.timeIndexAction, !monthIndex.length && styles.timeIndexActionDisabled]}>最早记录</Text></Pressable><Pressable onPress={jumpToToday}><Text style={styles.timeIndexAction}>今天</Text></Pressable></View>
         </Pressable>
@@ -502,37 +503,6 @@ function monthKey(iso: string) {
 
 function entryCursor(entry: Entry): EntryPageCursor {
   return { occurredAt: entry.occurredAt, createdAt: entry.createdAt, id: entry.id };
-}
-
-const WHEEL_ITEM_HEIGHT = 44;
-function WheelColumn({ values, selected, suffix, onPreview, onSelect }: { values: number[]; selected: number; suffix: string; onPreview: (value: number) => void; onSelect: (value: number) => void }) {
-  const { readingTheme } = useAppPreferences();
-  const ref = useRef<ScrollView>(null);
-  useEffect(() => {
-    const index = Math.max(0, values.indexOf(selected));
-    requestAnimationFrame(() => ref.current?.scrollTo({ y: index * WHEEL_ITEM_HEIGHT, animated: false }));
-  }, [selected, values]);
-  const valueAtOffset = (offset: number) => values[Math.max(0, Math.min(values.length - 1, Math.round(offset / WHEEL_ITEM_HEIGHT)))];
-  const selectedIndex = Math.max(0, values.indexOf(selected));
-  return <ScrollView
-    ref={ref} accessibilityRole="adjustable" accessibilityValue={{ text: `${selected}${suffix}` }}
-    accessibilityActions={[{ name: 'increment', label: '下一个' }, { name: 'decrement', label: '上一个' }]}
-    onAccessibilityAction={(event) => {
-      const delta = event.nativeEvent.actionName === 'increment' ? 1 : event.nativeEvent.actionName === 'decrement' ? -1 : 0;
-      const value = values[Math.max(0, Math.min(values.length - 1, selectedIndex + delta))];
-      if (value != null) onSelect(value);
-    }}
-    showsVerticalScrollIndicator={false}
-    snapToInterval={WHEEL_ITEM_HEIGHT} decelerationRate="fast"
-    contentContainerStyle={styles.timeWheelColumnContent}
-    scrollEventThrottle={16}
-    onScroll={(event) => { const value = valueAtOffset(event.nativeEvent.contentOffset.y); if (value != null) onPreview(value); }}
-    onMomentumScrollEnd={(event) => {
-      const value = valueAtOffset(event.nativeEvent.contentOffset.y);
-      if (value != null) onSelect(value);
-    }}
-    style={styles.timeWheelColumn}
-  >{values.map((value) => <Pressable key={value} onPress={() => onSelect(value)} style={styles.timeWheelItem}><Text style={[styles.timeWheelText, { color: value === selected ? readingTheme.text : readingTheme.secondary }, value === selected && styles.timeWheelTextSelected]}>{value}{suffix}</Text></Pressable>)}</ScrollView>;
 }
 
 function daysInMonth(year: number, month: number) {
@@ -719,7 +689,7 @@ const styles = StyleSheet.create({
   filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
   activeFilterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill }, activeFilterText: { color: colors.primary, fontSize: 10, fontWeight: '600' },
   filterOverlay: { flex: 1, backgroundColor: '#00000014' }, filterPicker: { position: 'absolute', overflow: 'hidden', borderRadius: radii.md, backgroundColor: colors.background, elevation: 8, shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } }, filterKinds: { paddingVertical: spacing.xs }, filterKind: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 10, fontWeight: '600' }, filterCheck: { marginLeft: spacing.xs, color: colors.primary, fontSize: 12, fontWeight: '700' },
-  timeIndexOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, timeIndexSheet: { height: 324, paddingBottom: spacing.lg, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, timeIndexHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, timeIndexHeaderAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, timeWheel: { height: 176, overflow: 'hidden', flexDirection: 'row', marginTop: spacing.md, paddingHorizontal: spacing.lg }, timeWheelSelection: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: 66, height: WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, timeWheelColumn: { flex: 1 }, timeWheelColumnContent: { paddingVertical: 66 }, timeWheelItem: { height: WHEEL_ITEM_HEIGHT, alignItems: 'center', justifyContent: 'center' }, timeWheelText: { fontSize: 16 }, timeWheelTextSelected: { fontSize: 20, fontWeight: '600' }, timeIndexSummary: { marginTop: spacing.md, fontSize: 10, lineHeight: 14, textAlign: 'center' }, timeIndexActions: { minHeight: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xs, paddingHorizontal: spacing.xxl }, timeIndexAction: { color: colors.primary, fontSize: 12, fontWeight: '700' }, timeIndexActionDisabled: { opacity: 0.35 },
+  timeIndexOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, timeIndexSheet: { height: 324, paddingBottom: spacing.lg, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, timeIndexHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, timeIndexHeaderAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, timeWheel: { height: 176, overflow: 'hidden', flexDirection: 'row', marginTop: spacing.md, paddingHorizontal: spacing.lg }, timeWheelSelection: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: 66, height: NUMBER_WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexSummary: { marginTop: spacing.md, fontSize: 10, lineHeight: 14, textAlign: 'center' }, timeIndexActions: { minHeight: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xs, paddingHorizontal: spacing.xxl }, timeIndexAction: { color: colors.primary, fontSize: 12, fontWeight: '700' }, timeIndexActionDisabled: { opacity: 0.35 },
   dayHeader: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: -spacing.xs, paddingHorizontal: spacing.xs, paddingTop: 3, paddingBottom: 3, borderRadius: radii.sm }, dayHeaderPressed: { opacity: 0.58 },
   dayTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 23, fontWeight: '600', includeFontPadding: false },
   weekday: { color: colors.textFaint, fontFamily: fonts.sans, fontSize: 9, lineHeight: 14, includeFontPadding: false },
