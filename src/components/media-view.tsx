@@ -2,12 +2,13 @@ import { useEvent } from 'expo';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { EntryImage, FollowUpImage } from '@/domain/journal';
 import { ZoomableImage } from '@/components/zoomable-image';
 
-export type JournalMedia = Pick<EntryImage | FollowUpImage, 'uri' | 'mediaType' | 'pairedVideoUri' | 'duration' | 'thumbnailUri'>;
+export type JournalMedia = Pick<EntryImage | FollowUpImage, 'uri' | 'mediaType' | 'pairedVideoUri' | 'duration' | 'thumbnailUri'>
+  & Partial<Pick<EntryImage | FollowUpImage, 'width' | 'height'>>;
 
 export function MediaThumbnail({ media, style, allowRuntimeVideoPoster = false }: { media: JournalMedia; style?: StyleProp<ViewStyle>; allowRuntimeVideoPoster?: boolean }) {
   if (isVideo(media)) return <VideoThumbnail media={media} style={style} allowRuntimePoster={allowRuntimeVideoPoster} />;
@@ -16,7 +17,28 @@ export function MediaThumbnail({ media, style, allowRuntimeVideoPoster = false }
 
 export function MediaViewer({ media, onPress }: { media: JournalMedia; onPress?: () => void }) {
   if (isVideo(media)) return <VideoPlayer uri={media.uri} />;
+  if ((media.width ?? 0) > 0 && (media.height ?? 0) > 0) return <AdaptiveImageViewer media={media} onPress={onPress} />;
   return <ZoomableImage key={media.uri} uri={media.uri} onPress={onPress} />;
+}
+
+function AdaptiveImageViewer({ media, onPress }: { media: JournalMedia; onPress?: () => void }) {
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const imageRatio = (media.height ?? 0) / (media.width ?? 1);
+  const viewportRatio = viewportHeight / viewportWidth;
+  const isLongImage = imageRatio > viewportRatio * 1.05;
+  if (!isLongImage) return <ZoomableImage key={media.uri} uri={media.uri} onPress={onPress} />;
+  const displayedHeight = Math.max(viewportHeight, Math.round(viewportWidth * imageRatio));
+  return <ScrollView
+    bounces
+    contentContainerStyle={styles.longImageContent}
+    nestedScrollEnabled
+    showsVerticalScrollIndicator
+    style={styles.full}
+  >
+    <Pressable accessibilityRole="imagebutton" onPress={onPress}>
+      <Image source={media.uri} cachePolicy="memory-disk" contentFit="contain" style={{ width: viewportWidth, height: displayedHeight }} />
+    </Pressable>
+  </ScrollView>;
 }
 
 function isVideo(media: JournalMedia) {
@@ -78,6 +100,7 @@ function formatDuration(milliseconds: number) {
 
 const styles = StyleSheet.create({
   full: { width: '100%', height: '100%' },
+  longImageContent: { alignItems: 'center', justifyContent: 'flex-start' },
   mediaThumb: { overflow: 'hidden' },
   videoThumb: { overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: '#25302C' },
   playCircle: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#00000080' },

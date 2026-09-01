@@ -414,7 +414,7 @@ export default function ComposeScreen() {
       const qualityPrepared = await prepareImagesForStorage(result.assets, preferences.imageSaveQuality, (message) => setToast(message ?? ''));
       const prepared = await preparePickedMedia(qualityPrepared, (message) => setToast(message ?? ''));
       if (!prepared) return;
-      setToast(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
+      showToast(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
       await addImages(prepared);
     } catch {
       setToast('');
@@ -431,7 +431,7 @@ export default function ComposeScreen() {
       const qualityPrepared = await prepareImagesForStorage(result.assets, preferences.imageSaveQuality, (message) => setToast(message ?? ''));
       const prepared = await preparePickedMedia(qualityPrepared, (message) => setToast(message ?? ''));
       if (!prepared) return;
-      setToast(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
+      showToast(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
       await addImages(prepared);
     } catch {
       setToast('');
@@ -468,7 +468,7 @@ export default function ComposeScreen() {
   }
 
   async function save() {
-    if (!content.trim() || saving) return;
+    if ((!content.trim() && !images.length) || saving) return;
     setSaving(true);
     const newlyPersisted: string[] = [];
     try {
@@ -581,17 +581,19 @@ export default function ComposeScreen() {
     return () => subscription.remove();
   }, []);
 
+  const canSave = Boolean(content.trim() || images.length);
+
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}>
     <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.header}>
         <Pressable accessibilityRole="button" accessibilityLabel="取消编辑" onPress={() => void cancel()} hitSlop={12}><Text style={[styles.headerAction, { color: readingTheme.secondary }]}>取消</Text></Pressable>
         <Text style={[styles.title, { color: readingTheme.text }]}>{isEditing ? '编辑' : quickMode ? '快速记录' : '记录此刻'}</Text>
-        <Pressable disabled={!content.trim() || saving} onPress={() => void save()} style={[styles.save, (!content.trim() || saving) && styles.saveDisabled]}><Text style={styles.saveText}>{saving ? '保存中' : '保存'}</Text></Pressable>
+        <Pressable disabled={!canSave || saving} onPress={() => void save()} style={[styles.save, (!canSave || saving) && styles.saveDisabled]}><Text style={styles.saveText}>{saving ? '保存中' : '保存'}</Text></Pressable>
       </View>
       {toast ? <View pointerEvents="none" style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View> : null}
 
-      <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        <View style={[styles.editorTools, quickMode && styles.quickHidden]}>{editingTime ? <View style={styles.timeEditor}>
+      <View style={[styles.fixedTools, quickMode && styles.quickHidden, { borderBottomColor: readingTheme.border }]}>
+        <View style={styles.editorTools}>{editingTime ? <View style={styles.timeEditor}>
           <TextInput autoFocus value={timeValue} onChangeText={setTimeValue} placeholder="YYYY-MM-DD HH:mm" placeholderTextColor={readingTheme.secondary} style={[styles.timeInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} />
           <Pressable onPress={applyTime}><Text style={styles.apply}>确定</Text></Pressable>
         </View> : <View style={styles.composeQuickTools}><Pressable onPress={() => setEditingTime(true)} style={[styles.timeChip, { backgroundColor: readingTheme.surface }]}><Text style={styles.timeChipText}>发生于　{formatShortDateTime(occurredAt)}　›</Text></Pressable>{!isEditing ? <Pressable accessibilityLabel="选择日记模板" onPress={() => setTemplatePickerVisible(true)} style={[styles.templateButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.templateButtonText}>模板</Text></Pressable> : null}</View>}
@@ -600,6 +602,8 @@ export default function ComposeScreen() {
             <Pressable accessibilityLabel="恢复正文修改" disabled={!canRedo} hitSlop={8} onPress={redoContent} style={[styles.historyButton, { backgroundColor: readingTheme.surface }, !canRedo && styles.historyButtonDisabled]}><SymbolView name={{ ios: 'arrow.uturn.forward', android: 'redo', web: 'redo' }} size={16} tintColor={colors.primary} /></Pressable>
           </View>
         </View>
+      </View>
+      <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <TextInput ref={inputRef} multiline maxLength={10000} value={content} onChangeText={changeContent} placeholder="写下现在发生的事……" placeholderTextColor={readingTheme.secondary} textAlignVertical="top" style={[styles.editor, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]} />
         {quickMode ? <Pressable onPress={() => setQuickMode(false)} style={[styles.expandQuick, { backgroundColor: readingTheme.surface }]}><Text style={styles.expandQuickText}>添加图片、地点或其他信息</Text></Pressable> : null}
         <View style={[styles.imageRow, quickMode && styles.quickHidden]}>
@@ -666,7 +670,8 @@ const styles = StyleSheet.create({
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   title: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 24, fontWeight: '600', includeFontPadding: false }, headerAction: { color: colors.textSecondary, fontSize: 13 },
   save: { paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.primary }, saveDisabled: { opacity: 0.35 }, saveText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
-  toast: { position: 'absolute', top: 62, left: spacing.xl, right: spacing.xl, zIndex: 20, alignItems: 'center' }, toastText: { overflow: 'hidden', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: '#31483EED', color: '#FFFFFF', fontSize: 11 },
+  toast: { position: 'absolute', top: 94, left: spacing.xl, right: spacing.xl, zIndex: 20, alignItems: 'center' }, toastText: { overflow: 'hidden', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: '#31483EED', color: '#FFFFFF', fontSize: 11 },
+  fixedTools: { minHeight: 42, justifyContent: 'center', paddingHorizontal: spacing.xl, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth },
   body: { flexGrow: 1, paddingHorizontal: spacing.xl, paddingTop: spacing.sm },
   editorTools: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
   composeQuickTools: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },

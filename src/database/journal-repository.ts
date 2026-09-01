@@ -823,7 +823,9 @@ export async function listCalendarMonthCounts(
 ): Promise<Record<string, number>> {
   const rows = await db.getAllAsync<{ occurred_at: string }>(
     `SELECT occurred_at FROM entries
-     WHERE deleted_at IS NULL AND occurred_at >= ? AND occurred_at < ?`,
+     WHERE deleted_at IS NULL
+       AND julianday(occurred_at) >= julianday(?)
+       AND julianday(occurred_at) < julianday(?)`,
     start,
     end,
   );
@@ -843,7 +845,9 @@ export async function listEntriesForDate(db: SQLiteDatabase, date: string): Prom
   const rows = await db.getAllAsync<EntryRow>(
     `SELECT id, content, occurred_at, created_at, updated_at, mood, weather, favorited_at,
        location_name, latitude, longitude
-     FROM entries WHERE deleted_at IS NULL AND occurred_at >= ? AND occurred_at < ?
+     FROM entries WHERE deleted_at IS NULL
+       AND julianday(occurred_at) >= julianday(?)
+       AND julianday(occurred_at) < julianday(?)
      ORDER BY occurred_at ASC, created_at ASC, id ASC`,
     start.toISOString(),
     end.toISOString(),

@@ -51,6 +51,8 @@ export default function EntryDetailScreen() {
   const [savedVisible, setSavedVisible] = useState(saved === '1' && !lit);
   const [activeMatch, setActiveMatch] = useState(match ?? '');
   const detailScrollRef = useRef<ScrollView>(null);
+  const followUpSectionYRef = useRef(0);
+  const compressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const didScrollToMatch = useRef(false);
 
   useEffect(() => {
@@ -61,6 +63,16 @@ export default function EntryDetailScreen() {
   }, [savedVisible]);
   const [compressionStatus, setCompressionStatus] = useState<string | null>(null);
   const [litLocation, setLitLocation] = useState(lit ?? '');
+
+  useEffect(() => () => {
+    if (compressionTimerRef.current) clearTimeout(compressionTimerRef.current);
+  }, []);
+
+  function showCompressionResult(message: string) {
+    if (compressionTimerRef.current) clearTimeout(compressionTimerRef.current);
+    setCompressionStatus(message);
+    compressionTimerRef.current = setTimeout(() => setCompressionStatus(null), 1500);
+  }
 
   useEffect(() => {
     if (!entry || !match) return;
@@ -86,6 +98,11 @@ export default function EntryDetailScreen() {
   function leaveDetail() {
     if (router.canGoBack()) router.back();
     else router.replace('/');
+  }
+
+  function jumpToFollowUps() {
+    Keyboard.dismiss();
+    detailScrollRef.current?.scrollTo({ y: Math.max(0, followUpSectionYRef.current - spacing.sm), animated: true });
   }
 
   async function toggleFavorite() {
@@ -168,7 +185,7 @@ export default function EntryDetailScreen() {
       const qualityPrepared = await prepareImagesForStorage(result.assets, preferences.imageSaveQuality, setCompressionStatus);
       const prepared = await preparePickedMedia(qualityPrepared, setCompressionStatus);
       if (!prepared) return;
-      setCompressionStatus(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
+      showCompressionResult(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
       appendFollowUpMedia(prepared, remaining);
     } catch {
       setCompressionStatus(null);
@@ -191,7 +208,7 @@ export default function EntryDetailScreen() {
       const qualityPrepared = await prepareImagesForStorage(result.assets, preferences.imageSaveQuality, setCompressionStatus);
       const prepared = await preparePickedMedia(qualityPrepared, setCompressionStatus);
       if (!prepared) return;
-      setCompressionStatus(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
+      showCompressionResult(pickedMediaSizeLabel(prepared, preferences.imageSaveQuality));
       appendFollowUpMedia(prepared, remaining);
     } catch {
       setCompressionStatus(null);
@@ -258,11 +275,11 @@ export default function EntryDetailScreen() {
 
   return <SafeAreaView edges={['top', 'bottom']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" onPress={leaveDetail} hitSlop={12}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>这一刻</Text><View style={styles.headerActions}><Pressable accessibilityLabel={entry.favoritedAt ? '取消收藏' : '收藏'} onPress={() => void toggleFavorite()} hitSlop={12} style={styles.favoriteButton}><SymbolView name={{ ios: entry.favoritedAt ? 'bookmark.fill' : 'bookmark', android: entry.favoritedAt ? 'bookmark' : 'bookmark_border', web: entry.favoritedAt ? 'bookmark' : 'bookmark_border' }} size={19} tintColor={entry.favoritedAt ? colors.primary : readingTheme.secondary} /></Pressable><Pressable accessibilityLabel="记录操作" onPress={openEntryMenu} hitSlop={12}><Text style={[styles.menu, { color: readingTheme.secondary }]}>•••</Text></Pressable></View></View>
+      <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" onPress={leaveDetail} hitSlop={12}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>这一刻</Text><View style={styles.headerActions}>{entry.followUps.length ? <Pressable accessibilityLabel={`跳到后续，共 ${entry.followUps.length} 条`} onPress={jumpToFollowUps} hitSlop={8} style={[styles.followUpJump, { backgroundColor: readingTheme.surface }]}><Text style={styles.followUpJumpText}>↓ 后续 {entry.followUps.length}</Text></Pressable> : null}<Pressable accessibilityLabel={entry.favoritedAt ? '取消收藏' : '收藏'} onPress={() => void toggleFavorite()} hitSlop={12} style={styles.favoriteButton}><SymbolView name={{ ios: entry.favoritedAt ? 'bookmark.fill' : 'bookmark', android: entry.favoritedAt ? 'bookmark' : 'bookmark_border', web: entry.favoritedAt ? 'bookmark' : 'bookmark_border' }} size={19} tintColor={entry.favoritedAt ? colors.primary : readingTheme.secondary} /></Pressable><Pressable accessibilityLabel="记录操作" onPress={openEntryMenu} hitSlop={12}><Text style={[styles.menu, { color: readingTheme.secondary }]}>•••</Text></Pressable></View></View>
       {savedVisible ? <View accessibilityLiveRegion="polite" pointerEvents="none" style={styles.savedToast}><Text style={styles.savedToastText}>✓ 已保存</Text></View> : null}
       <ScrollView ref={detailScrollRef} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <Text style={styles.date}>{formatFullDate(entry.occurredAt)}</Text>
-        <Text style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}><MatchText text={entry.content} query={!followUpId ? activeMatch : ''} /></Text>
+        {entry.content ? <Text style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}><MatchText text={entry.content} query={!followUpId ? activeMatch : ''} /></Text> : null}
         {entry.images.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.imageStrip}>
           {entry.images.map((image, index) => <Pressable accessibilityLabel={`查看媒体 ${index + 1}`} key={image.id} onPress={() => openImagePreview(entry.images, index)}><MediaThumbnail media={image} allowRuntimeVideoPoster style={styles.detailImage} /></Pressable>)}
         </ScrollView> : null}
@@ -273,16 +290,16 @@ export default function EntryDetailScreen() {
           {entry.tags.map((tag) => <Text key={tag} style={[styles.metaItem, { backgroundColor: readingTheme.surface, color: readingTheme.secondary }]}>#<MatchText text={tag} query={!followUpId ? activeMatch : ''} /></Text>)}
         </View> : null}
         <View style={styles.createdRow}>{entry.createdAt !== entry.occurredAt ? <Text style={[styles.created, { color: readingTheme.secondary }]}>记录于 {formatShortDateTime(entry.createdAt)}</Text> : <View />}<Text accessibilityLabel={`正文 ${countJournalCharacters(entry.content)} 字`} style={[styles.created, { color: readingTheme.secondary }]}>{countJournalCharacters(entry.content)} 字</Text></View>
-        <View style={[styles.divider, { backgroundColor: readingTheme.border }]} />
-        <View style={styles.followUpHeading}><Text style={[styles.followUpTitle, { color: readingTheme.text }]}>后续</Text><View style={styles.followUpHeadingRight}><Text style={[styles.count, { color: readingTheme.secondary }]}>{entry.followUps.length} 条</Text>{entry.followUps.length > 1 ? <Pressable hitSlop={8} onPress={() => void toggleFollowUpOrder()} style={[styles.orderButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.orderText}>{followUpOrder === 'asc' ? '正序' : '倒序'}</Text><View style={styles.orderChevron} /></Pressable> : null}</View></View>
-        {entry.followUps.length ? [...entry.followUps].sort((a, b) => followUpOrder === 'asc' ? a.createdAt.localeCompare(b.createdAt) : b.createdAt.localeCompare(a.createdAt)).map((item) => <View key={item.id} onLayout={(event) => { if (item.id === followUpId && !didScrollToMatch.current) { didScrollToMatch.current = true; const y = event.nativeEvent.layout.y; requestAnimationFrame(() => detailScrollRef.current?.scrollTo({ y: Math.max(0, y - 16), animated: true })); } }} style={styles.followUpItem}>
+        {entry.followUps.length ? <><View style={[styles.divider, { backgroundColor: readingTheme.border }]} />
+        <View onLayout={(event) => { followUpSectionYRef.current = event.nativeEvent.layout.y; }} style={styles.followUpHeading}><Text style={[styles.followUpTitle, { color: readingTheme.text }]}>后续</Text><View style={styles.followUpHeadingRight}><Text style={[styles.count, { color: readingTheme.secondary }]}>{entry.followUps.length} 条</Text>{entry.followUps.length > 1 ? <Pressable hitSlop={8} onPress={() => void toggleFollowUpOrder()} style={[styles.orderButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.orderText}>{followUpOrder === 'asc' ? '正序' : '倒序'}</Text><View style={styles.orderChevron} /></Pressable> : null}</View></View>
+        {[...entry.followUps].sort((a, b) => followUpOrder === 'asc' ? a.createdAt.localeCompare(b.createdAt) : b.createdAt.localeCompare(a.createdAt)).map((item) => <View key={item.id} onLayout={(event) => { if (item.id === followUpId && !didScrollToMatch.current) { didScrollToMatch.current = true; const y = event.nativeEvent.layout.y; requestAnimationFrame(() => detailScrollRef.current?.scrollTo({ y: Math.max(0, y - 16), animated: true })); } }} style={styles.followUpItem}>
           <View style={styles.rail}><View style={[styles.dot, { backgroundColor: readingTheme.background }]} /><View style={[styles.line, { backgroundColor: readingTheme.border }]} /></View>
           <View style={styles.followUpBody}>
             <View style={styles.followUpMeta}><Text style={[styles.followUpTime, { color: readingTheme.secondary }]}>{formatShortDateTime(item.createdAt)}</Text><Pressable accessibilityLabel="后续操作" hitSlop={10} onPress={() => openFollowUpMenu(item)}><Text style={[styles.followUpMenu, { color: readingTheme.secondary }]}>•••</Text></Pressable></View>
             <Text style={[styles.followUpText, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 14 * fontScale, lineHeight: 22 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}><MatchText text={item.content} query={item.id === followUpId ? activeMatch : ''} /></Text>
             {item.images.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.followUpImageRow}>{item.images.map((image, index) => <Pressable key={image.id} onPress={() => openImagePreview(item.images, index)}><MediaThumbnail media={image} allowRuntimeVideoPoster style={styles.followUpImage} /></Pressable>)}</ScrollView> : null}
           </View>
-        </View>) : <Text style={[styles.empty, { color: readingTheme.secondary }]}>后来发生了什么？可以随时回来补充。</Text>}
+        </View>)}</> : null}
       </ScrollView>
       <View style={[styles.inputArea, { backgroundColor: readingTheme.background, borderTopColor: readingTheme.border }]}>
         {followUpImages.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pendingImages}>{followUpImages.map((image, index) => <View key={image.uri}>
@@ -339,7 +356,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background }, flex: { flex: 1 },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   savedToast: { position: 'absolute', top: 62, zIndex: 20, alignSelf: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.text }, savedToastText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
-  back: { color: colors.primary, fontSize: 13 }, headerTitle: { fontFamily: fonts.serif, fontSize: 16, lineHeight: 24, fontWeight: '600', includeFontPadding: false }, headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg }, favoriteButton: { width: 28, height: 36, alignItems: 'center', justifyContent: 'center' }, menu: { color: colors.textSecondary, letterSpacing: 2 },
+  back: { color: colors.primary, fontSize: 13 }, headerTitle: { position: 'absolute', left: 0, right: 0, color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 24, fontWeight: '600', textAlign: 'center', includeFontPadding: false }, headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, followUpJump: { minHeight: 28, justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radii.pill }, followUpJumpText: { color: colors.primary, fontSize: 10, fontWeight: '600' }, favoriteButton: { width: 28, height: 36, alignItems: 'center', justifyContent: 'center' }, menu: { color: colors.textSecondary, letterSpacing: 2 },
   scroll: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.xl },
   date: { color: colors.primary, fontSize: 11, fontWeight: '700' }, content: { marginTop: spacing.md, color: colors.text, fontFamily: fonts.serif, fontSize: 17, lineHeight: 27, includeFontPadding: false }, matchHighlight: { color: colors.text, backgroundColor: colors.highlight, fontWeight: '700' }, metaSummary: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs, marginTop: spacing.md }, metaItem: { overflow: 'hidden', paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: radii.pill, color: colors.textSecondary, fontSize: 10 }, locationItem: { maxWidth: '100%' }, createdRow: { minHeight: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   imageStrip: { gap: spacing.sm, paddingTop: spacing.md }, detailImage: { width: 112, height: 112, borderRadius: radii.md, backgroundColor: 'transparent' },
@@ -348,7 +365,6 @@ const styles = StyleSheet.create({
   orderButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, orderText: { color: colors.primary, fontSize: 10, lineHeight: 14 }, orderChevron: { width: 5, height: 5, marginTop: -2, borderRightWidth: 1.25, borderBottomWidth: 1.25, borderColor: colors.primary, transform: [{ rotate: '45deg' }] },
   followUpItem: { flexDirection: 'row', minHeight: 44 }, rail: { width: 20, alignItems: 'center' }, dot: { width: 8, height: 8, marginTop: 4, borderRadius: 4, borderWidth: 2, borderColor: colors.primary, backgroundColor: colors.background }, line: { width: 1, flex: 1, marginVertical: 3, backgroundColor: colors.border },
   followUpBody: { flex: 1, paddingBottom: spacing.sm }, followUpMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, followUpTime: { color: colors.textFaint, fontSize: 10 }, followUpMenu: { minWidth: 28, color: colors.textSecondary, textAlign: 'right', letterSpacing: 1 }, followUpText: { marginTop: 1, color: colors.text, fontSize: 13, lineHeight: 20 }, followUpImageRow: { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.sm }, followUpImage: { width: 72, height: 72, borderRadius: radii.sm },
-  empty: { color: colors.textFaint, textAlign: 'center', paddingVertical: spacing.xl, fontSize: 11 },
   inputArea: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, compressionStatus: { marginBottom: spacing.xs, fontSize: 10, textAlign: 'right' }, inputBar: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm }, imagePickerButton: { width: 32, height: 32, marginBottom: 5, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: 16 }, imagePickerText: { color: colors.primary, fontSize: 18, lineHeight: 20, fontWeight: '400' }, pendingImages: { flexDirection: 'row', gap: spacing.sm, paddingTop: 5, paddingBottom: spacing.sm }, pendingImage: { width: 50, height: 50, borderRadius: radii.sm }, pendingSorting: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm }, pendingRemove: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: colors.overlay }, pendingRemoveText: { color: '#FFFFFF', fontSize: 14, lineHeight: 16 },
   input: { flex: 1, minHeight: 42, maxHeight: 104, paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 13, lineHeight: 20, includeFontPadding: false }, sendButton: { minHeight: 42, justifyContent: 'center', paddingBottom: 1 }, send: { color: colors.primary, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.3 },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center' }, loadingText: { color: colors.textFaint, fontSize: 12 }, missingTitle: { fontFamily: fonts.serif, fontSize: 18 }, backLink: { marginTop: spacing.lg, color: colors.primary },
