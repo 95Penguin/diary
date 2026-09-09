@@ -15,6 +15,8 @@ export type Entry = {
   id: string; content: string; occurredAt: string; createdAt: string; updatedAt: string;
   mood: string | null; weather: string | null; favoritedAt: string | null; locationName: string | null; latitude: number | null; longitude: number | null;
   followUps: FollowUp[]; images: EntryImage[]; tags: string[];
+  /** Present on lightweight list rows, where followUps contains only the latest item. */
+  followUpCount?: number;
 };
 export type MemoryEntryIndex = { id: string; occurredAt: string; imageCount: number };
 export type DeletedEntry = Entry & { deletedAt: string };

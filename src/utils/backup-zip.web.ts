@@ -99,3 +99,11 @@ export async function materializeZipBackup(bytes: Uint8Array, onProgress?: ZipBa
   }
   return { backup: { ...backup, images, followUpImages, timeCapsuleImages, appPreferences }, createdUris: [] as string[] };
 }
+
+export async function inspectZipBackupFile(uri: string) {
+  return inspectZipBackup(new Uint8Array(await (await fetch(uri)).arrayBuffer()));
+}
+
+export async function materializeZipBackupFile(uri: string, onProgress?: ZipBackupProgress) {
+  return materializeZipBackup(new Uint8Array(await (await fetch(uri)).arrayBuffer()), onProgress);
+}

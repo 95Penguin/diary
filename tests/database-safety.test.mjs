@@ -746,6 +746,35 @@ test('newer timeline pages load nearest records first without reversing display 
   assert.equal(second.nextCursor, null);
 });
 
+test('timeline pages hydrate only card-sized summaries', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const source = backupFixture();
+  source.entries[0].content = '长'.repeat(700);
+  source.followUps.push({
+    ...source.followUps[0],
+    id: 'follow-up-2',
+    content: '最新后续',
+    createdAt: '2026-07-26T14:00:00.000Z',
+    updatedAt: '2026-07-26T14:00:00.000Z',
+  });
+  source.images.push({ ...source.images[0], id: 'image-2', sortOrder: 1, localUri: 'file:///journal-images/second.jpg' });
+  await importJournalBackup(db, source);
+
+  const page = await listEntryPage(db, { limit: 10 });
+  assert.equal(page.entries[0].content.length, 500);
+  assert.equal(page.entries[0].followUpCount, 2);
+  assert.deepEqual(page.entries[0].followUps.map((item) => item.content), ['最新后续']);
+  assert.deepEqual(page.entries[0].images.map((item) => item.id), ['image-1']);
+  assert.deepEqual(page.entries[0].tags, []);
+
+  const detail = await getEntry(db, 'entry-1');
+  assert.equal(detail.content.length, 700);
+  assert.equal(detail.followUps.length, 2);
+  assert.equal(detail.images.length, 2);
+  assert.deepEqual(detail.tags, ['测试']);
+});
+
 test('timeline date jump chooses the nearest earlier record and falls back to the earliest', async (t) => {
   const db = await setup();
   t.after(() => db.close());

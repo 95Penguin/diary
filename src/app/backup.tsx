@@ -12,7 +12,7 @@ import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { exportBackupBytes } from '@/utils/backup-export';
 import { materializeBackupImages } from '@/utils/backup-images';
 import { parseJournalBackup } from '@/utils/backup-import';
-import { createZipBackup, inspectZipBackup, materializeZipBackup } from '@/utils/backup-zip';
+import { createZipBackup, inspectZipBackup, inspectZipBackupFile, materializeZipBackupFile } from '@/utils/backup-zip';
 import { formatShortDateTime } from '@/utils/date';
 import { deleteJournalImage, getJournalMediaStorageUsage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
@@ -188,7 +188,7 @@ export default function BackupScreen() {
         copyToCacheDirectory: true,
       });
       if (picked.canceled) return;
-      const backup = inspectZipBackup(await new File(picked.assets[0].uri).bytes());
+      const backup = await inspectZipBackupFile(picked.assets[0].uri);
       const now = new Date().toISOString();
       await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: 'healthy' });
       setMessage(`备份健康：可恢复 ${backup.entries.length} 条记录、${backup.followUps.length} 条后续`);
@@ -209,7 +209,7 @@ export default function BackupScreen() {
       const file = new File(asset.uri);
       const isZip = asset.name.toLowerCase().endsWith('.zip') || asset.mimeType?.includes('zip');
       if (isZip) {
-        setPendingBackup(inspectZipBackup(await file.bytes()));
+        setPendingBackup(await inspectZipBackupFile(asset.uri));
         setPendingZipUri(asset.uri);
       } else {
         setPendingBackup(parseJournalBackup(await file.text()));
@@ -236,7 +236,7 @@ export default function BackupScreen() {
         });
       };
       const materialized = pendingZipUri
-        ? await materializeZipBackup(await new File(pendingZipUri).bytes(), reportProgress)
+        ? await materializeZipBackupFile(pendingZipUri, reportProgress)
         : await materializeBackupImages(pendingBackup, reportProgress);
       createdImageUris = materialized.createdUris;
       setOperationProgress({ label: '正在合并记录', value: 0.88 });

@@ -103,6 +103,48 @@ async function attachFollowUps(db: SQLiteDatabase, rows: EntryRow[]): Promise<En
   }));
 }
 
+// Timeline cards only show the first media item and the latest follow-up. Avoid
+// hydrating every related row while scrolling; the detail screen still uses the
+// full attachFollowUps path through getEntry.
+async function attachTimelineSummaries(db: SQLiteDatabase, rows: EntryRow[]): Promise<Entry[]> {
+  if (!rows.length) return [];
+  const ids = rows.map((row) => row.id);
+  const placeholders = ids.map(() => '?').join(', ');
+  const followUpRows = await db.getAllAsync<FollowUpRow & { follow_up_count: number }>(
+      `SELECT f.id, f.entry_id, f.content, f.created_at, f.updated_at,
+        (SELECT COUNT(*) FROM follow_ups counted
+         WHERE counted.entry_id = f.entry_id AND counted.deleted_at IS NULL) AS follow_up_count
+       FROM follow_ups f
+       WHERE f.deleted_at IS NULL AND f.entry_id IN (${placeholders})
+         AND f.id = (SELECT latest.id FROM follow_ups latest
+           WHERE latest.entry_id = f.entry_id AND latest.deleted_at IS NULL
+           ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)`,
+      ids,
+    );
+  const imageRows = await db.getAllAsync<ImageRow>(
+      `SELECT id, entry_id, uri, width, height, sort_order, media_type, paired_video_uri, duration, thumbnail_uri
+       FROM (SELECT i.*, ROW_NUMBER() OVER (PARTITION BY i.entry_id ORDER BY i.sort_order ASC, i.id ASC) AS row_number
+         FROM entry_images i WHERE i.entry_id IN (${placeholders}))
+       WHERE row_number = 1`,
+      ids,
+    );
+  const latestByEntry = new Map(followUpRows.map((row) => [row.entry_id, row]));
+  const imageByEntry = new Map(imageRows.map((row) => [row.entry_id, row]));
+  return rows.map((row) => {
+    const followUp = latestByEntry.get(row.id);
+    const image = imageByEntry.get(row.id);
+    return {
+      id: row.id, content: row.content, occurredAt: row.occurred_at, createdAt: row.created_at,
+      updatedAt: row.updated_at, mood: row.mood, weather: row.weather, favoritedAt: row.favorited_at,
+      locationName: row.location_name, latitude: row.latitude, longitude: row.longitude,
+      followUps: followUp ? [mapFollowUp(followUp)] : [],
+      followUpCount: followUp?.follow_up_count ?? 0,
+      images: image ? [{ id: image.id, entryId: image.entry_id, uri: image.uri, width: image.width, height: image.height, sortOrder: image.sort_order, mediaType: image.media_type, pairedVideoUri: image.paired_video_uri, duration: image.duration, thumbnailUri: image.thumbnail_uri }] : [],
+      tags: [],
+    };
+  });
+}
+
 export async function listEntries(db: SQLiteDatabase, query = ''): Promise<Entry[]> {
   const keyword = query.trim();
   const params: string[] = [];
@@ -310,7 +352,7 @@ export async function listEntryPage(
   }
   params.push(limit + 1);
   const rows = await db.getAllAsync<EntryRow>(
-    `SELECT e.id, e.content, e.occurred_at, e.created_at, e.updated_at, e.mood, e.weather,
+    `SELECT e.id, SUBSTR(e.content, 1, 500) AS content, e.occurred_at, e.created_at, e.updated_at, e.mood, e.weather,
        e.favorited_at, e.location_name, e.latitude, e.longitude
      FROM entries e
      WHERE ${where.join(' AND ')}
@@ -320,7 +362,7 @@ export async function listEntryPage(
   );
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
-  const entries = await attachFollowUps(db, pageRows);
+  const entries = await attachTimelineSummaries(db, pageRows);
   const last = pageRows.at(-1);
   return {
     entries,
@@ -350,14 +392,14 @@ export async function listNewerEntryPage(
   }
   params.push(limit + 1);
   const rows = await db.getAllAsync<EntryRow>(
-    `SELECT e.id, e.content, e.occurred_at, e.created_at, e.updated_at, e.mood, e.weather,
+    `SELECT e.id, SUBSTR(e.content, 1, 500) AS content, e.occurred_at, e.created_at, e.updated_at, e.mood, e.weather,
        e.favorited_at, e.location_name, e.latitude, e.longitude
      FROM entries e WHERE ${where.join(' AND ')}
      ORDER BY e.occurred_at ASC, e.created_at ASC, e.id ASC LIMIT ?`, params,
   );
   const hasMore = rows.length > limit;
   const pageRows = (hasMore ? rows.slice(0, limit) : rows).reverse();
-  const entries = await attachFollowUps(db, pageRows);
+  const entries = await attachTimelineSummaries(db, pageRows);
   const first = pageRows[0];
   return {
     entries,

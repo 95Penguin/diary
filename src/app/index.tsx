@@ -162,6 +162,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const [loadError, setLoadError] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const requestId = useRef(0);
+  const filterOptionsLoaded = useRef(false);
   const listRef = useRef<SectionList<Entry>>(null);
   const initialLoadStartedAt = useRef(startupTimer());
   const [filterOptions, setFilterOptions] = useState<EntryFilterOptions>(EMPTY_FILTER_OPTIONS);
@@ -200,16 +201,12 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const loadFirstPage = useCallback(async () => {
     const currentRequest = ++requestId.current;
     try {
-      const [page, options] = await Promise.all([
-        listEntryPage(db, { limit: PAGE_SIZE, filters, cursor: jumpStartCursor }),
-        listEntryFilterOptions(db),
-      ]);
+      const page = await listEntryPage(db, { limit: PAGE_SIZE, filters, cursor: jumpStartCursor });
       if (currentRequest !== requestId.current) return;
       setLoadError(false);
       setEntries(page.entries);
       setCursor(page.nextCursor);
       setHasMore(Boolean(page.nextCursor));
-      setFilterOptions(options);
       if (jumpStartCursor) {
         const first = page.entries[0];
         setNewerCursor(first ? entryCursor(first) : jumpStartCursor);
@@ -225,6 +222,10 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
         requestAnimationFrame(() => listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: false, viewOffset: 0 }));
       }
       finishStartupMetric('home', initialLoadStartedAt.current);
+      if (!filterOptionsLoaded.current) {
+        filterOptionsLoaded.current = true;
+        void listEntryFilterOptions(db).then(setFilterOptions).catch(() => { filterOptionsLoaded.current = false; });
+      }
     } catch (error) {
       void recordAppError('timeline.load', error);
       if (currentRequest === requestId.current) setLoadError(true);

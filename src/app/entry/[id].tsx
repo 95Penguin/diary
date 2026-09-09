@@ -52,6 +52,8 @@ export default function EntryDetailScreen() {
   const [activeMatch, setActiveMatch] = useState(match ?? '');
   const detailScrollRef = useRef<ScrollView>(null);
   const followUpSectionYRef = useRef(0);
+  const detailViewportHeightRef = useRef(0);
+  const [followUpJumpVisible, setFollowUpJumpVisible] = useState(false);
   const compressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const didScrollToMatch = useRef(false);
 
@@ -103,6 +105,10 @@ export default function EntryDetailScreen() {
   function jumpToFollowUps() {
     Keyboard.dismiss();
     detailScrollRef.current?.scrollTo({ y: Math.max(0, followUpSectionYRef.current - spacing.sm), animated: true });
+  }
+
+  function updateFollowUpJumpVisibility() {
+    setFollowUpJumpVisible(Boolean(entry?.followUps.length) && followUpSectionYRef.current > detailViewportHeightRef.current);
   }
 
   async function toggleFavorite() {
@@ -275,9 +281,9 @@ export default function EntryDetailScreen() {
 
   return <SafeAreaView edges={['top', 'bottom']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" onPress={leaveDetail} hitSlop={12}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>这一刻</Text><View style={styles.headerActions}>{entry.followUps.length ? <Pressable accessibilityLabel={`跳到后续，共 ${entry.followUps.length} 条`} onPress={jumpToFollowUps} hitSlop={8} style={[styles.followUpJump, { backgroundColor: readingTheme.surface }]}><Text style={styles.followUpJumpText}>↓ 后续 {entry.followUps.length}</Text></Pressable> : null}<Pressable accessibilityLabel={entry.favoritedAt ? '取消收藏' : '收藏'} onPress={() => void toggleFavorite()} hitSlop={12} style={styles.favoriteButton}><SymbolView name={{ ios: entry.favoritedAt ? 'bookmark.fill' : 'bookmark', android: entry.favoritedAt ? 'bookmark' : 'bookmark_border', web: entry.favoritedAt ? 'bookmark' : 'bookmark_border' }} size={19} tintColor={entry.favoritedAt ? colors.primary : readingTheme.secondary} /></Pressable><Pressable accessibilityLabel="记录操作" onPress={openEntryMenu} hitSlop={12}><Text style={[styles.menu, { color: readingTheme.secondary }]}>•••</Text></Pressable></View></View>
+      <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" onPress={leaveDetail} hitSlop={12}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>这一刻</Text><View style={styles.headerActions}>{followUpJumpVisible ? <Pressable accessibilityLabel={`跳到后续，共 ${entry.followUps.length} 条`} onPress={jumpToFollowUps} hitSlop={8} style={[styles.followUpJump, { backgroundColor: readingTheme.surface }]}><Text style={styles.followUpJumpText}>↓ 后续 {entry.followUps.length}</Text></Pressable> : null}<Pressable accessibilityLabel={entry.favoritedAt ? '取消收藏' : '收藏'} onPress={() => void toggleFavorite()} hitSlop={12} style={styles.favoriteButton}><SymbolView name={{ ios: entry.favoritedAt ? 'bookmark.fill' : 'bookmark', android: entry.favoritedAt ? 'bookmark' : 'bookmark_border', web: entry.favoritedAt ? 'bookmark' : 'bookmark_border' }} size={19} tintColor={entry.favoritedAt ? colors.primary : readingTheme.secondary} /></Pressable><Pressable accessibilityLabel="记录操作" onPress={openEntryMenu} hitSlop={12}><Text style={[styles.menu, { color: readingTheme.secondary }]}>•••</Text></Pressable></View></View>
       {savedVisible ? <View accessibilityLiveRegion="polite" pointerEvents="none" style={styles.savedToast}><Text style={styles.savedToastText}>✓ 已保存</Text></View> : null}
-      <ScrollView ref={detailScrollRef} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <ScrollView ref={detailScrollRef} onLayout={(event) => { detailViewportHeightRef.current = event.nativeEvent.layout.height; updateFollowUpJumpVisibility(); }} contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <Text style={styles.date}>{formatFullDate(entry.occurredAt)}</Text>
         {entry.content ? <Text style={[styles.content, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 16 * fontScale, lineHeight: 26 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}><MatchText text={entry.content} query={!followUpId ? activeMatch : ''} /></Text> : null}
         {entry.images.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.imageStrip}>
@@ -291,7 +297,7 @@ export default function EntryDetailScreen() {
         </View> : null}
         <View style={styles.createdRow}>{entry.createdAt !== entry.occurredAt ? <Text style={[styles.created, { color: readingTheme.secondary }]}>记录于 {formatShortDateTime(entry.createdAt)}</Text> : <View />}<Text accessibilityLabel={`正文 ${countJournalCharacters(entry.content)} 字`} style={[styles.created, { color: readingTheme.secondary }]}>{countJournalCharacters(entry.content)} 字</Text></View>
         {entry.followUps.length ? <><View style={[styles.divider, { backgroundColor: readingTheme.border }]} />
-        <View onLayout={(event) => { followUpSectionYRef.current = event.nativeEvent.layout.y; }} style={styles.followUpHeading}><Text style={[styles.followUpTitle, { color: readingTheme.text }]}>后续</Text><View style={styles.followUpHeadingRight}><Text style={[styles.count, { color: readingTheme.secondary }]}>{entry.followUps.length} 条</Text>{entry.followUps.length > 1 ? <Pressable hitSlop={8} onPress={() => void toggleFollowUpOrder()} style={[styles.orderButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.orderText}>{followUpOrder === 'asc' ? '正序' : '倒序'}</Text><View style={styles.orderChevron} /></Pressable> : null}</View></View>
+        <View onLayout={(event) => { followUpSectionYRef.current = event.nativeEvent.layout.y; updateFollowUpJumpVisibility(); }} style={styles.followUpHeading}><Text style={[styles.followUpTitle, { color: readingTheme.text }]}>后续</Text><View style={styles.followUpHeadingRight}><Text style={[styles.count, { color: readingTheme.secondary }]}>{entry.followUps.length} 条</Text>{entry.followUps.length > 1 ? <Pressable hitSlop={8} onPress={() => void toggleFollowUpOrder()} style={[styles.orderButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.orderText}>{followUpOrder === 'asc' ? '正序' : '倒序'}</Text><View style={styles.orderChevron} /></Pressable> : null}</View></View>
         {[...entry.followUps].sort((a, b) => followUpOrder === 'asc' ? a.createdAt.localeCompare(b.createdAt) : b.createdAt.localeCompare(a.createdAt)).map((item) => <View key={item.id} onLayout={(event) => { if (item.id === followUpId && !didScrollToMatch.current) { didScrollToMatch.current = true; const y = event.nativeEvent.layout.y; requestAnimationFrame(() => detailScrollRef.current?.scrollTo({ y: Math.max(0, y - 16), animated: true })); } }} style={styles.followUpItem}>
           <View style={styles.rail}><View style={[styles.dot, { backgroundColor: readingTheme.background }]} /><View style={[styles.line, { backgroundColor: readingTheme.border }]} /></View>
           <View style={styles.followUpBody}>

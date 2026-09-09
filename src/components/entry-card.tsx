@@ -9,6 +9,7 @@ import { MediaThumbnail } from '@/components/media-view';
 export function EntryCard({ entry, onPress, onLongPress, highlighted = false }: { entry: Entry; onPress: () => void; onLongPress?: () => void; highlighted?: boolean }) {
   const { fontScale, readingBodyStyle, readingFontFamily, readingTheme } = useAppPreferences();
   const latest = entry.followUps.at(-1);
+  const followUpCount = entry.followUpCount ?? entry.followUps.length;
   return (
     <Pressable accessibilityRole="button" accessibilityHint={onLongPress ? '长按可编辑或删除' : undefined} delayLongPress={450} onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.card, highlighted && styles.highlighted, pressed && styles.pressed]}>
       <View style={styles.rail}><View style={[styles.dot, { borderColor: readingTheme.background }]} /><View style={[styles.line, { backgroundColor: readingTheme.border }]} /></View>
@@ -22,7 +23,7 @@ export function EntryCard({ entry, onPress, onLongPress, highlighted = false }: 
         {latest ? (
           <View style={[styles.followUp, { backgroundColor: readingTheme.surface }]}>
             <Text numberOfLines={1} style={[styles.followUpText, { color: readingTheme.secondary }]}>↳ {latest.content}</Text>
-            <Text style={[styles.followUpCount, { color: readingTheme.secondary }]}>{entry.followUps.length > 1 ? `共 ${entry.followUps.length} 条` : formatShortDateTime(latest.createdAt)}</Text>
+            <Text style={[styles.followUpCount, { color: readingTheme.secondary }]}>{followUpCount > 1 ? `共 ${followUpCount} 条` : formatShortDateTime(latest.createdAt)}</Text>
           </View>
         ) : null}
       </View>
