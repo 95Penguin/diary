@@ -3,13 +3,14 @@ import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import { SQLiteProvider, useSQLiteContext } from 'expo-sqlite';
 import { StatusBar } from 'expo-status-bar';
-import { Component, type ErrorInfo, type ReactNode, Suspense, useEffect, useRef } from 'react';
+import { Component, type ErrorInfo, type ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, InteractionManager, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppLockGate } from '@/components/app-lock-gate';
 import { AppDialogHost } from '@/components/app-dialog-host';
 import { migrateDatabase } from '@/database/migrate';
+import { installDatabaseRecovery, subscribeToDatabaseRecovery } from '@/database/database-recovery';
 import { cleanupOrphanMediaMetadata } from '@/database/media-maintenance';
 import { useAppFonts } from '@/hooks/use-app-fonts';
 import { AppPreferencesProvider, useAppPreferences } from '@/preferences/app-preferences';
@@ -28,23 +29,28 @@ void SplashScreen.preventAutoHideAsync();
 export default function RootLayout() {
   const fontsReady = useAppFonts();
 
-  useEffect(() => {
-    if (fontsReady) void SplashScreen.hideAsync();
-  }, [fontsReady]);
-
   if (!fontsReady) return null;
 
   return (
     <GestureHandlerRootView style={styles.root}>
       <DatabaseErrorBoundary>
         <Suspense fallback={<LoadingFallback />}>
-          <SQLiteProvider databaseName="shishi.db" onInit={initializeDatabase} useSuspense>
-            <AppPreferencesProvider><AutomaticBackupGate /><AppLockGate><AppStack /></AppLockGate><AppDialogHost /></AppPreferencesProvider>
-          </SQLiteProvider>
+          <RecoveringDatabaseProvider />
         </Suspense>
       </DatabaseErrorBoundary>
     </GestureHandlerRootView>
   );
+}
+
+function RecoveringDatabaseProvider() {
+  const [generation, setGeneration] = useState(0);
+  useEffect(() => subscribeToDatabaseRecovery((error) => {
+    void recordAppError('database.auto-recover', error);
+    setGeneration((value) => value + 1);
+  }), []);
+  return <SQLiteProvider key={generation} databaseName="shishi.db" onInit={initializeDatabase} useSuspense>
+    <AppPreferencesProvider><AutomaticBackupGate /><AppLockGate><AppStack /></AppLockGate><AppDialogHost /></AppPreferencesProvider>
+  </SQLiteProvider>;
 }
 
 function AutomaticBackupGate() {
@@ -95,6 +101,7 @@ function AutomaticBackupGate() {
 async function initializeDatabase(db: Parameters<typeof migrateDatabase>[0]) {
   const startedAt = startupTimer();
   await migrateDatabase(db);
+  installDatabaseRecovery(db);
   finishStartupMetric('database', startedAt);
   InteractionManager.runAfterInteractions(() => {
     void (async () => {
@@ -172,6 +179,7 @@ class DatabaseErrorBoundary extends Component<{ children: ReactNode }, { error: 
 
   static getDerivedStateFromError(error: Error) { return { error }; }
   componentDidCatch(error: Error, info: ErrorInfo) {
+    void SplashScreen.hideAsync();
     void recordAppError('app-render-or-database', error);
     console.error('Database initialization failed', error, info);
   }

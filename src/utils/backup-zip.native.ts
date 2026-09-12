@@ -1,6 +1,6 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { strToU8, zipSync, type Zippable } from 'fflate';
-import { listContents, unzip, type ZipEntry } from 'react-native-zip-archive';
+import { listContents, NO_COMPRESSION, unzip, zip, type ZipEntry } from 'react-native-zip-archive';
 
 import type { JournalBackup } from '@/domain/journal';
 import { readBackupArchive } from '@/utils/backup-archive-validation';
@@ -53,6 +53,8 @@ export async function createZipBackup(backup: JournalBackup, onProgress?: ZipBac
     const hasPaired = pairedPath ? await appendFile(files, item.pairedVideoLocalUri, pairedPath) : false;
     const hasThumbnail = thumbnailPath ? await appendFile(files, item.thumbnailLocalUri, thumbnailPath) : false;
     if (!hasPrimary) missingMedia += 1;
+    if (pairedPath && !hasPaired) missingMedia += 1;
+    if (thumbnailPath && !hasThumbnail) missingMedia += 1;
     completed += 1;
     onProgress?.(completed, total);
     return {
@@ -88,6 +90,81 @@ export async function createZipBackup(backup: JournalBackup, onProgress?: ZipBac
   return { bytes: zipSync(files), missingMedia };
 }
 
+export async function createZipBackupFile(backup: JournalBackup, onProgress?: ZipBackupProgress) {
+  const directory = new Directory(Paths.cache, `backup-create-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const destination = new File(Paths.cache, `shishi-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.zip`);
+  directory.create({ idempotent: true, intermediates: true });
+  const hasAvatar = Boolean(backup.appPreferences?.avatarLocalUri);
+  const total = backup.images.length + (backup.followUpImages?.length ?? 0) + (backup.timeCapsuleImages?.length ?? 0) + (hasAvatar ? 1 : 0);
+  let completed = 0;
+  let missingMedia = 0;
+  async function archiveItem<T extends BackupMedia>(item: T, group: string): Promise<T> {
+    const clean = withoutEmbeddedData(item);
+    const base = `media/${group}/${item.id}`;
+    const primaryPath = `${base}/primary${extensionFor(item.localUri, item.mediaType === 'video' ? '.mp4' : '.jpg')}`;
+    const pairedPath = item.pairedVideoLocalUri ? `${base}/paired${extensionFor(item.pairedVideoLocalUri, '.mov')}` : null;
+    const thumbnailPath = item.thumbnailLocalUri ? `${base}/thumbnail${extensionFor(item.thumbnailLocalUri, '.jpg')}` : null;
+    const copy = async (sourceUri: string | null | undefined, path: string | null) => {
+      if (!sourceUri || !path) return false;
+      try {
+        const source = new File(sourceUri);
+        if (!source.exists) return false;
+        const target = new File(directory, path);
+        target.parentDirectory.create({ idempotent: true, intermediates: true });
+        await source.copy(target);
+        return true;
+      } catch { return false; }
+    };
+    const hasPrimary = await copy(item.localUri, primaryPath);
+    const hasPaired = await copy(item.pairedVideoLocalUri, pairedPath);
+    const hasThumbnail = await copy(item.thumbnailLocalUri, thumbnailPath);
+    if (!hasPrimary) missingMedia += 1;
+    if (pairedPath && !hasPaired) missingMedia += 1;
+    if (thumbnailPath && !hasThumbnail) missingMedia += 1;
+    completed += 1;
+    onProgress?.(completed, total);
+    return { ...clean, localUri: hasPrimary ? primaryPath : '', pairedVideoLocalUri: hasPaired ? pairedPath : null, thumbnailLocalUri: hasThumbnail ? thumbnailPath : null };
+  }
+  try {
+    const images = [] as JournalBackup['images'];
+    for (const item of backup.images) images.push(await archiveItem(item, 'entries'));
+    const followUpImages = [] as NonNullable<JournalBackup['followUpImages']>;
+    for (const item of backup.followUpImages ?? []) followUpImages.push(await archiveItem(item, 'follow-ups'));
+    const timeCapsuleImages = [] as NonNullable<JournalBackup['timeCapsuleImages']>;
+    for (const item of backup.timeCapsuleImages ?? []) timeCapsuleImages.push(await archiveItem(item, 'time-capsules'));
+    let appPreferences = backup.appPreferences;
+    if (appPreferences?.avatarLocalUri) {
+      const avatarPath = `profile/avatar${extensionFor(appPreferences.avatarLocalUri, '.jpg')}`;
+      const source = new File(appPreferences.avatarLocalUri);
+      const target = new File(directory, avatarPath);
+      let copied = false;
+      try {
+        if (source.exists) {
+          target.parentDirectory.create({ idempotent: true, intermediates: true });
+          await source.copy(target);
+          copied = true;
+        }
+      } catch { /* A missing avatar should not prevent the journal backup. */ }
+      if (!copied) missingMedia += 1;
+      completed += 1;
+      onProgress?.(completed, total);
+      appPreferences = { ...appPreferences, avatarLocalUri: copied ? avatarPath : null, avatarDataBase64: undefined, avatarMimeType: undefined };
+    }
+    const manifest = new File(directory, 'backup.json');
+    manifest.create({ intermediates: true });
+    manifest.write(JSON.stringify({ ...backup, images, followUpImages, timeCapsuleImages, appPreferences }));
+    if (destination.exists) destination.delete();
+    await zip(directory.uri, destination.uri, NO_COMPRESSION);
+    if (!destination.exists || !destination.size) throw new Error('backup-creation-failed');
+    return { uri: destination.uri, size: destination.size, missingMedia };
+  } catch (error) {
+    if (destination.exists) destination.delete();
+    throw error;
+  } finally {
+    if (directory.exists) directory.delete();
+  }
+}
+
 function readZip(bytes: Uint8Array) {
   return readBackupArchive(bytes, parseJournalBackup);
 }
@@ -121,6 +198,19 @@ function referencedArchivePaths(backup: JournalBackup) {
 }
 
 function validateNativeArchive(backup: JournalBackup, entries: ZipEntry[]) {
+  const archivePaths = new Set<string>();
+  let expandedSize = 0;
+  let compressedSize = 0;
+  for (const entry of entries) {
+    if (!safeArchivePath(entry.path) || entry.isEncrypted || archivePaths.has(entry.path)) throw new Error('invalid-backup');
+    archivePaths.add(entry.path);
+    if (!entry.isDirectory) {
+      if (entry.size < 0 || entry.compressedSize < 0) throw new Error('invalid-backup');
+      expandedSize += entry.size;
+      compressedSize += entry.compressedSize;
+    }
+  }
+  if (expandedSize > compressedSize * 200 + 64 * 1024 * 1024) throw new Error('invalid-backup');
   const files = new Map(entries.filter((entry) => !entry.isDirectory).map((entry) => [entry.path, entry.size]));
   for (const path of referencedArchivePaths(backup)) {
     if (!safeArchivePath(path) || !files.get(path)) throw new Error('missing-backup-media');
@@ -150,6 +240,28 @@ async function readManifestFromArchive(uri: string) {
 
 export async function inspectZipBackupFile(uri: string) {
   return readManifestFromArchive(uri);
+}
+
+export async function storeRecoverySnapshotFile(sourceUri: string, maxSnapshots = 3) {
+  const source = new File(sourceUri);
+  if (!source.exists || !source.size) throw new Error('recovery-snapshot-missing');
+  const directory = new Directory(Paths.document, 'recovery-snapshots');
+  directory.create({ idempotent: true, intermediates: true });
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  const destination = new File(directory, `拾时恢复前快照-${stamp}-${Math.random().toString(36).slice(2, 6)}.zip`);
+  try {
+    await source.copy(destination);
+    if (!destination.exists || destination.size !== source.size) throw new Error('recovery-snapshot-verification-failed');
+    await inspectZipBackupFile(destination.uri);
+    const snapshots = directory.list()
+      .filter((item): item is File => item instanceof File && item.name.startsWith('拾时恢复前快照-') && item.name.endsWith('.zip'))
+      .sort((left, right) => right.name.localeCompare(left.name));
+    snapshots.slice(maxSnapshots).forEach((item) => item.delete());
+    return { uri: destination.uri, size: destination.size, retained: Math.min(snapshots.length, maxSnapshots) };
+  } catch (error) {
+    if (destination.exists) destination.delete();
+    throw error;
+  }
 }
 
 export async function materializeZipBackupFile(uri: string, onProgress?: ZipBackupProgress) {

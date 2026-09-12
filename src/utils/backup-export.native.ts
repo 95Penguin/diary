@@ -18,3 +18,8 @@ export async function exportBackupBytes(contents: Uint8Array, filename: string, 
   if (!await Sharing.isAvailableAsync()) throw new Error('sharing-unavailable');
   await Sharing.shareAsync(file.uri, { dialogTitle: '导出拾时记录', mimeType, UTI: 'public.zip-archive' });
 }
+
+export async function exportBackupUri(uri: string, _filename: string, mimeType = 'application/zip') {
+  if (!await Sharing.isAvailableAsync()) throw new Error('sharing-unavailable');
+  await Sharing.shareAsync(uri, { dialogTitle: '导出拾时记录', mimeType, UTI: 'public.zip-archive' });
+}

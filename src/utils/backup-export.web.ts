@@ -17,3 +17,11 @@ export async function exportBackupBytes(contents: Uint8Array, filename: string, 
   anchor.click();
   URL.revokeObjectURL(url);
 }
+
+export async function exportBackupUri(uri: string, filename: string) {
+  const anchor = document.createElement('a');
+  anchor.href = uri;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(uri);
+}

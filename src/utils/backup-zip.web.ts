@@ -36,8 +36,8 @@ export async function createZipBackup(backup: JournalBackup, onProgress?: ZipBac
     const paired = await readUri(item.pairedVideoLocalUri);
     const thumbnail = await readUri(item.thumbnailLocalUri);
     if (primary) files[primaryPath] = [primary, { level: 0 }]; else missingMedia += 1;
-    if (paired && pairedPath) files[pairedPath] = [paired, { level: 0 }];
-    if (thumbnail && thumbnailPath) files[thumbnailPath] = [thumbnail, { level: 0 }];
+    if (paired && pairedPath) files[pairedPath] = [paired, { level: 0 }]; else if (pairedPath) missingMedia += 1;
+    if (thumbnail && thumbnailPath) files[thumbnailPath] = [thumbnail, { level: 0 }]; else if (thumbnailPath) missingMedia += 1;
     completed += 1; onProgress?.(completed, total);
     return { ...item, localUri: primary ? primaryPath : '', dataBase64: undefined, pairedVideoLocalUri: paired && pairedPath ? pairedPath : null, pairedVideoDataBase64: undefined, thumbnailLocalUri: thumbnail && thumbnailPath ? thumbnailPath : null, thumbnailDataBase64: undefined };
   }
@@ -57,6 +57,12 @@ export async function createZipBackup(backup: JournalBackup, onProgress?: ZipBac
   }
   files['backup.json'] = [strToU8(JSON.stringify({ ...backup, images, followUpImages, timeCapsuleImages, appPreferences })), { level: 6 }];
   return { bytes: zipSync(files), missingMedia };
+}
+
+export async function createZipBackupFile(backup: JournalBackup, onProgress?: ZipBackupProgress) {
+  const archive = await createZipBackup(backup, onProgress);
+  const blob = new Blob([archive.bytes as BlobPart], { type: 'application/zip' });
+  return { uri: URL.createObjectURL(blob), size: archive.bytes.byteLength, missingMedia: archive.missingMedia };
 }
 
 function readZip(bytes: Uint8Array) {
@@ -102,6 +108,11 @@ export async function materializeZipBackup(bytes: Uint8Array, onProgress?: ZipBa
 
 export async function inspectZipBackupFile(uri: string) {
   return inspectZipBackup(new Uint8Array(await (await fetch(uri)).arrayBuffer()));
+}
+
+export async function storeRecoverySnapshotFile(sourceUri: string) {
+  const backup = await inspectZipBackupFile(sourceUri);
+  return { uri: sourceUri, size: JSON.stringify(backup).length, retained: 1 };
 }
 
 export async function materializeZipBackupFile(uri: string, onProgress?: ZipBackupProgress) {

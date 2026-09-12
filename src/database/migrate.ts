@@ -7,8 +7,68 @@ import type { SQLiteDatabase } from 'expo-sqlite';
  * migrated in production: data from those builds must first be exported by the
  * old build and restored through the validated ZIP backup flow.
  */
-export const DATABASE_VERSION = 18;
+export const DATABASE_VERSION = 19;
 export const DATABASE_BASELINE_VERSION = 13;
+
+const SEARCH_INDEX_SCHEMA = `
+  CREATE VIRTUAL TABLE entry_search USING fts5(entry_id UNINDEXED, content, tokenize='trigram');
+
+  CREATE TRIGGER entry_search_entries_insert AFTER INSERT ON entries BEGIN
+    INSERT INTO entry_search(rowid, entry_id, content) VALUES (new.rowid, new.id, new.content);
+  END;
+  CREATE TRIGGER entry_search_entries_update AFTER UPDATE OF content ON entries BEGIN
+    DELETE FROM entry_search WHERE rowid = old.rowid;
+    INSERT INTO entry_search(rowid, entry_id, content)
+      SELECT new.rowid, new.id, new.content || ' ' ||
+        COALESCE((SELECT group_concat(content, ' ') FROM follow_ups WHERE entry_id = new.id AND deleted_at IS NULL), '') || ' ' ||
+        COALESCE((SELECT group_concat(label, ' ') FROM entry_tags WHERE entry_id = new.id), '');
+  END;
+  CREATE TRIGGER entry_search_entries_delete AFTER DELETE ON entries BEGIN
+    DELETE FROM entry_search WHERE rowid = old.rowid;
+  END;
+  CREATE TRIGGER entry_search_follow_ups_insert AFTER INSERT ON follow_ups BEGIN
+    DELETE FROM entry_search WHERE entry_id = new.entry_id;
+    INSERT INTO entry_search(rowid, entry_id, content)
+      SELECT e.rowid, e.id, e.content || ' ' ||
+        COALESCE((SELECT group_concat(content, ' ') FROM follow_ups WHERE entry_id = e.id AND deleted_at IS NULL), '') || ' ' ||
+        COALESCE((SELECT group_concat(label, ' ') FROM entry_tags WHERE entry_id = e.id), '') FROM entries e WHERE e.id = new.entry_id;
+  END;
+  CREATE TRIGGER entry_search_follow_ups_update AFTER UPDATE ON follow_ups BEGIN
+    DELETE FROM entry_search WHERE entry_id IN (old.entry_id, new.entry_id);
+    INSERT INTO entry_search(rowid, entry_id, content)
+      SELECT e.rowid, e.id, e.content || ' ' ||
+        COALESCE((SELECT group_concat(content, ' ') FROM follow_ups WHERE entry_id = e.id AND deleted_at IS NULL), '') || ' ' ||
+        COALESCE((SELECT group_concat(label, ' ') FROM entry_tags WHERE entry_id = e.id), '') FROM entries e WHERE e.id IN (old.entry_id, new.entry_id);
+  END;
+  CREATE TRIGGER entry_search_follow_ups_delete AFTER DELETE ON follow_ups BEGIN
+    DELETE FROM entry_search WHERE entry_id = old.entry_id;
+    INSERT INTO entry_search(rowid, entry_id, content)
+      SELECT e.rowid, e.id, e.content || ' ' ||
+        COALESCE((SELECT group_concat(content, ' ') FROM follow_ups WHERE entry_id = e.id AND deleted_at IS NULL), '') || ' ' ||
+        COALESCE((SELECT group_concat(label, ' ') FROM entry_tags WHERE entry_id = e.id), '') FROM entries e WHERE e.id = old.entry_id;
+  END;
+  CREATE TRIGGER entry_search_tags_insert AFTER INSERT ON entry_tags BEGIN
+    DELETE FROM entry_search WHERE entry_id = new.entry_id;
+    INSERT INTO entry_search(rowid, entry_id, content)
+      SELECT e.rowid, e.id, e.content || ' ' ||
+        COALESCE((SELECT group_concat(content, ' ') FROM follow_ups WHERE entry_id = e.id AND deleted_at IS NULL), '') || ' ' ||
+        COALESCE((SELECT group_concat(label, ' ') FROM entry_tags WHERE entry_id = e.id), '') FROM entries e WHERE e.id = new.entry_id;
+  END;
+  CREATE TRIGGER entry_search_tags_delete AFTER DELETE ON entry_tags BEGIN
+    DELETE FROM entry_search WHERE entry_id = old.entry_id;
+    INSERT INTO entry_search(rowid, entry_id, content)
+      SELECT e.rowid, e.id, e.content || ' ' ||
+        COALESCE((SELECT group_concat(content, ' ') FROM follow_ups WHERE entry_id = e.id AND deleted_at IS NULL), '') || ' ' ||
+        COALESCE((SELECT group_concat(label, ' ') FROM entry_tags WHERE entry_id = e.id), '') FROM entries e WHERE e.id = old.entry_id;
+  END;
+  CREATE TRIGGER entry_search_tags_update AFTER UPDATE ON entry_tags BEGIN
+    DELETE FROM entry_search WHERE entry_id IN (old.entry_id, new.entry_id);
+    INSERT INTO entry_search(rowid, entry_id, content)
+      SELECT e.rowid, e.id, e.content || ' ' ||
+        COALESCE((SELECT group_concat(content, ' ') FROM follow_ups WHERE entry_id = e.id AND deleted_at IS NULL), '') || ' ' ||
+        COALESCE((SELECT group_concat(label, ' ') FROM entry_tags WHERE entry_id = e.id), '') FROM entries e WHERE e.id IN (old.entry_id, new.entry_id);
+  END;
+`;
 
 const BASELINE_SCHEMA = `
   CREATE TABLE entries (
@@ -198,6 +258,7 @@ const BASELINE_SCHEMA = `
     ON time_capsule_replies(capsule_id, created_at ASC);
   CREATE INDEX idx_time_capsule_images_capsule_id
     ON time_capsule_images(capsule_id, sort_order ASC);
+  ${SEARCH_INDEX_SCHEMA}
 `;
 
 const MIGRATION_13_TO_14 = `
@@ -265,6 +326,15 @@ const MIGRATION_17_TO_18 = `
   );
 `;
 
+const MIGRATION_18_TO_19 = `
+  ${SEARCH_INDEX_SCHEMA}
+  INSERT INTO entry_search(rowid, entry_id, content)
+    SELECT e.rowid, e.id, e.content || ' ' ||
+      COALESCE((SELECT group_concat(content, ' ') FROM follow_ups WHERE entry_id = e.id AND deleted_at IS NULL), '') || ' ' ||
+      COALESCE((SELECT group_concat(label, ' ') FROM entry_tags WHERE entry_id = e.id), '')
+    FROM entries e;
+`;
+
 export async function migrateDatabase(db: SQLiteDatabase) {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
@@ -284,12 +354,13 @@ export async function migrateDatabase(db: SQLiteDatabase) {
   try {
     if (currentVersion === 0) {
       await db.execAsync(BASELINE_SCHEMA);
-    } else if (currentVersion >= 13 && currentVersion <= 17) {
+    } else if (currentVersion >= 13 && currentVersion <= 18) {
       if (currentVersion === 13) await db.execAsync(MIGRATION_13_TO_14);
       if (currentVersion <= 14) await db.execAsync(MIGRATION_14_TO_15);
       if (currentVersion <= 15) await db.execAsync(MIGRATION_15_TO_16);
       if (currentVersion <= 16) await db.execAsync(MIGRATION_16_TO_17);
-      await db.execAsync(MIGRATION_17_TO_18);
+      if (currentVersion <= 17) await db.execAsync(MIGRATION_17_TO_18);
+      await db.execAsync(MIGRATION_18_TO_19);
     } else {
       throw new Error(`没有可用的数据库迁移路径：${currentVersion} → ${DATABASE_VERSION}`);
     }

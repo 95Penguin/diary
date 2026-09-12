@@ -9,21 +9,27 @@ import { File } from 'expo-file-system';
 import { createJournalExport, getJournalStats, getLastExportAt, importJournalBackup, saveLastExportAt } from '@/database/journal-repository';
 import type { JournalBackup, JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
-import { exportBackupBytes } from '@/utils/backup-export';
+import { exportBackupUri } from '@/utils/backup-export';
 import { materializeBackupImages } from '@/utils/backup-images';
 import { parseJournalBackup } from '@/utils/backup-import';
-import { createZipBackup, inspectZipBackup, inspectZipBackupFile, materializeZipBackupFile } from '@/utils/backup-zip';
+import { createZipBackupFile, inspectZipBackupFile, materializeZipBackupFile, storeRecoverySnapshotFile } from '@/utils/backup-zip';
 import { formatShortDateTime } from '@/utils/date';
 import { deleteJournalImage, getJournalMediaStorageUsage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { setBackupReminder } from '@/utils/backup-reminder';
-import { chooseBackupDirectory, saveBackupToDirectory } from '@/utils/backup-directory';
+import { chooseBackupDirectory, saveBackupFileToDirectory } from '@/utils/backup-directory';
 import { AUTOMATIC_BACKUP_RETENTION } from '@/utils/automatic-backup';
 import { recordAppError } from '@/utils/app-error-log';
 import { syncTimeCapsuleNotifications } from '@/utils/time-capsule-notifications';
 
 const EMPTY_STATS: JournalStats = { entries: 0, followUps: 0, images: 0, deleted: 0 };
 type OperationProgress = { label: string; value: number } | null;
+type GeneratedArchive = Awaited<ReturnType<typeof createZipBackupFile>>;
+
+function deleteGeneratedArchive(archive: GeneratedArchive | null) {
+  if (!archive?.uri.startsWith('file://')) return;
+  try { const file = new File(archive.uri); if (file.exists) file.delete(); } catch { /* Cache cleanup is best-effort. */ }
+}
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -56,14 +62,15 @@ export default function BackupScreen() {
 
   async function createVerifiedArchive() {
     const source = await createJournalExport(db);
-    const archive = await createZipBackup(source, (completed, total) => {
+    const archive = await createZipBackupFile(source, (completed, total) => {
       setOperationProgress({
         label: total ? `正在读取媒体 ${completed}/${total}` : '正在整理数据',
         value: 0.08 + 0.74 * (total ? completed / total : 1),
       });
     });
-    const inspected = inspectZipBackup(archive.bytes);
+    const inspected = await inspectZipBackupFile(archive.uri);
     if (inspected.entries.length !== source.entries.length || inspected.followUps.length !== source.followUps.length) {
+      deleteGeneratedArchive(archive);
       throw new Error('backup-verification-failed');
     }
     return archive;
@@ -85,20 +92,22 @@ export default function BackupScreen() {
     setExporting(true);
     setMessage('');
     setOperationProgress({ label: '正在准备记录', value: 0.03 });
+    let archive: GeneratedArchive | null = null;
     try {
-      const archive = await createVerifiedArchive();
+      archive = await createVerifiedArchive();
       const localDate = new Date().toLocaleDateString('sv-SE');
       setOperationProgress({ label: '正在生成 ZIP 文件', value: 0.88 });
-      await exportBackupBytes(archive.bytes, `拾时备份-${localDate}.zip`);
+      await exportBackupUri(archive.uri, `拾时备份-${localDate}.zip`);
       await finishSuccessfulBackup(archive.missingMedia);
       setOperationProgress({ label: '备份已完成', value: 1 });
-      setMessage(archive.missingMedia ? `ZIP 备份已生成（${formatBytes(archive.bytes.length)}），${archive.missingMedia} 个本地媒体文件未找到` : `完整 ZIP 备份已生成（${formatBytes(archive.bytes.length)}）`);
+      setMessage(archive.missingMedia ? `ZIP 备份已生成（${formatBytes(archive.size)}），${archive.missingMedia} 个本地媒体文件未找到` : `完整 ZIP 备份已生成（${formatBytes(archive.size)}）`);
     } catch (error) {
       void recordAppError('backup.export-zip', error);
       const now = new Date().toISOString();
       await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: 'failed' }).catch(() => undefined);
       setMessage('导出失败，请稍后重试');
     } finally {
+      deleteGeneratedArchive(archive);
       setExporting(false);
       setOperationProgress(null);
     }
@@ -154,13 +163,14 @@ export default function BackupScreen() {
     setExporting(true);
     setMessage('');
     setOperationProgress({ label: '正在准备记录', value: 0.03 });
+    let archive: GeneratedArchive | null = null;
     try {
-      const archive = await createVerifiedArchive();
+      archive = await createVerifiedArchive();
       const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
       setOperationProgress({ label: '正在写入备份目录', value: 0.88 });
-      const saved = await saveBackupToDirectory(
+      const saved = await saveBackupFileToDirectory(
         preferences.backupDirectoryUri,
-        archive.bytes,
+        archive.uri,
         `拾时备份-${stamp}`,
         AUTOMATIC_BACKUP_RETENTION,
       );
@@ -175,6 +185,7 @@ export default function BackupScreen() {
       await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: 'failed' }).catch(() => undefined);
       setMessage('目录备份失败。请重新选择目录，或检查网盘是否仍可用。');
     } finally {
+      deleteGeneratedArchive(archive);
       setExporting(false);
       setOperationProgress(null);
     }
@@ -228,11 +239,22 @@ export default function BackupScreen() {
     setOperationProgress({ label: '正在准备恢复', value: 0.03 });
     let createdImageUris: string[] = [];
     let imported = false;
+    let safetySnapshot: Awaited<ReturnType<typeof storeRecoverySnapshotFile>> | null = null;
+    let snapshotArchive: GeneratedArchive | null = null;
     try {
+      setOperationProgress({ label: '正在创建恢复前安全快照', value: 0.04 });
+      const currentData = await createJournalExport(db);
+      snapshotArchive = await createZipBackupFile(currentData, (completed, total) => {
+        setOperationProgress({ label: total ? `正在备份当前数据 ${completed}/${total}` : '正在备份当前数据', value: 0.04 + 0.28 * (total ? completed / total : 1) });
+      });
+      if (snapshotArchive.missingMedia) throw new Error('recovery-snapshot-incomplete');
+      const verifiedSnapshot = await inspectZipBackupFile(snapshotArchive.uri);
+      if (verifiedSnapshot.entries.length !== currentData.entries.length || verifiedSnapshot.followUps.length !== currentData.followUps.length) throw new Error('recovery-snapshot-verification-failed');
+      safetySnapshot = await storeRecoverySnapshotFile(snapshotArchive.uri);
       const reportProgress = (completed: number, total: number) => {
         setOperationProgress({
           label: total ? `正在恢复媒体 ${completed}/${total}` : '正在恢复数据',
-          value: 0.06 + 0.76 * (total ? completed / total : 1),
+          value: 0.36 + 0.48 * (total ? completed / total : 1),
         });
       };
       const materialized = pendingZipUri
@@ -268,15 +290,20 @@ export default function BackupScreen() {
       const created = result.createdEntries + result.createdFollowUps;
       const updated = result.updatedEntries + result.updatedFollowUps;
       setOperationProgress({ label: '恢复已完成', value: 1 });
-      setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条${restoredPreferences ? '，个人资料和设置已恢复' : ''}`);
+      setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条${restoredPreferences ? '，个人资料和设置已恢复' : ''}。恢复前快照已安全保留。`);
     } catch (error) {
       void recordAppError('backup.restore', error);
       if (!imported) createdImageUris.forEach(deleteJournalImage);
       setPendingBackup(null);
       setPendingZipUri(null);
       const reason = error instanceof Error ? error.message : '';
-      setMessage(reason === 'missing-backup-media' ? '备份文件不完整，未恢复任何数据' : '恢复失败，原有记录没有被清空');
+      setMessage(reason === 'missing-backup-media'
+        ? '备份文件不完整，未恢复任何数据'
+        : reason.startsWith('recovery-snapshot')
+          ? '无法生成完整的恢复前快照，已停止恢复，请检查存储空间和本地媒体'
+          : `恢复失败，原有记录没有被清空${safetySnapshot ? '，恢复前快照已保留' : ''}`);
     } finally {
+      deleteGeneratedArchive(snapshotArchive);
       setImporting(false);
       setOperationProgress(null);
     }

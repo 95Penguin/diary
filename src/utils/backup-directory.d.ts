@@ -8,3 +8,4 @@ export function saveBackupToDirectory(
   filenameBase: string,
   maxBackups?: number,
 ): Promise<SavedDirectoryBackup>;
+export function saveBackupFileToDirectory(directoryUri: string, sourceUri: string, filenameBase: string, maxBackups?: number): Promise<SavedDirectoryBackup>;

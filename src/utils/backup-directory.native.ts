@@ -58,3 +58,27 @@ export async function saveBackupToDirectory(
     if (temporary.exists) temporary.delete();
   }
 }
+
+export async function saveBackupFileToDirectory(directoryUri: string, sourceUri: string, filenameBase: string, maxBackups = 5): Promise<SavedDirectoryBackup> {
+  if (Platform.OS !== 'android') throw new Error('directory-backup-unavailable');
+  const source = new File(sourceUri);
+  if (!source.exists || !source.size) throw new Error('backup-file-missing');
+  const uri = await LegacyFileSystem.StorageAccessFramework.createFileAsync(directoryUri, filenameBase, ZIP_MIME);
+  try {
+    await source.copy(new File(uri));
+    const info = await LegacyFileSystem.getInfoAsync(uri);
+    if (!info.exists || info.size !== source.size) throw new Error('directory-backup-verification-failed');
+    const files = await LegacyFileSystem.StorageAccessFramework.readDirectoryAsync(directoryUri);
+    const backups = (await Promise.all(files.map(async (fileUri) => {
+      const fileInfo = await LegacyFileSystem.getInfoAsync(fileUri);
+      const decoded = decodeURIComponent(fileUri);
+      const owned = decoded.includes('拾时备份-') || decoded.includes('拾时自动备份-');
+      return fileInfo.exists && !fileInfo.isDirectory && owned && decoded.toLowerCase().includes('.zip') ? { uri: fileUri, modificationTime: fileInfo.modificationTime } : null;
+    }))).filter((item): item is { uri: string; modificationTime: number } => Boolean(item)).sort((a, b) => b.modificationTime - a.modificationTime);
+    await Promise.all(backups.slice(maxBackups).map((item) => LegacyFileSystem.StorageAccessFramework.deleteAsync(item.uri, { idempotent: true })));
+    return { uri, size: info.size, retained: Math.min(backups.length, maxBackups) };
+  } catch (error) {
+    await LegacyFileSystem.StorageAccessFramework.deleteAsync(uri, { idempotent: true }).catch(() => undefined);
+    throw error;
+  }
+}

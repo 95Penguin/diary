@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, FlatList, InteractionManager, Modal, PanResponder, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
+import * as SplashScreen from 'expo-splash-screen';
 import { Image } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useFocusEffect, type Href } from 'expo-router';
@@ -43,6 +44,7 @@ import { useAppPreferences } from '@/preferences/app-preferences';
 import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
 import { cleanupExpiredTimeCapsules } from '@/database/time-capsule-repository';
 import { recordAppError } from '@/utils/app-error-log';
+import { appendOlderWindow, prependNewerWindow } from '@/utils/timeline-window';
 
 export default function HomeScreen() {
   const db = useSQLiteContext();
@@ -148,6 +150,7 @@ export default function HomeScreen() {
 type FilterKind = EntryFilterKind;
 type ActiveFilterKind = Exclude<FilterKind, 'none'>;
 const PAGE_SIZE = 30;
+const TIMELINE_MEMORY_WINDOW = PAGE_SIZE * 6;
 const EMPTY_FILTER_OPTIONS: EntryFilterOptions = { locations: [], tags: [], moods: [], weather: [] };
 
 function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress }: { refreshKey: number; entryRefresh: { id: string; revision: number } | null; scrollRequest: number; onOpen: (entry: Entry) => void; onLongPress: (entry: Entry) => void }) {
@@ -157,6 +160,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const [entries, setEntries] = useState<Entry[]>([]);
   const [cursor, setCursor] = useState<EntryPageCursor | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showInitialLoader, setShowInitialLoader] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadingNewer, setLoadingNewer] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -230,7 +234,10 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       void recordAppError('timeline.load', error);
       if (currentRequest === requestId.current) setLoadError(true);
     } finally {
-      if (currentRequest === requestId.current) setLoading(false);
+      if (currentRequest === requestId.current) {
+        setLoading(false);
+        void SplashScreen.hideAsync();
+      }
     }
   }, [db, filters, jumpStartCursor]);
 
@@ -239,6 +246,12 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     const timer = setTimeout(() => void loadFirstPage(), 0);
     return () => clearTimeout(timer);
   }, [loadFirstPage, refreshKey]);
+
+  useEffect(() => {
+    if (!loading || entries.length) return;
+    const timer = setTimeout(() => setShowInitialLoader(true), 300);
+    return () => clearTimeout(timer);
+  }, [entries.length, loading]);
 
   useEffect(() => {
     if (!entryRefresh) return;
@@ -269,7 +282,16 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
         filters,
       });
       if (currentRequest !== requestId.current) return;
-      setEntries((current) => [...current, ...page.entries.filter((item) => !current.some((entry) => entry.id === item.id))]);
+      setEntries((current) => {
+        const window = appendOlderWindow(current, page.entries, TIMELINE_MEMORY_WINDOW);
+        if (window.trimmedNewest) {
+          const first = window.entries[0];
+          setNewerCursor(first ? entryCursor(first) : null);
+          setHasNewer(Boolean(first));
+          setHistoryMode(true);
+        }
+        return window.entries;
+      });
       setCursor(page.nextCursor);
       setHasMore(Boolean(page.nextCursor));
     } finally {
@@ -284,7 +306,15 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     try {
       const page = await listNewerEntryPage(db, { limit: PAGE_SIZE, cursor: newerCursor, filters });
       if (currentRequest !== requestId.current) return;
-      setEntries((current) => [...page.entries.filter((item) => !current.some((entry) => entry.id === item.id)), ...current]);
+      setEntries((current) => {
+        const window = prependNewerWindow(current, page.entries, TIMELINE_MEMORY_WINDOW);
+        if (window.trimmedOldest) {
+          const last = window.entries.at(-1);
+          setCursor(last ? entryCursor(last) : null);
+          setHasMore(Boolean(last));
+        }
+        return window.entries;
+      });
       const first = page.entries[0];
       setNewerCursor(page.nextCursor ?? (first ? entryCursor(first) : newerCursor));
       setHasNewer(Boolean(page.nextCursor));
@@ -409,7 +439,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: true, viewOffset: 0 });
   }, [groups.length, scrollRequest]);
 
-  if (loading && !entries.length) return <ActivityIndicator style={styles.loader} color={colors.primary} />;
+  if (loading && !entries.length) return showInitialLoader ? <ActivityIndicator style={styles.loader} color={colors.primary} /> : <View />;
   if (loadError && !entries.length) return <View style={styles.loadFailure}><Text style={[styles.loadFailureTitle, { color: readingTheme.text }]}>时间轴暂时没有加载出来</Text><Text style={[styles.loadFailureText, { color: readingTheme.secondary }]}>记录仍保存在本机，可以重新读取。</Text><Pressable onPress={() => void loadFirstPage()} style={styles.retryButton}><Text style={styles.retryButtonText}>重新读取</Text></Pressable></View>;
   const valueOptions = filterKind === 'time'
     ? [{ value: 'today', label: '今天' }, { value: '7days', label: '最近 7 天' }, { value: '30days', label: '最近 30 天' }, { value: 'year', label: '今年' }]

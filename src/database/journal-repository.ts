@@ -906,9 +906,12 @@ export async function searchEntrySummaries(
   if (!keyword) return { results: [], hasMore: false };
   const escaped = keyword.replace(/[\\%_]/g, '\\$&');
   const like = `%${escaped}%`;
+  const useFullTextIndex = /[\p{L}\p{N}]{3}/u.test(keyword);
   const limit = Math.max(1, Math.min(options.limit ?? 20, 50));
   const offset = Math.max(0, options.offset ?? 0);
-  const params: (string | number)[] = [like, like, like, like, like, like];
+  const params: (string | number)[] = [like, like, like];
+  if (useFullTextIndex) params.push(`"${keyword.replace(/"/g, '""')}"`);
+  params.push(like, like, like);
   let dateWhere = '';
   if (options.range) {
     dateWhere = ' AND e.occurred_at >= ? AND e.occurred_at < ?';
@@ -924,7 +927,9 @@ export async function searchEntrySummaries(
       (SELECT f.content FROM follow_ups f WHERE f.entry_id = e.id AND f.deleted_at IS NULL AND f.content LIKE ? ESCAPE '\\' ORDER BY f.created_at ASC LIMIT 1) AS matching_follow_up,
       (SELECT t.label FROM entry_tags t WHERE t.entry_id = e.id AND t.label LIKE ? ESCAPE '\\' ORDER BY t.sort_order ASC LIMIT 1) AS matching_tag
     FROM entries e
-    WHERE e.deleted_at IS NULL AND (
+    WHERE e.deleted_at IS NULL
+    ${useFullTextIndex ? 'AND e.rowid IN (SELECT rowid FROM entry_search WHERE entry_search MATCH ?)' : ''}
+    AND (
       e.content LIKE ? ESCAPE '\\'
       OR EXISTS (SELECT 1 FROM follow_ups f WHERE f.entry_id = e.id AND f.deleted_at IS NULL AND f.content LIKE ? ESCAPE '\\')
       OR EXISTS (SELECT 1 FROM entry_tags t WHERE t.entry_id = e.id AND t.label LIKE ? ESCAPE '\\')
@@ -1709,6 +1714,9 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
       const currentTemplates = await getJournalTemplateSettings(txn);
       await saveJournalTemplateSettings(txn, mergeJournalTemplateSettings(currentTemplates, backup.journalTemplates));
     }
+    const foreignKeyProblems = await txn.getAllAsync('PRAGMA foreign_key_check');
+    const integrity = await txn.getAllAsync<{ quick_check: string }>('PRAGMA quick_check');
+    if (foreignKeyProblems.length || integrity.some((row) => row.quick_check !== 'ok')) throw new Error('restore-integrity-check-failed');
   });
   return result;
 }

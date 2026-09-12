@@ -25,10 +25,15 @@ function localDateKey(value: string) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+const REGION_DOUBLE_PRESS_MS = 320;
+const REGION_DOUBLE_PRESS_ZOOM_STEP = 3;
+const MAP_MAX_ZOOM = 17;
+
 export default function FootprintMapScreen() {
   const db = useSQLiteContext();
   const { preferences, readingTheme, readingBodyStyle, readingFontFamily } = useAppPreferences();
   const mapRef = useRef<MapViewRef>(null);
+  const lastRegionPressRef = useRef<{ id: string; at: number } | null>(null);
   const [entries, setEntries] = useState<FootprintEntry[]>([]);
   const [missingCoordinates, setMissingCoordinates] = useState(0);
   const [pendingEntries, setPendingEntries] = useState<PendingFootprintEntry[]>([]);
@@ -185,9 +190,24 @@ export default function FootprintMapScreen() {
     setMapAttempt((value) => value + 1);
   }
 
-  function chooseRegion(regionId: string) {
+  async function pressRegion(regionId: string, pressedAt: number) {
     const region = regions.find((item) => item.id === regionId);
-    if (region) setSelectedRegion(region);
+    if (!region) return;
+    setSelectedRegion(region);
+    const previous = lastRegionPressRef.current;
+    lastRegionPressRef.current = { id: regionId, at: pressedAt };
+    if (previous?.id !== regionId || pressedAt - previous.at > REGION_DOUBLE_PRESS_MS) return;
+    lastRegionPressRef.current = null;
+    try {
+      const camera = await mapRef.current?.getCameraPosition();
+      if (!camera || !mapRef.current) return;
+      await mapRef.current.moveCamera({
+        target: wgs84ToGcj02({ latitude: region.latitude, longitude: region.longitude }),
+        zoom: Math.min(MAP_MAX_ZOOM, (camera.zoom ?? initialCamera.zoom) + REGION_DOUBLE_PRESS_ZOOM_STEP),
+      }, 320);
+    } catch {
+      // A failed camera animation must not affect selecting and reading the place.
+    }
   }
 
   async function backfillPendingLocations(privacyOverride?: CoordinatePrivacyChoice) {
@@ -286,7 +306,7 @@ export default function FootprintMapScreen() {
         mapType={MapType.Standard}
         initialCameraPosition={{ target: { latitude: amapCamera.latitude, longitude: amapCamera.longitude }, zoom: initialCamera.zoom }}
         minZoom={3}
-        maxZoom={17}
+        maxZoom={MAP_MAX_ZOOM}
         compassEnabled={false}
         zoomControlsEnabled={false}
         myLocationButtonEnabled={false}
@@ -311,7 +331,7 @@ export default function FootprintMapScreen() {
             strokeColor={selectedRegion?.id === region.id ? 'rgba(79, 125, 107, 0.72)' : 'rgba(111, 156, 138, 0.34)'}
             strokeWidth={1}
             zIndex={Math.max(0, visits - 1)}
-            onCirclePress={() => chooseRegion(region.id)}
+            onCirclePress={(event) => void pressRegion(region.id, event.timeStamp)}
           />;
         })}
         {regions.map((region) => {
@@ -323,7 +343,7 @@ export default function FootprintMapScreen() {
             cacheKey={`footprint-region-${region.id}-${moments}-${active ? 'active' : 'idle'}`}
             position={wgs84ToGcj02({ latitude: region.latitude, longitude: region.longitude })}
             zIndex={moments}
-            onMarkerPress={() => chooseRegion(region.id)}
+            onMarkerPress={(event) => void pressRegion(region.id, event.timeStamp)}
           >
             <View style={[styles.memoryMarker, { width: leafSize + 8, height: leafSize + 8 }, active && styles.memoryMarkerActive]}>
               <View style={[styles.memoryLeaf, { width: leafSize * 1.18, height: leafSize * 0.72 }, active && styles.memoryLeafActive]}>

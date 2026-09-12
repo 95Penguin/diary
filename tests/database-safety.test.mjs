@@ -219,10 +219,11 @@ test('production baseline v13 migrates forward without rebuilding user tables', 
   const db = createTestDatabase();
   t.after(() => db.close());
   await db.execAsync(`
-    CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL);
+    CREATE TABLE entries (id TEXT PRIMARY KEY NOT NULL, content TEXT NOT NULL);
     CREATE TABLE follow_ups (
       id TEXT PRIMARY KEY NOT NULL,
       entry_id TEXT NOT NULL,
+      content TEXT NOT NULL,
       created_at TEXT NOT NULL,
       deleted_at TEXT
     );
@@ -232,7 +233,7 @@ test('production baseline v13 migrates forward without rebuilding user tables', 
       sort_order INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (entry_id, label)
     );
-    INSERT INTO entries (id) VALUES ('kept');
+    INSERT INTO entries (id, content) VALUES ('kept', '保留正文');
     PRAGMA user_version = 13;
   `);
   await migrateDatabase(db);
@@ -631,6 +632,12 @@ test('lightweight search paginates without loading full entry relationships', as
   assert.equal(page.results[0].matchingFollowUpId, 'follow-up-1');
   assert.deepEqual(page.results[0].sources, ['followUp']);
   assert.equal('images' in page.results[0].entry, false);
+
+  await updateFollowUpWithImages(db, 'follow-up-1', '已经完成更新', []);
+  assert.equal((await searchEntrySummaries(db, '原始后续')).results.length, 0);
+  assert.equal((await searchEntrySummaries(db, '完成更新')).results[0].matchingFollowUpId, 'follow-up-1');
+  await renameTagEverywhere(db, '测试', '长期测试标签');
+  assert.deepEqual((await searchEntrySummaries(db, '测试标签')).results[0].sources, ['tag']);
 });
 
 test('permanent deletion refuses active entries and keeps their media references', async (t) => {
