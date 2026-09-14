@@ -8,8 +8,9 @@ module.exports = ({ config }) => {
   return {
     ...config,
     plugins: [
-      ...(config.plugins ?? []).filter((plugin) => !['expo-image', 'expo-gaode-map', '@react-native-community/datetimepicker', 'react-native-zip-archive'].includes(Array.isArray(plugin) ? plugin[0] : plugin)),
+      ...(config.plugins ?? []).filter((plugin) => !['expo-image', 'expo-gaode-map', 'expo-secure-store', '@react-native-community/datetimepicker', 'react-native-zip-archive'].includes(Array.isArray(plugin) ? plugin[0] : plugin)),
       'expo-image',
+      'expo-secure-store',
       '@react-native-community/datetimepicker',
       'react-native-zip-archive',
       [

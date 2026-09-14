@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isReleasedDatabaseError } from '../src/database/database-recovery.ts';
+import {
+  installDatabaseRecovery,
+  isReleasedDatabaseError,
+  subscribeToDatabaseRecovery,
+} from '../src/database/database-recovery.ts';
 
 test('recognizes Expo Android released shared-object failures', () => {
   assert.equal(isReleasedDatabaseError(new Error('Cannot use shared object that was already released')), true);
@@ -13,4 +17,23 @@ test('does not reconnect for ordinary SQL or validation failures', () => {
   assert.equal(isReleasedDatabaseError(new Error('UNIQUE constraint failed: entries.id')), false);
   assert.equal(isReleasedDatabaseError(new Error('no such table: entries')), false);
   assert.equal(isReleasedDatabaseError(new Error('invalid-backup')), false);
+});
+
+test('only the active connection can request one recovery at a time', async () => {
+  const released = new Error('Cannot use shared object that was already released');
+  const stale = { prepareAsync: async () => { throw released; } };
+  const active = { prepareAsync: async () => { throw released; } };
+  let recoveries = 0;
+  const unsubscribe = subscribeToDatabaseRecovery(() => { recoveries += 1; });
+  try {
+    installDatabaseRecovery(stale);
+    installDatabaseRecovery(active);
+    await assert.rejects(stale.prepareAsync('SELECT 1'), released);
+    assert.equal(recoveries, 0);
+    await assert.rejects(active.prepareAsync('SELECT 1'), released);
+    await assert.rejects(active.prepareAsync('SELECT 1'), released);
+    assert.equal(recoveries, 1);
+  } finally {
+    unsubscribe();
+  }
 });

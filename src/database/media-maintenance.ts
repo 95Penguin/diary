@@ -20,7 +20,8 @@ export async function cleanupOrphanMediaMetadata(db: SQLiteDatabase) {
   const metadata = await db.getAllAsync<{ uri: string }>('SELECT uri FROM media_metadata');
   const orphaned = metadata.filter(({ uri }) => !referenced.has(uri)).map(({ uri }) => uri);
   if (!orphaned.length) return 0;
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     for (const uri of orphaned) await txn.runAsync('DELETE FROM media_metadata WHERE uri = ?', uri);
   });
   return orphaned.length;
@@ -29,7 +30,8 @@ export async function cleanupOrphanMediaMetadata(db: SQLiteDatabase) {
 export async function deleteMediaMetadataForUris(db: SQLiteDatabase, uris: string[]) {
   const unique = [...new Set(uris)];
   if (!unique.length) return;
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     for (const uri of unique) await txn.runAsync('DELETE FROM media_metadata WHERE uri = ?', uri);
   });
 }

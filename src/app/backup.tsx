@@ -1,7 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useFocusEffect, type Href } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
@@ -21,6 +21,7 @@ import { chooseBackupDirectory, saveBackupFileToDirectory } from '@/utils/backup
 import { AUTOMATIC_BACKUP_RETENTION } from '@/utils/automatic-backup';
 import { recordAppError } from '@/utils/app-error-log';
 import { syncTimeCapsuleNotifications } from '@/utils/time-capsule-notifications';
+import { withBackupOperation } from '@/utils/backup-operation';
 
 const EMPTY_STATS: JournalStats = { entries: 0, followUps: 0, images: 0, deleted: 0 };
 type OperationProgress = { label: string; value: number } | null;
@@ -40,6 +41,7 @@ function formatBytes(bytes: number) {
 
 export default function BackupScreen() {
   const db = useSQLiteContext();
+  const { cloudBackupUri } = useLocalSearchParams<{ cloudBackupUri?: string }>();
   const { preferences, readingTheme, updatePreferences } = useAppPreferences();
   const [stats, setStats] = useState(EMPTY_STATS);
   const [lastExportAt, setLastExportAt] = useState<string | null>(null);
@@ -51,6 +53,24 @@ export default function BackupScreen() {
   const [mediaBytes, setMediaBytes] = useState(0);
   const [operationProgress, setOperationProgress] = useState<OperationProgress>(null);
   const [advancedVisible, setAdvancedVisible] = useState(false);
+  const handledCloudBackupUri = useRef<string | null>(null);
+
+  const deleteCloudDownload = useCallback((uri: string | null) => {
+    if (!uri || uri !== cloudBackupUri || !uri.startsWith('file://')) return;
+    try { const file = new File(uri); if (file.exists) file.delete(); } catch { /* Cache cleanup is best-effort. */ }
+  }, [cloudBackupUri]);
+
+  const clearPendingBackup = useCallback(() => {
+    deleteCloudDownload(pendingZipUri);
+    setPendingBackup(null);
+    setPendingZipUri(null);
+  }, [deleteCloudDownload, pendingZipUri]);
+
+  const dismissPendingBackup = useCallback(() => {
+    // Android back and backdrop taps must not remove the ZIP while restore is
+    // still streaming media out of it.
+    if (!importing) clearPendingBackup();
+  }, [clearPendingBackup, importing]);
 
   const load = useCallback(async () => {
     const [nextStats, exportedAt, storage] = await Promise.all([getJournalStats(db), getLastExportAt(db), getJournalMediaStorageUsage()]);
@@ -60,7 +80,27 @@ export default function BackupScreen() {
   }, [db]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
+  useEffect(() => {
+    if (!cloudBackupUri || handledCloudBackupUri.current === cloudBackupUri) return;
+    handledCloudBackupUri.current = cloudBackupUri;
+    let active = true;
+    void inspectZipBackupFile(cloudBackupUri).then((backup) => {
+      if (!active) {
+        deleteCloudDownload(cloudBackupUri);
+        return;
+      }
+      setPendingBackup(backup);
+      setPendingZipUri(cloudBackupUri);
+    }).catch((error) => {
+      void recordAppError('backup.read-cloud-file', error);
+      deleteCloudDownload(cloudBackupUri);
+      if (active) setMessage('云端备份下载完成，但文件验证失败');
+    });
+    return () => { active = false; };
+  }, [cloudBackupUri, deleteCloudDownload]);
+
   async function createVerifiedArchive() {
+    return withBackupOperation(async () => {
     const source = await createJournalExport(db);
     const archive = await createZipBackupFile(source, (completed, total) => {
       setOperationProgress({
@@ -74,6 +114,7 @@ export default function BackupScreen() {
       throw new Error('backup-verification-failed');
     }
     return archive;
+    });
   }
 
   async function finishSuccessfulBackup(missingMedia: number) {
@@ -283,8 +324,7 @@ export default function BackupScreen() {
         });
         await setBackupReminder(restoredPreferences.backupReminderDays).catch(() => undefined);
       }
-      setPendingBackup(null);
-      setPendingZipUri(null);
+      clearPendingBackup();
       await load();
       await syncTimeCapsuleNotifications(db).catch(() => undefined);
       const created = result.createdEntries + result.createdFollowUps;
@@ -294,8 +334,7 @@ export default function BackupScreen() {
     } catch (error) {
       void recordAppError('backup.restore', error);
       if (!imported) createdImageUris.forEach(deleteJournalImage);
-      setPendingBackup(null);
-      setPendingZipUri(null);
+      clearPendingBackup();
       const reason = error instanceof Error ? error.message : '';
       setMessage(reason === 'missing-backup-media'
         ? '备份文件不完整，未恢复任何数据'
@@ -335,14 +374,18 @@ export default function BackupScreen() {
         </View>
       </View>
 
-      <Pressable onPress={() => router.push('/data-health' as Href)} style={({ pressed }) => [styles.healthCheckLink, { borderColor: readingTheme.border }, pressed && styles.pressed]}><View><Text style={[styles.healthCheckTitle, { color: readingTheme.text }]}>检查手机里的当前数据</Text><Text style={[styles.healthCheckText, { color: readingTheme.secondary }]}>数据库、媒体文件、回收站与备份状态</Text></View><Text style={styles.readableArrow}>›</Text></Pressable>
+      <Text style={[styles.pageSectionTitle, { color: readingTheme.secondary }]}>备份</Text>
+      <Pressable onPress={() => router.push('/webdav-backup' as Href)} style={({ pressed }) => [styles.cloudBackupCard, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><View style={styles.directoryCopy}><Text style={[styles.explanationTitle, { color: readingTheme.text }]}>WebDAV 云备份</Text><Text style={[styles.explanationText, { color: readingTheme.secondary }]}>{preferences.lastWebDavBackupAt ? `最近成功：${formatShortDateTime(preferences.lastWebDavBackupAt)}` : preferences.webDavServerUrl ? '账号已设置，可以手动上传完整备份' : '连接坚果云、群晖或其他 WebDAV 云盘'}</Text></View><Text style={styles.readableArrow}>›</Text></Pressable>
 
       <Pressable disabled={exporting} onPress={() => void exportZip()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
-        {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>立即备份 ZIP</Text>}
+        {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>导出完整 ZIP</Text>}
       </Pressable>
+
+      <Text style={[styles.pageSectionTitle, { color: readingTheme.secondary }]}>恢复与检查</Text>
       <Pressable disabled={importing} onPress={() => void chooseBackup()} style={({ pressed }) => [styles.importButton, pressed && styles.pressed]}><Text style={styles.importText}>从 ZIP 或 JSON 恢复</Text></Pressable>
+      <Pressable onPress={() => router.push('/data-health' as Href)} style={({ pressed }) => [styles.healthCheckLink, { borderColor: readingTheme.border }, pressed && styles.pressed]}><View><Text style={[styles.healthCheckTitle, { color: readingTheme.text }]}>检查手机里的当前数据</Text><Text style={[styles.healthCheckText, { color: readingTheme.secondary }]}>数据库、媒体文件、回收站与备份状态</Text></View><Text style={styles.readableArrow}>›</Text></Pressable>
       <Pressable accessibilityState={{ expanded: advancedVisible }} onPress={() => setAdvancedVisible((value) => !value)} style={[styles.advancedToggle, { borderColor: readingTheme.border }]}>
-        <Text style={[styles.advancedToggleText, { color: readingTheme.secondary }]}>更多备份选项</Text>
+        <Text style={[styles.advancedToggleText, { color: readingTheme.secondary }]}>自动备份与其他导出</Text>
         <View style={[styles.advancedChevron, advancedVisible && styles.advancedChevronOpen]} />
       </Pressable>
       {advancedVisible ? <View style={styles.advancedArea}>
@@ -385,8 +428,8 @@ export default function BackupScreen() {
       </View> : null}
       {message ? <Text style={[styles.message, message.includes('失败') && styles.error]}>{message}</Text> : null}
     </ScrollView>
-    <Modal visible={Boolean(pendingBackup)} transparent animationType="fade" onRequestClose={() => { setPendingBackup(null); setPendingZipUri(null); }}>
-      <Pressable onPress={() => { setPendingBackup(null); setPendingZipUri(null); }} style={styles.overlay}>
+    <Modal visible={Boolean(pendingBackup)} transparent animationType="fade" onRequestClose={dismissPendingBackup}>
+      <Pressable onPress={dismissPendingBackup} style={styles.overlay}>
         <Pressable onPress={(event) => event.stopPropagation()} style={[styles.confirmCard, { backgroundColor: readingTheme.background }]}>
           <Text style={[styles.confirmTitle, { color: readingTheme.text }]}>合并这份备份？</Text>
           {pendingBackup ? <>
@@ -400,7 +443,7 @@ export default function BackupScreen() {
             </View>
           </> : null}
           <Text style={[styles.confirmHint, { color: readingTheme.secondary }]}>不会清空现有内容；同一记录将保留更新时间较新的版本。</Text>
-          <View style={styles.confirmActions}><Pressable onPress={() => { setPendingBackup(null); setPendingZipUri(null); }} style={[styles.confirmButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={importing} onPress={() => void restoreBackup()} style={[styles.confirmButton, styles.restoreButton]}>{importing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.restoreText}>开始恢复</Text>}</Pressable></View>
+          <View style={styles.confirmActions}><Pressable disabled={importing} onPress={dismissPendingBackup} style={[styles.confirmButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={importing} onPress={() => void restoreBackup()} style={[styles.confirmButton, styles.restoreButton]}>{importing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.restoreText}>开始恢复</Text>}</Pressable></View>
         </Pressable>
       </Pressable>
     </Modal>
@@ -412,6 +455,7 @@ const styles = StyleSheet.create({
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerSpace: { width: 42 },
   content: { padding: spacing.xl, paddingBottom: spacing.xxxl },
+  pageSectionTitle: { marginTop: spacing.md, marginBottom: 0, fontSize: 11, fontWeight: '600' },
   summary: { padding: spacing.lg, borderRadius: radii.lg, backgroundColor: colors.primarySoft },
   healthCheckLink: { minHeight: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.md, paddingHorizontal: spacing.lg, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.md }, healthCheckTitle: { fontSize: 12, fontWeight: '700' }, healthCheckText: { marginTop: 2, fontSize: 10 },
   summaryTitle: { color: colors.primary, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, summaryCount: { marginTop: spacing.sm, color: colors.text, fontSize: 12 }, lastExport: { marginTop: spacing.xs, color: colors.textSecondary, fontSize: 11 },
@@ -429,6 +473,7 @@ const styles = StyleSheet.create({
   advancedChevronOpen: { marginTop: 4, transform: [{ rotate: '-135deg' }] },
   advancedArea: { paddingBottom: spacing.sm },
   readableCard: { minHeight: 60, flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, padding: spacing.md, borderRadius: radii.md }, readableArrow: { marginLeft: spacing.md, color: colors.primary, fontSize: 20 },
+  cloudBackupCard: { minHeight: 64, flexDirection: 'row', alignItems: 'center', marginTop: spacing.xs, padding: spacing.md, borderRadius: radii.lg },
   explanationTitle: { color: colors.text, fontSize: 13, fontWeight: '600' }, explanationText: { marginTop: spacing.sm, color: colors.textSecondary, fontSize: 11, lineHeight: 18 },
   notice: { marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md, backgroundColor: '#F7EFE2' }, noticeText: { color: '#816E4F', fontSize: 11, lineHeight: 17 },
   directoryCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg },

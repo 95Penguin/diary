@@ -486,18 +486,21 @@ test('footprint view preferences persist locally and reject malformed values', a
     sort: 'recent',
     favoriteOnly: false,
     category: null,
+    camera: null,
   });
   await saveFootprintViewPreferences(db, {
     viewMode: 'list',
     sort: 'visits',
     favoriteOnly: true,
     category: '旅行',
+    camera: { latitude: 30.25, longitude: 120.16, zoom: 11 },
   });
   assert.deepEqual(await getFootprintViewPreferences(db), {
     viewMode: 'list',
     sort: 'visits',
     favoriteOnly: true,
     category: '旅行',
+    camera: { latitude: 30.25, longitude: 120.16, zoom: 11 },
   });
   await db.runAsync("UPDATE kv_store SET value = 'not-json' WHERE key = 'footprint-view-preferences'");
   assert.equal((await getFootprintViewPreferences(db)).viewMode, 'map');

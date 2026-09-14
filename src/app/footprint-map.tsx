@@ -12,7 +12,7 @@ import { applyCoordinatesToLocation, getFootprintViewPreferences, listFootprintE
 import type { FootprintEntry, PendingFootprintEntry, PendingLocationGroup } from '@/domain/journal';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
-import { groupFootprintPlaces, groupFootprintRegions, initialFootprintCamera, type FootprintCluster } from '@/utils/footprint';
+import { clusterFootprintPlaces, groupFootprintPlaces, initialFootprintCamera, type FootprintCluster } from '@/utils/footprint';
 import { applyLocationPrivacy, type CoordinatePrivacyChoice } from '@/utils/location-privacy';
 import { wgs84ToGcj02 } from '@/utils/china-coordinates';
 
@@ -33,6 +33,7 @@ export default function FootprintMapScreen() {
   const db = useSQLiteContext();
   const { preferences, readingTheme, readingBodyStyle, readingFontFamily } = useAppPreferences();
   const mapRef = useRef<MapViewRef>(null);
+  const skipInitialFitRef = useRef(false);
   const lastRegionPressRef = useRef<{ id: string; at: number } | null>(null);
   const [entries, setEntries] = useState<FootprintEntry[]>([]);
   const [missingCoordinates, setMissingCoordinates] = useState(0);
@@ -59,6 +60,7 @@ export default function FootprintMapScreen() {
   const [locationPreferences, setLocationPreferences] = useState<Record<string, LocationMapPreference>>({});
   const [duplicateCount, setDuplicateCount] = useState(0);
   const [viewPreferencesLoaded, setViewPreferencesLoaded] = useState(false);
+  const [mapCamera, setMapCamera] = useState<{ latitude: number; longitude: number; zoom: number } | null>(null);
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
   const [backfillConfirmationVisible, setBackfillConfirmationVisible] = useState(false);
   const [backfillPrivacyVisible, setBackfillPrivacyVisible] = useState(false);
@@ -71,6 +73,9 @@ export default function FootprintMapScreen() {
       ]);
       setEntries(result.entries); setMissingCoordinates(result.missingCoordinates); setPendingEntries(result.pendingEntries); setPendingGroups(result.pendingGroups); setLocationPreferences(preferences);
       setPlaceSort(viewPreferences.sort);
+      setViewMode(viewPreferences.viewMode);
+      setMapCamera(viewPreferences.camera);
+      skipInitialFitRef.current = Boolean(viewPreferences.camera);
       setViewPreferencesLoaded(true);
     } catch { setLoadError(true); }
     finally { setLoading(false); }
@@ -86,13 +91,15 @@ export default function FootprintMapScreen() {
 
   useEffect(() => {
     if (!viewPreferencesLoaded) return;
-    void saveFootprintViewPreferences(db, {
+    const timer = setTimeout(() => void saveFootprintViewPreferences(db, {
       viewMode,
       sort: placeSort,
       favoriteOnly: false,
       category: null,
-    });
-  }, [db, placeSort, viewMode, viewPreferencesLoaded]);
+      camera: mapCamera,
+    }), 250);
+    return () => clearTimeout(timer);
+  }, [db, mapCamera, placeSort, viewMode, viewPreferencesLoaded]);
 
   const visibleEntries = useMemo(() => entries.filter((entry) => {
     const key = localDateKey(entry.occurredAt);
@@ -101,7 +108,7 @@ export default function FootprintMapScreen() {
     return selectedYear === null || new Date(entry.occurredAt).getFullYear() === selectedYear;
   }), [customRange, entries, selectedMonth, selectedYear]);
   const places = useMemo(() => groupFootprintPlaces(visibleEntries), [visibleEntries]);
-  const regions = useMemo(() => groupFootprintRegions(places), [places]);
+  const regions = useMemo(() => clusterFootprintPlaces(places, mapCamera?.zoom ?? initialFootprintCamera(places).zoom), [mapCamera?.zoom, places]);
   const listPlaces = useMemo(() => places
     .filter((place) => !placeSearch.trim() || place.name.toLocaleLowerCase().includes(placeSearch.trim().toLocaleLowerCase()))
     .sort((a, b) => placeSort === 'visits'
@@ -112,6 +119,7 @@ export default function FootprintMapScreen() {
     () => ({ ...wgs84ToGcj02({ latitude: initialCamera.latitude, longitude: initialCamera.longitude }), zoom: initialCamera.zoom }),
     [initialCamera],
   );
+  const displayedCamera = mapCamera ?? amapCamera;
   const rangeLabel = useMemo(() => {
     if (customRange) return `${customRange.start.slice(5).replace('-', '.')}—${customRange.end.slice(5).replace('-', '.')}`;
     if (selectedMonth) return `${Number(selectedMonth.slice(5))} 月`;
@@ -149,6 +157,10 @@ export default function FootprintMapScreen() {
 
   useEffect(() => {
     if (!mapReady) return;
+    if (skipInitialFitRef.current) {
+      skipInitialFitRef.current = false;
+      return;
+    }
     void fitVisiblePlaces();
   }, [fitVisiblePlaces, mapReady]);
 
@@ -304,7 +316,7 @@ export default function FootprintMapScreen() {
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         mapType={MapType.Standard}
-        initialCameraPosition={{ target: { latitude: amapCamera.latitude, longitude: amapCamera.longitude }, zoom: initialCamera.zoom }}
+        initialCameraPosition={{ target: { latitude: displayedCamera.latitude, longitude: displayedCamera.longitude }, zoom: displayedCamera.zoom }}
         minZoom={3}
         maxZoom={MAP_MAX_ZOOM}
         compassEnabled={false}
@@ -319,6 +331,11 @@ export default function FootprintMapScreen() {
           setMapTimedOut(false);
         }}
         onMapPress={() => setSelectedRegion(null)}
+        onCameraIdle={(event) => {
+          const { target, zoom } = event.nativeEvent.cameraPosition;
+          if (!target || zoom == null) return;
+          setMapCamera({ latitude: target.latitude, longitude: target.longitude, zoom });
+        }}
       >
         {regions.map((region) => {
           const visits = region.places.reduce((total, place) => total + place.entries.length, 0);
@@ -350,6 +367,7 @@ export default function FootprintMapScreen() {
                 <View style={styles.memoryLeafVein} />
               </View>
               <View style={styles.memoryLeafStem} />
+              {region.places.length > 1 ? <View style={styles.clusterBadge}><Text style={styles.clusterBadgeText}>{region.places.length}</Text></View> : null}
             </View>
           </Marker>;
         })}
@@ -469,6 +487,8 @@ const styles = StyleSheet.create({
   memoryLeafActive: { backgroundColor: colors.primary, transform: [{ rotate: '-28deg' }, { scale: 1.08 }] },
   memoryLeafVein: { position: 'absolute', left: '15%', top: '46%', width: '70%', height: 1.25, borderRadius: 1, backgroundColor: '#DDEBE5CC' },
   memoryLeafStem: { position: 'absolute', left: '18%', bottom: '17%', width: 7, height: 1.5, borderRadius: 1, backgroundColor: '#7FA593', transform: [{ rotate: '-28deg' }] },
+  clusterBadge: { position: 'absolute', top: 0, right: 0, minWidth: 18, height: 18, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, borderRadius: 9, backgroundColor: colors.primary },
+  clusterBadgeText: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
   resetButton: { position: 'absolute', right: spacing.md, bottom: spacing.md, minHeight: 32, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: '#FFFFFFEE', elevation: 3, shadowColor: '#000000', shadowOpacity: 0.1, shadowRadius: 5, shadowOffset: { width: 0, height: 2 } }, resetText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', margin: spacing.xl, padding: spacing.xxl, borderRadius: radii.lg }, emptyTitle: { fontFamily: fonts.serif, fontSize: 18 }, emptyText: { marginTop: spacing.sm, fontSize: 11, lineHeight: 18, textAlign: 'center' },
   placeCard: { marginHorizontal: spacing.md, marginTop: spacing.xs, paddingHorizontal: spacing.md, paddingTop: spacing.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg }, placeHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingBottom: spacing.xs }, placeHeading: { flex: 1, paddingRight: spacing.md }, placeName: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '600' }, placeMeta: { marginTop: 2, fontSize: 10 }, close: { minWidth: 36, minHeight: 36, paddingLeft: spacing.md, fontSize: 20, lineHeight: 36 },

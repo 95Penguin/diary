@@ -14,6 +14,8 @@ export type AppLockDelaySeconds = 0 | 60 | 300;
 export type LocationPrivacyMode = 'precise' | 'approximate' | 'nameOnly' | 'ask';
 export type ExportLocationMode = 'include' | 'hidden';
 export type ImageSaveQuality = 'original' | 'high' | 'compact';
+export type WebDavBackupIntervalDays = 1 | 3 | 7;
+export type WebDavBackupRetention = 0 | 5 | 10 | 20;
 export type AppPreferences = {
   nickname: string;
   signature: string;
@@ -32,6 +34,14 @@ export type AppPreferences = {
   backupDirectoryLabel: string | null;
   automaticBackupEnabled: boolean;
   lastAutomaticBackupAt: string | null;
+  webDavServerUrl: string;
+  webDavUsername: string;
+  webDavDirectory: string;
+  lastWebDavBackupAt: string | null;
+  automaticWebDavBackupEnabled: boolean;
+  webDavWifiOnly: boolean;
+  webDavBackupIntervalDays: WebDavBackupIntervalDays;
+  webDavBackupRetention: WebDavBackupRetention;
   locationPrivacyMode: LocationPrivacyMode;
   exportLocationMode: ExportLocationMode;
   imageSaveQuality: ImageSaveQuality;
@@ -55,6 +65,14 @@ const defaults: AppPreferences = {
   backupDirectoryLabel: null,
   automaticBackupEnabled: false,
   lastAutomaticBackupAt: null,
+  webDavServerUrl: '',
+  webDavUsername: '',
+  webDavDirectory: '拾时备份',
+  lastWebDavBackupAt: null,
+  automaticWebDavBackupEnabled: false,
+  webDavWifiOnly: true,
+  webDavBackupIntervalDays: 1,
+  webDavBackupRetention: 10,
   locationPrivacyMode: 'precise',
   exportLocationMode: 'include',
   imageSaveQuality: 'high',

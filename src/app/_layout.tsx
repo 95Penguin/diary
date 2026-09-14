@@ -18,6 +18,7 @@ import { colors } from '@/theme/tokens';
 import { backfillVideoThumbnails } from '@/utils/video-thumbnail-cache';
 import { backfillImageThumbnails } from '@/utils/image-thumbnail-cache';
 import { AUTOMATIC_BACKUP_INTERVAL_MS, runAutomaticBackup } from '@/utils/automatic-backup';
+import { runAutomaticWebDavBackup } from '@/utils/automatic-webdav-backup';
 import { recordAppError } from '@/utils/app-error-log';
 import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
 import { syncTimeCapsuleNotifications } from '@/utils/time-capsule-notifications';
@@ -49,7 +50,7 @@ function RecoveringDatabaseProvider() {
     setGeneration((value) => value + 1);
   }), []);
   return <SQLiteProvider key={generation} databaseName="shishi.db" onInit={initializeDatabase} useSuspense>
-    <AppPreferencesProvider><AutomaticBackupGate /><AppLockGate><AppStack /></AppLockGate><AppDialogHost /></AppPreferencesProvider>
+    <AppPreferencesProvider><AutomaticBackupGate /><AutomaticWebDavBackupGate /><AppLockGate><AppStack /></AppLockGate><AppDialogHost /></AppPreferencesProvider>
   </SQLiteProvider>;
 }
 
@@ -86,15 +87,42 @@ function AutomaticBackupGate() {
         running.current = false;
       }
     }
-    const task = InteractionManager.runAfterInteractions(() => {
-      setTimeout(() => void check(), 1_000);
-    });
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const task = InteractionManager.runAfterInteractions(() => { timer = setTimeout(() => void check(), 1_000); });
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') void check();
     });
-    return () => { task.cancel(); subscription.remove(); };
+    return () => { task.cancel(); if (timer) clearTimeout(timer); subscription.remove(); };
   }, [db, preferences.automaticBackupEnabled, preferences.backupDirectoryUri, preferences.lastAutomaticBackupAt, ready, updatePreferences]);
 
+  return null;
+}
+
+function AutomaticWebDavBackupGate() {
+  const db = useSQLiteContext();
+  const { preferences, ready, updatePreferences } = useAppPreferences();
+  const running = useRef(false);
+
+  useEffect(() => {
+    async function check() {
+      if (!ready || running.current || !preferences.automaticWebDavBackupEnabled) return;
+      running.current = true;
+      try {
+        const result = await runAutomaticWebDavBackup(db, preferences);
+        if (result.status === 'uploaded') await updatePreferences({
+          lastWebDavBackupAt: result.now,
+          lastBackupCheckAt: result.now,
+          lastBackupHealth: result.missingMedia ? 'warning' : 'healthy',
+        });
+      } catch (error) {
+        void recordAppError('webdav.automatic-backup', new Error(error instanceof Error ? error.message : 'webdav-unknown'));
+      } finally { running.current = false; }
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const task = InteractionManager.runAfterInteractions(() => { timer = setTimeout(() => void check(), 15_000); });
+    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') void check(); });
+    return () => { task.cancel(); if (timer) clearTimeout(timer); subscription.remove(); };
+  }, [db, preferences, ready, updatePreferences]);
   return null;
 }
 
@@ -157,6 +185,7 @@ function AppStack() {
             <Stack.Screen name="media-library" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="share-card" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="drafts" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="webdav-backup" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="trash" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="backup" options={{ animation: 'slide_from_right' }} />

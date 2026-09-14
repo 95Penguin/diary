@@ -28,6 +28,7 @@ export type FootprintViewPreferences = {
   sort: 'recent' | 'visits';
   favoriteOnly: boolean;
   category: LocationCategory | null;
+  camera: { latitude: number; longitude: number; zoom: number } | null;
 };
 type LocationDetail = { address: string; latitude: number | null; longitude: number | null; category?: LocationCategory | null; favorite?: boolean };
 export type LocationPageDetail = {
@@ -577,17 +578,23 @@ export async function listLocationMapPreferences(db: SQLiteDatabase): Promise<Re
 }
 
 export async function getFootprintViewPreferences(db: SQLiteDatabase): Promise<FootprintViewPreferences> {
-  const fallback: FootprintViewPreferences = { viewMode: 'map', sort: 'recent', favoriteOnly: false, category: null };
+  const fallback: FootprintViewPreferences = { viewMode: 'map', sort: 'recent', favoriteOnly: false, category: null, camera: null };
   const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'footprint-view-preferences'");
   if (!row) return fallback;
   try {
     const value = JSON.parse(row.value) as Partial<FootprintViewPreferences>;
     const categories: (LocationCategory | null | undefined)[] = [null, '家', '学校', '工作', '旅行', '常去', '想再去'];
+    const camera = value.camera
+      && Number.isFinite(value.camera.latitude) && Math.abs(value.camera.latitude) <= 90
+      && Number.isFinite(value.camera.longitude) && Math.abs(value.camera.longitude) <= 180
+      && Number.isFinite(value.camera.zoom) && value.camera.zoom >= 3 && value.camera.zoom <= 17
+      ? value.camera : null;
     return {
       viewMode: value.viewMode === 'list' ? 'list' : 'map',
       sort: value.sort === 'visits' ? 'visits' : 'recent',
       favoriteOnly: value.favoriteOnly === true,
       category: categories.includes(value.category) ? value.category ?? null : null,
+      camera,
     };
   } catch {
     return fallback;
@@ -1019,7 +1026,8 @@ export async function createEntryWithDetails(
   tags: string[],
 ): Promise<string> {
   const id = createId(); const now = new Date().toISOString();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync(
       'INSERT INTO entries (id, content, occurred_at, created_at, updated_at, mood, weather, location_name, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       id, input.content.trim(), input.occurredAt, now, now, input.mood ?? null, input.weather ?? null,
@@ -1041,7 +1049,8 @@ export async function updateEntry(db: SQLiteDatabase, id: string, input: EntryIn
   // Android, preparing read statements on expo-sqlite's temporary exclusive
   // connection can lose the NativeStatement shared-object reference.
   await snapshotEntry(db, id);
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync(
       'UPDATE entries SET content = ?, occurred_at = ?, mood = ?, weather = ?, location_name = ?, latitude = ?, longitude = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
       input.content.trim(), input.occurredAt, input.mood ?? null, input.weather ?? null, input.locationName?.trim() || null, input.latitude ?? null, input.longitude ?? null, new Date().toISOString(), id,
@@ -1064,7 +1073,8 @@ export async function updateEntryWithDetails(
   );
   const keptUris = new Set(images.flatMap((image) => [image.uri, image.pairedVideoUri, image.thumbnailUri].filter((uri): uri is string => Boolean(uri))));
   await snapshotEntry(db, id);
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     const now = new Date().toISOString();
     await txn.runAsync(
       'UPDATE entries SET content = ?, occurred_at = ?, mood = ?, weather = ?, location_name = ?, latitude = ?, longitude = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
@@ -1124,7 +1134,8 @@ export async function restoreEntryVersion(db: SQLiteDatabase, versionId: string)
   if (!version) return false;
   const tags = parseJsonArray<string>(version.tags_json);
   await snapshotEntry(db, version.entry_id);
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync(
       `UPDATE entries SET content = ?, occurred_at = ?, mood = ?, weather = ?, location_name = ?, latitude = ?, longitude = ?, updated_at = ?
        WHERE id = ? AND deleted_at IS NULL`,
@@ -1188,7 +1199,8 @@ export async function batchSetEntryFavorite(db: SQLiteDatabase, ids: string[], f
 export async function batchAddEntryTag(db: SQLiteDatabase, ids: string[], label: string) {
   const normalized = label.trim();
   if (!ids.length || !normalized) return;
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     for (const id of ids) {
       const row = await txn.getFirstAsync<{ next_order: number }>(
         'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM entry_tags WHERE entry_id = ?', id,
@@ -1246,7 +1258,8 @@ export async function transformHistoricalCoordinates(db: SQLiteDatabase, action:
     'SELECT COUNT(*) AS count FROM entries WHERE deleted_at IS NULL AND latitude IS NOT NULL AND longitude IS NOT NULL',
   );
   const now = new Date().toISOString();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     if (action === 'remove') {
       await txn.runAsync('UPDATE entries SET latitude = NULL, longitude = NULL, updated_at = ? WHERE deleted_at IS NULL AND latitude IS NOT NULL AND longitude IS NOT NULL', now);
       await txn.runAsync('UPDATE drafts SET latitude = NULL, longitude = NULL, updated_at = ? WHERE latitude IS NOT NULL AND longitude IS NOT NULL', now);
@@ -1275,7 +1288,8 @@ export async function clearCoordinatesForLocation(db: SQLiteDatabase, name: stri
   const normalized = name.trim();
   if (!normalized) return;
   const now = new Date().toISOString();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync('UPDATE entries SET latitude = NULL, longitude = NULL, updated_at = ? WHERE deleted_at IS NULL AND location_name = ?', now, normalized);
     await txn.runAsync('UPDATE drafts SET latitude = NULL, longitude = NULL, updated_at = ? WHERE location_name = ?', now, normalized);
   });
@@ -1291,7 +1305,8 @@ export async function batchDeleteEntries(db: SQLiteDatabase, ids: string[]) {
   if (!ids.length) return;
   const now = new Date().toISOString();
   const placeholders = sqlPlaceholders(ids);
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync(`UPDATE entries SET deleted_at = ?, updated_at = ? WHERE id IN (${placeholders})`, now, now, ...ids);
     await txn.runAsync(`UPDATE follow_ups SET deleted_at = ?, updated_at = ? WHERE entry_id IN (${placeholders})`, now, now, ...ids);
   });
@@ -1354,7 +1369,8 @@ export async function suppressMemoryEntry(db: SQLiteDatabase, entryId: string) {
 
 export async function deleteEntry(db: SQLiteDatabase, id: string) {
   const now = new Date().toISOString();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync('UPDATE entries SET deleted_at = ?, updated_at = ? WHERE id = ?', now, now, id);
     await txn.runAsync('UPDATE follow_ups SET deleted_at = ?, updated_at = ? WHERE entry_id = ?', now, now, id);
   });
@@ -1382,7 +1398,8 @@ export async function restoreEntry(db: SQLiteDatabase, id: string) {
   const row = await db.getFirstAsync<{ deleted_at: string }>('SELECT deleted_at FROM entries WHERE id = ? AND deleted_at IS NOT NULL', id);
   if (!row) return;
   const now = new Date().toISOString();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync('UPDATE entries SET deleted_at = NULL, updated_at = ? WHERE id = ?', now, id);
     await txn.runAsync('UPDATE follow_ups SET deleted_at = NULL, updated_at = ? WHERE entry_id = ? AND deleted_at = ?', now, id, row.deleted_at);
   });
@@ -1737,7 +1754,8 @@ export async function createFollowUpWithImages(
   images: EntryAssetInput[],
 ) {
   const id = createId(); const now = new Date().toISOString();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync(
       'INSERT INTO follow_ups (id, entry_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
       id, entryId, content.trim(), now, now,
@@ -1773,7 +1791,8 @@ export async function updateFollowUpWithImages(
     .filter((image) => !keptIds.has(image.id))
     .flatMap((image) => [image.uri, image.paired_video_uri, image.thumbnail_uri].filter((uri): uri is string => Boolean(uri)));
   const now = new Date().toISOString();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync(
       'UPDATE follow_ups SET content = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
       content.trim(), now, id,
@@ -1813,7 +1832,8 @@ export async function replaceEntryImages(
     entryId, entryId, entryId,
   );
   const keptUris = new Set(images.flatMap((image) => [image.uri, image.pairedVideoUri, image.thumbnailUri].filter((uri): uri is string => Boolean(uri))));
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync('DELETE FROM entry_images WHERE entry_id = ?', entryId);
     const now = new Date().toISOString();
     for (const [index, image] of images.entries()) {
@@ -1828,7 +1848,8 @@ export async function replaceEntryImages(
 }
 
 export async function replaceEntryTags(db: SQLiteDatabase, entryId: string, tags: string[]) {
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await db.withTransactionAsync(async () => {
+    const txn = db;
     await txn.runAsync('DELETE FROM entry_tags WHERE entry_id = ?', entryId);
     for (const [index, label] of tags.entries()) {
       await txn.runAsync(

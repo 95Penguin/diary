@@ -4,11 +4,13 @@ import { File } from 'expo-file-system';
 import { createJournalExport, saveLastExportAt } from '@/database/journal-repository';
 import { saveBackupFileToDirectory } from '@/utils/backup-directory';
 import { createZipBackupFile, inspectZipBackupFile } from '@/utils/backup-zip';
+import { withBackupOperation } from '@/utils/backup-operation';
 
 export const AUTOMATIC_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const AUTOMATIC_BACKUP_RETENTION = 5;
 
 export async function runAutomaticBackup(db: SQLiteDatabase, directoryUri: string) {
+  return withBackupOperation(async () => {
   const source = await createJournalExport(db);
   const archive = await createZipBackupFile(source);
   try {
@@ -23,4 +25,5 @@ export async function runAutomaticBackup(db: SQLiteDatabase, directoryUri: strin
     const temporary = new File(archive.uri);
     if (temporary.exists) temporary.delete();
   }
+  });
 }

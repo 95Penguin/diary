@@ -4,7 +4,10 @@ type RecoveryListener = (error: Error) => void;
 
 const listeners = new Set<RecoveryListener>();
 const WRAPPED = Symbol('shishi-database-recovery');
+let activeDatabase: SQLiteDatabase | null = null;
+let recoveryPending = false;
 let lastRecoveryAt = 0;
+const RECOVERY_COOLDOWN_MS = 10_000;
 
 export function isReleasedDatabaseError(error: unknown) {
   const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -16,12 +19,19 @@ export function subscribeToDatabaseRecovery(listener: RecoveryListener) {
   return () => { listeners.delete(listener); };
 }
 
-export function requestDatabaseRecovery(error: unknown) {
+export function requestDatabaseRecovery(error: unknown, source?: SQLiteDatabase) {
   if (!isReleasedDatabaseError(error)) return false;
-  const normalized = error instanceof Error ? error : new Error(String(error));
+  // A rejected request can arrive after SQLiteProvider has already replaced its
+  // connection. Never let that stale handle remount the new provider again.
+  if (source && source !== activeDatabase) return true;
+  if (recoveryPending) return true;
   const now = Date.now();
-  if (now - lastRecoveryAt < 750) return true;
+  // If the replacement connection fails immediately as well, leave the error
+  // visible to its caller instead of remounting the whole application forever.
+  if (now - lastRecoveryAt < RECOVERY_COOLDOWN_MS) return true;
+  const normalized = error instanceof Error ? error : new Error(String(error));
   lastRecoveryAt = now;
+  recoveryPending = true;
   listeners.forEach((listener) => listener(normalized));
   return true;
 }
@@ -32,6 +42,8 @@ export function requestDatabaseRecovery(error: unknown) {
  * while the original rejection still cancels the in-flight operation safely.
  */
 export function installDatabaseRecovery(db: SQLiteDatabase) {
+  activeDatabase = db;
+  recoveryPending = false;
   const target = db as SQLiteDatabase & { [WRAPPED]?: boolean };
   if (target[WRAPPED]) return;
   const prepare = db.prepareAsync.bind(db);
@@ -39,7 +51,7 @@ export function installDatabaseRecovery(db: SQLiteDatabase) {
     try {
       return await prepare(...args);
     } catch (error) {
-      requestDatabaseRecovery(error);
+      requestDatabaseRecovery(error, db);
       throw error;
     }
   }) as SQLiteDatabase['prepareAsync'];

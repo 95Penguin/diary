@@ -471,6 +471,7 @@ export default function ComposeScreen() {
     if ((!content.trim() && !images.length) || saving) return;
     setSaving(true);
     const newlyPersisted: string[] = [];
+    let entryCommitted = false;
     try {
       let privateLatitude = latitude;
       let privateLongitude = longitude;
@@ -510,14 +511,20 @@ export default function ComposeScreen() {
         );
       } else {
         entryId = await createEntryWithDetails(db, { content, occurredAt, mood, weather, locationName, latitude: privateLatitude, longitude: privateLongitude }, savedImages, tags);
-        if (activeDraftIdRef.current) await deleteDraft(db, activeDraftIdRef.current, true);
       }
       if (!entryId) throw new Error('Missing entry id');
+      entryCommitted = true;
+      if (!id && activeDraftIdRef.current) {
+        try { await deleteDraft(db, activeDraftIdRef.current, true); }
+        catch (error) { void recordAppError('compose.cleanup-saved-draft', error); }
+      }
       if (locationName.trim() && privateLatitude != null && privateLongitude != null) {
         if (locationAddress.trim()) {
-          await saveLocationDetail(db, locationName, {
-            address: locationAddress, latitude: privateLatitude, longitude: privateLongitude,
-          });
+          try {
+            await saveLocationDetail(db, locationName, {
+              address: locationAddress, latitude: privateLatitude, longitude: privateLongitude,
+            });
+          } catch (error) { void recordAppError('compose.save-location-detail', error); }
         }
       }
       removedUris.forEach(deleteJournalImage);
@@ -525,8 +532,13 @@ export default function ComposeScreen() {
       else router.replace({ pathname: '/entry/[id]', params: { id: entryId, saved: '1', ...(willLightNewPlace ? { lit: locationName.trim() } : {}) } });
     } catch (error) {
       void recordAppError('compose.save-entry', error);
-      newlyPersisted.forEach(deleteJournalImage);
-      await showAppDialog({ title: '保存失败', message: '这次内容还没有完整保存，请稍后重试。' }); setSaving(false);
+      if (!entryCommitted) {
+        newlyPersisted.forEach(deleteJournalImage);
+        await showAppDialog({ title: '保存失败', message: '这次内容还没有完整保存，请稍后重试。' });
+      } else {
+        await showAppDialog({ title: '记录已保存', message: '记录已经写入数据库，但保存后的页面没有正常打开。请返回时间轴查看。' });
+      }
+      setSaving(false);
     }
   }
 
