@@ -43,6 +43,7 @@ export function DraggableMediaItem({
   const scale = useRef(new Animated.Value(1)).current;
   const armed = useRef(false);
   const dragging = useRef(false);
+  const longPressTriggered = useRef(false);
   const startIndex = useRef(index);
   const targetIndex = useRef(index);
   const propsRef = useRef({ columns, count, index, itemStride, onMove, verticalStride });
@@ -145,9 +146,17 @@ export function DraggableMediaItem({
     >
       <Pressable
         delayLongPress={180}
-        onPress={onPress}
+        onPressIn={() => { longPressTriggered.current = false; }}
+        onPress={() => {
+          if (longPressTriggered.current) {
+            longPressTriggered.current = false;
+            return;
+          }
+          onPress?.();
+        }}
         onLongPress={() => {
           armed.current = true;
+          longPressTriggered.current = true;
           startIndex.current = propsRef.current.index;
           targetIndex.current = propsRef.current.index;
         }}
