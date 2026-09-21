@@ -15,6 +15,7 @@ type DraggableMediaItemProps = PropsWithChildren<{
   index: number;
   itemStride: number;
   onMove: (from: number, to: number) => void;
+  onPress?: () => void;
   style?: StyleProp<ViewStyle>;
   verticalStride?: number;
 }>;
@@ -34,6 +35,7 @@ export function DraggableMediaItem({
   index,
   itemStride,
   onMove,
+  onPress,
   style,
   verticalStride = itemStride,
 }: DraggableMediaItemProps) {
@@ -143,6 +145,7 @@ export function DraggableMediaItem({
     >
       <Pressable
         delayLongPress={180}
+        onPress={onPress}
         onLongPress={() => {
           armed.current = true;
           startIndex.current = propsRef.current.index;

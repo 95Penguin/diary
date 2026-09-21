@@ -4,7 +4,9 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { reGeocode } from 'expo-gaode-map';
 import { SymbolView } from 'expo-symbols';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import PagerView from 'react-native-pager-view';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
@@ -18,7 +20,7 @@ import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
 import { showAppDialog } from '@/components/app-dialog-host';
 import { DraggableMediaItem } from '@/components/draggable-media-item';
-import { MediaThumbnail } from '@/components/media-view';
+import { MediaThumbnail, MediaViewer } from '@/components/media-view';
 import type { JournalMediaType } from '@/domain/journal';
 import { getPickerMediaType, preparePickedMedia } from '@/utils/picker-media';
 import { createPersistentVideoThumbnail } from '@/utils/video-thumbnail-cache';
@@ -42,6 +44,7 @@ const EMPTY_SUGGESTIONS: EntryFilterOptions = { locations: [], tags: [], moods: 
 
 export default function ComposeScreen() {
   const db = useSQLiteContext();
+  const insets = useSafeAreaInsets();
   const { preferences, fontScale, readingBodyStyle, readingFontFamily, readingTheme } = useAppPreferences();
   const { id, date, draft: requestedDraftId, quick } = useLocalSearchParams<{ id?: string; date?: string; draft?: string; quick?: string }>();
   const isEditing = Boolean(id);
@@ -82,6 +85,7 @@ export default function ComposeScreen() {
   const [tagValue, setTagValue] = useState('');
   const [toast, setToast] = useState('');
   const [imageMenuVisible, setImageMenuVisible] = useState(false);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [exitConfirmationVisible, setExitConfirmationVisible] = useState(false);
   const [quickMode, setQuickMode] = useState(quick === '1' && !id && !requestedDraftId);
   const [locationDialog, setLocationDialog] = useState<{ title: string; message: string; settings?: boolean } | null>(null);
@@ -620,7 +624,7 @@ export default function ComposeScreen() {
         {quickMode ? <Pressable onPress={() => setQuickMode(false)} style={[styles.expandQuick, { backgroundColor: readingTheme.surface }]}><Text style={styles.expandQuickText}>添加图片、地点或其他信息</Text></Pressable> : null}
         <View style={[styles.imageRow, quickMode && styles.quickHidden]}>
           {images.map((image, index) => <View key={image.uri} style={styles.imageItem}>
-            <DraggableMediaItem accessibilityLabel={`第 ${index + 1} 个媒体`} columns={4} count={images.length} index={index} itemStride={72} onMove={reorderImage} verticalStride={72}>
+            <DraggableMediaItem accessibilityLabel={`第 ${index + 1} 个媒体，轻点预览，长按拖动排序`} columns={4} count={images.length} index={index} itemStride={72} onMove={reorderImage} onPress={() => setPreviewIndex(index)} verticalStride={72}>
               <MediaThumbnail media={{ uri: image.uri, mediaType: image.mediaType ?? 'image', pairedVideoUri: image.pairedVideoUri ?? null, duration: image.duration ?? null, thumbnailUri: image.thumbnailUri ?? null }} allowRuntimeVideoPoster style={styles.imagePreview} />
             </DraggableMediaItem>
             <Pressable accessibilityLabel="移除媒体" onPress={() => { if (image.draftOwned) { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); if (image.thumbnailUri) deleteJournalImage(image.thumbnailUri); } setImages((current) => current.filter((_, itemIndex) => itemIndex !== index)); }} style={styles.removeImage}><Text style={styles.removeImageText}>×</Text></Pressable>
@@ -655,6 +659,13 @@ export default function ComposeScreen() {
       </ScrollView>
     </KeyboardAvoidingView>
     <AppDialog visible={imageMenuVisible} title="添加图片或视频" message="拍照会打开系统相机，可在相机中切换照片或视频模式。" onClose={() => setImageMenuVisible(false)} actions={[{ label: '相册', onPress: () => { setImageMenuVisible(false); void chooseFromLibrary(); } }, { label: '拍照', onPress: () => { setImageMenuVisible(false); void openCamera(); } }]} />
+    <Modal visible={previewIndex !== null} transparent animationType="fade" onRequestClose={() => setPreviewIndex(null)}>
+      <GestureHandlerRootView style={styles.previewOverlay}>
+        {previewIndex !== null ? <PagerView initialPage={previewIndex} offscreenPageLimit={1} overdrag={false} style={styles.previewPager} onPageSelected={(event) => setPreviewIndex(event.nativeEvent.position)}>{images.map((image, index) => <View accessibilityLabel={`媒体 ${index + 1}，共 ${images.length} 个`} collapsable={false} key={image.uri} style={styles.previewPage}><MediaViewer media={{ ...image, mediaType: image.mediaType ?? 'image', pairedVideoUri: image.pairedVideoUri ?? null, duration: image.duration ?? null, thumbnailUri: image.thumbnailUri ?? null }} /></View>)}</PagerView> : null}
+        {previewIndex !== null && images.length > 1 ? <Text style={[styles.previewCount, { bottom: Math.max(insets.bottom + spacing.md, spacing.xl) }]}>{previewIndex + 1} / {images.length}</Text> : null}
+        <Pressable accessibilityLabel="关闭媒体预览" hitSlop={12} onPress={() => setPreviewIndex(null)} style={[styles.previewCloseButton, { top: Math.max(insets.top, spacing.md) }]}><Text style={styles.previewClose}>×</Text></Pressable>
+      </GestureHandlerRootView>
+    </Modal>
     <AppDialog visible={exitConfirmationVisible} title="退出编辑？" message="尚未保存的修改会丢失。" onClose={() => setExitConfirmationVisible(false)} actions={[{ label: '继续编辑', onPress: () => setExitConfirmationVisible(false) }, { label: '退出', tone: 'danger', onPress: () => { setExitConfirmationVisible(false); images.filter((image) => image.draftOwned).forEach((image) => { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); }); leaveComposer(); } }]} />
     <AppDialog visible={Boolean(locationDialog)} title={locationDialog?.title ?? ''} message={locationDialog?.message} onClose={() => setLocationDialog(null)} actions={locationDialog?.settings ? [{ label: '稍后处理', onPress: () => setLocationDialog(null) }, { label: '打开设置', tone: 'primary', onPress: () => { setLocationDialog(null); void Linking.openSettings(); } }] : [{ label: '知道了', tone: 'primary', onPress: () => setLocationDialog(null) }]} />
     {locationPickerVisible ? <LocationPickerModal visible name={locationName} latitude={latitude} longitude={longitude} accuracy={locationAccuracy} onClose={() => setLocationPickerVisible(false)} onApply={(value) => { setLocationName(value.name); setLocationAddress(value.address); setLatitude(value.latitude); setLongitude(value.longitude); setLocationAccuracy(null); setLocationCoordinateChanged(true); setLocationPickerVisible(false); }} /> : null}
@@ -705,6 +716,7 @@ const styles = StyleSheet.create({
   suggestionArea: { marginTop: spacing.sm }, suggestionLabel: { marginBottom: 5, fontSize: 11 }, suggestionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }, suggestionChip: { minHeight: 30, justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radii.pill }, suggestionText: { color: colors.primary, fontSize: 11 },
   imageRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
   imageItem: { position: 'relative' }, imagePreview: { width: 64, height: 64, borderRadius: radii.sm, backgroundColor: 'transparent' },
+  previewOverlay: { flex: 1, backgroundColor: '#101411' }, previewPager: { flex: 1 }, previewPage: { flex: 1 }, previewCount: { position: 'absolute', alignSelf: 'center', overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 5, borderRadius: radii.pill, backgroundColor: '#00000066', color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, previewCloseButton: { position: 'absolute', right: 16, width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#00000066' }, previewClose: { color: '#FFFFFF', fontSize: 28, lineHeight: 32, fontWeight: '300' },
   sortingImage: { borderWidth: 2, borderColor: colors.primary, borderRadius: radii.sm },
   removeImage: { position: 'absolute', top: -8, right: -8, width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: colors.overlay }, removeImageText: { color: '#FFFFFF', fontSize: 18, lineHeight: 21 },
   addImage: { width: 64, height: 64, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.border, borderRadius: radii.sm }, addImageIcon: { color: colors.primary, fontSize: 24, lineHeight: 28 },

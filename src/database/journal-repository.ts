@@ -439,6 +439,18 @@ export async function countEntriesForLocalDate(db: SQLiteDatabase, year: number,
   return row?.count ?? 0;
 }
 
+export async function countEntriesMatchingFilters(db: SQLiteDatabase, filters: EntryListFilters = {}) {
+  const where = ['e.deleted_at IS NULL'];
+  const params: (string | number)[] = [];
+  (Object.entries(filters) as [Exclude<EntryFilterKind, 'none'>, string | null][])
+    .forEach(([kind, value]) => appendEntryFilter(where, params, { kind, value }));
+  const row = await db.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM entries e WHERE ${where.join(' AND ')}`,
+    params,
+  );
+  return row?.count ?? 0;
+}
+
 export async function findTimelineJumpTarget(db: SQLiteDatabase, before: string, filters: EntryListFilters = {}) {
   const where = ['e.deleted_at IS NULL', 'e.occurred_at < ?'];
   const params: (string | number)[] = [before];

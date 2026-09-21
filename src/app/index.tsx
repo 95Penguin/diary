@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, FlatList, InteractionManager, Modal, PanResponder, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, FlatList, InteractionManager, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import * as SplashScreen from 'expo-splash-screen';
 import { Image } from 'expo-image';
@@ -15,6 +15,7 @@ import { EntryCard } from '@/components/entry-card';
 import { EntryActionModal } from '@/components/entry-action-modal';
 import {
   cleanupExpiredTrash,
+  countEntriesMatchingFilters,
   countEntriesForLocalDate,
   deleteEntry,
   getDraftCount,
@@ -172,6 +173,9 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const [filterOptions, setFilterOptions] = useState<EntryFilterOptions>(EMPTY_FILTER_OPTIONS);
   const [filterKind, setFilterKind] = useState<FilterKind>('none');
   const [filters, setFilters] = useState<EntryListFilters>({});
+  const [pendingFilters, setPendingFilters] = useState<EntryListFilters>({});
+  const [pendingFilterCount, setPendingFilterCount] = useState<number | null>(null);
+  const [filterSearch, setFilterSearch] = useState('');
   const [filterPickerVisible, setFilterPickerVisible] = useState(false);
   const [timeIndexVisible, setTimeIndexVisible] = useState(false);
   const [monthIndex, setMonthIndex] = useState<EntryMonthIndexItem[]>([]);
@@ -193,14 +197,23 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const visibleEntryIdRef = useRef<string | null>(null);
   const visibleEntryDateRef = useRef<string | null>(null);
   const restoreEntryIdRef = useRef<string | null>(null);
-  const filterButtonRef = useRef<View>(null);
-  const [filterAnchor, setFilterAnchor] = useState<{ x: number; y: number; width: number; height: number }>({ x: spacing.xl, y: 0, width: 96, height: 36 });
   const availableTags = filterOptions.tags;
   const availableLocations = filterOptions.locations;
   const availableMoods = filterOptions.moods;
   const availableWeather = filterOptions.weather;
   const filterLabels: Record<FilterKind, string> = { none: '全部记录', time: '时间', location: '地点', tag: '标签', mood: '心情', weather: '天气' };
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
+
+  useEffect(() => {
+    if (!filterPickerVisible) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      void countEntriesMatchingFilters(db, pendingFilters)
+        .then((count) => { if (active) setPendingFilterCount(count); })
+        .catch(() => { if (active) setPendingFilterCount(null); });
+    }, 120);
+    return () => { active = false; clearTimeout(timer); };
+  }, [db, filterPickerVisible, pendingFilters]);
 
   const loadFirstPage = useCallback(async () => {
     const currentRequest = ++requestId.current;
@@ -447,18 +460,26 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       : filterKind === 'tag' ? availableTags.map((value) => ({ value, label: `#${value}` }))
         : filterKind === 'mood' ? availableMoods.map((value) => ({ value, label: value }))
           : filterKind === 'weather' ? availableWeather.map((value) => ({ value, label: value })) : [];
+  const searchableFilter = (filterKind === 'location' || filterKind === 'tag') && valueOptions.length > 6;
+  const visibleValueOptions = searchableFilter && filterSearch.trim()
+    ? valueOptions.filter((option) => option.label.toLocaleLowerCase().includes(filterSearch.trim().toLocaleLowerCase()))
+    : valueOptions;
 
   function chooseFilterKind(kind: FilterKind) {
     if (kind === 'none') {
-      setFilters({});
-      setFilterKind('none');
-    } else setFilterKind(kind);
-    setFilterPickerVisible(false);
+      setPendingFilterCount(null);
+      setPendingFilters({});
+      setFilterKind('time');
+    } else {
+      setFilterKind(kind);
+      setFilterSearch('');
+    }
   }
 
   function setFilterValue(value: string | null) {
     if (filterKind === 'none') return;
-    setFilters((current) => {
+    setPendingFilterCount(null);
+    setPendingFilters((current) => {
       const next = { ...current };
       if (value) next[filterKind] = value;
       else delete next[filterKind];
@@ -467,21 +488,32 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   }
 
   function openFilterPicker() {
-    filterButtonRef.current?.measureInWindow((x, y, width, height) => {
-      setFilterAnchor({ x, y, width, height });
-      setFilterPickerVisible(true);
-    });
+    setPendingFilterCount(null);
+    setPendingFilters(filters);
+    setFilterSearch('');
+    if (filterKind === 'none') setFilterKind('time');
+    setFilterPickerVisible(true);
+  }
+
+  function closeFilterPicker() { setFilterPickerVisible(false); setFilterSearch(''); }
+
+  function applyFilters() {
+    const shouldReload = jumpStartCursor !== null || JSON.stringify(filters) !== JSON.stringify(pendingFilters);
+    setJumpStartCursor(null);
+    setNewerCursor(null);
+    setHasNewer(false);
+    setHistoryMode(false);
+    pendingJumpRef.current = false;
+    if (shouldReload) setLoading(true);
+    setFilters(pendingFilters);
+    setFilterPickerVisible(false);
+    setFilterSearch('');
   }
 
   return <View style={styles.timelineContainer}>
     {loadError && entries.length ? <Pressable onPress={() => void loadFirstPage()} style={styles.refreshFailure}><Text style={styles.refreshFailureText}>暂时无法刷新，正在显示上次内容　重试</Text></Pressable> : null}
     {jumpNotice ? <View pointerEvents="none" style={styles.timelineNotice}><Text style={styles.timelineNoticeText}>{jumpNotice}</Text></View> : null}
-    <View style={styles.timelineTools}><ScrollView horizontal style={styles.filterBarScroll} contentContainerStyle={styles.filterBar} showsHorizontalScrollIndicator={false}>
-        <Pressable ref={filterButtonRef} accessibilityLabel="选择筛选方式" onPress={openFilterPicker} style={[styles.filterMenuButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.filterMenuText}>{activeFilterCount ? `${activeFilterCount} 项筛选` : filterLabels[filterKind]}</Text><View style={[styles.filterChevron, filterPickerVisible && styles.filterChevronOpen]} /></Pressable>
-        {filterKind !== 'none' ? <><Pressable onPress={() => setFilterValue(null)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, !filters[filterKind] && styles.filterChipActive]}><Text style={[styles.filterText, { color: readingTheme.secondary }, !filters[filterKind] && styles.filterTextActive]}>不限{filterLabels[filterKind]}</Text></Pressable>{valueOptions.map((option) => <Pressable key={option.value} onPress={() => setFilterValue(option.value)} style={[styles.filterChip, { backgroundColor: readingTheme.surface }, filters[filterKind] === option.value && styles.filterChipActive]}><Text numberOfLines={1} style={[styles.filterText, { color: readingTheme.secondary }, filters[filterKind] === option.value && styles.filterTextActive]}>{option.label}</Text></Pressable>)}</> : null}
-        {activeFilterCount ? Object.entries(filters).map(([kind, value]) => value ? <Pressable key={kind} accessibilityLabel={`清除${filterLabels[kind as ActiveFilterKind]}筛选`} onPress={() => setFilters((current) => { const next = { ...current }; delete next[kind as ActiveFilterKind]; return next; })} style={[styles.activeFilterChip, { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={styles.activeFilterText}>{filterLabels[kind as ActiveFilterKind]} · {value}　×</Text></Pressable> : null) : null}
-        {activeFilterCount ? <Pressable accessibilityLabel="清除全部筛选" hitSlop={8} onPress={() => { setFilters({}); setFilterKind('none'); }}><Text style={[styles.clearFilter, { color: readingTheme.secondary }]}>清除全部</Text></Pressable> : null}
-      </ScrollView><Pressable accessibilityLabel="打开回忆" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></Pressable></View>
+    <View style={styles.timelineTools}><Pressable accessibilityLabel={activeFilterCount ? `筛选，已选择 ${activeFilterCount} 项` : '筛选'} onPress={openFilterPicker} style={[styles.filterMenuButton, { backgroundColor: activeFilterCount ? colors.primary : readingTheme.surface }]}><Text style={[styles.filterMenuText, Boolean(activeFilterCount) && styles.filterMenuTextActive]}>{activeFilterCount ? `筛选 ${activeFilterCount}` : '筛选'}</Text><View style={[styles.filterChevron, Boolean(activeFilterCount) && styles.filterChevronActive, filterPickerVisible && styles.filterChevronOpen]} /></Pressable><View style={styles.timelineToolSpacer} /><Pressable accessibilityLabel="打开回忆" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></Pressable></View>
     <SectionList
       ref={listRef}
       sections={groups}
@@ -507,12 +539,23 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       ListFooterComponent={loadingMore ? <ActivityIndicator style={styles.pageLoader} color={colors.primary} /> : null}
     />
     {historyMode ? <Pressable accessibilityLabel="回到最新记录" onPress={jumpToToday} style={[styles.backToLatest, { backgroundColor: readingTheme.surface }]}><Text style={styles.backToLatestText}>↑ 回到最新</Text></Pressable> : null}
-    <Modal visible={filterPickerVisible} transparent animationType="fade" onRequestClose={() => setFilterPickerVisible(false)}>
-      <Pressable onPress={() => setFilterPickerVisible(false)} style={styles.filterOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.filterPicker, { backgroundColor: readingTheme.background, left: filterAnchor.x, top: filterAnchor.y + filterAnchor.height + 2, width: filterAnchor.width }]}>
-        <View style={styles.filterKinds}>
-          {([['none', '清除全部'], ['time', '时间'], ['location', '地点'], ['tag', '标签'], ['mood', '心情'], ['weather', '天气']] as [FilterKind, string][]).map(([kind, title]) => <Pressable accessibilityRole="menuitem" key={kind} onPress={() => chooseFilterKind(kind)} style={({ pressed }) => [styles.filterKind, pressed && { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={[styles.filterKindTitle, { color: kind === filterKind ? colors.primary : readingTheme.text }]}>{title}</Text>{kind !== 'none' && filters[kind] ? <Text style={styles.filterCheck}>✓</Text> : null}</Pressable>)}
+    <Modal visible={filterPickerVisible} transparent animationType="slide" onRequestClose={closeFilterPicker}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.filterModalKeyboard}><Pressable accessibilityLabel="关闭筛选" onPress={closeFilterPicker} style={styles.filterOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.filterPicker, { backgroundColor: readingTheme.background, paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
+        <View style={styles.filterHandle} /><View style={[styles.filterHeader, { borderBottomColor: readingTheme.border }]}><Text style={[styles.filterTitle, { color: readingTheme.text }]}>筛选记录</Text><Pressable accessibilityLabel="关闭筛选" hitSlop={10} onPress={closeFilterPicker}><Text style={[styles.filterClose, { color: readingTheme.secondary }]}>×</Text></Pressable></View>
+        <View style={styles.filterBody}><View style={[styles.filterKinds, { backgroundColor: readingTheme.surface }]}>
+          {([['time', '时间'], ['location', '地点'], ['tag', '标签'], ['mood', '心情'], ['weather', '天气']] as [ActiveFilterKind, string][]).map(([kind, title]) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: kind === filterKind }} key={kind} onPress={() => chooseFilterKind(kind)} style={({ pressed }) => [styles.filterKind, kind === filterKind && { backgroundColor: readingTheme.background }, pressed && styles.filterPressed]}><Text numberOfLines={1} style={[styles.filterKindTitle, { color: kind === filterKind ? colors.primary : readingTheme.text }]}>{title}</Text>{pendingFilters[kind] ? <View style={styles.filterSelectedDot} /> : null}</Pressable>)}
         </View>
-      </Pressable></Pressable>
+        <View style={styles.filterValues}>
+          <Text style={[styles.filterValueHeading, { color: readingTheme.secondary }]}>选择{filterLabels[filterKind]}</Text>
+          {searchableFilter ? <View style={[styles.filterSearchBox, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }} size={15} tintColor={readingTheme.secondary} /><TextInput accessibilityLabel={`搜索${filterLabels[filterKind]}`} value={filterSearch} onChangeText={setFilterSearch} placeholder={`搜索${filterLabels[filterKind]}`} placeholderTextColor={readingTheme.secondary} style={[styles.filterSearchInput, { color: readingTheme.text }]} /></View> : null}
+          <ScrollView keyboardShouldPersistTaps="handled" style={styles.filterValueScroll} showsVerticalScrollIndicator={valueOptions.length > 6} contentContainerStyle={styles.filterValueList}>
+            <Pressable accessibilityRole="menuitem" onPress={() => setFilterValue(null)} style={styles.filterValue}><Text style={[styles.filterValueText, { color: readingTheme.text }, !pendingFilters[filterKind as ActiveFilterKind] && styles.filterValueTextActive]}>不限{filterLabels[filterKind]}</Text>{!pendingFilters[filterKind as ActiveFilterKind] ? <Text style={styles.filterValueCheck}>✓</Text> : null}</Pressable>
+            {visibleValueOptions.map((option) => <Pressable accessibilityRole="menuitem" key={option.value} onPress={() => setFilterValue(option.value)} style={styles.filterValue}><Text numberOfLines={1} ellipsizeMode="tail" style={[styles.filterValueText, { color: readingTheme.text }, pendingFilters[filterKind as ActiveFilterKind] === option.value && styles.filterValueTextActive]}>{option.label}</Text>{pendingFilters[filterKind as ActiveFilterKind] === option.value ? <Text style={styles.filterValueCheck}>✓</Text> : null}</Pressable>)}
+            {!visibleValueOptions.length ? <Text style={[styles.filterEmpty, { color: readingTheme.secondary }]}>{filterSearch.trim() ? '没有找到相关内容' : '还没有可筛选的内容'}</Text> : null}
+          </ScrollView>
+        </View></View>
+        <View style={[styles.filterActions, { borderTopColor: readingTheme.border }]}><Pressable accessibilityRole="button" onPress={() => chooseFilterKind('none')} style={[styles.filterReset, { borderColor: readingTheme.border }]}><Text style={[styles.filterResetText, { color: readingTheme.text }]}>重置</Text></Pressable><Pressable accessibilityRole="button" onPress={applyFilters} style={styles.filterApply}><Text style={styles.filterApplyText}>{pendingFilterCount === null ? '正在统计…' : `查看 ${pendingFilterCount} 条记录`}</Text></Pressable></View>
+      </Pressable></Pressable></KeyboardAvoidingView>
     </Modal>
     <Modal visible={timeIndexVisible} transparent animationType="fade" onRequestClose={() => setTimeIndexVisible(false)}>
       <Pressable accessibilityLabel="关闭时间索引" onPress={() => setTimeIndexVisible(false)} style={styles.timeIndexOverlay}>
@@ -715,11 +758,8 @@ const styles = StyleSheet.create({
   timelineContainer: { flex: 1 }, timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   backToLatest: { position: 'absolute', zIndex: 15, right: spacing.xl, bottom: spacing.lg, minHeight: 36, justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.pill, elevation: 4, shadowColor: '#000000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }, backToLatestText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   timelineNotice: { position: 'absolute', zIndex: 20, top: 46, alignSelf: 'center', paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: '#25302CEB' }, timelineNoticeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '600' },
-  timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: spacing.xl, paddingRight: spacing.xl, gap: spacing.sm }, filterBarScroll: { flex: 1, flexGrow: 1 }, filterBar: { alignItems: 'center', gap: spacing.sm }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '600' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] }, clearFilter: { paddingHorizontal: spacing.xs, color: colors.textFaint, fontSize: 10 },
-  filterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterChipActive: { backgroundColor: colors.primary },
-  filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: '#FFFFFF' },
-  activeFilterChip: { maxWidth: 190, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radii.pill }, activeFilterText: { color: colors.primary, fontSize: 10, fontWeight: '600' },
-  filterOverlay: { flex: 1, backgroundColor: '#00000014' }, filterPicker: { position: 'absolute', overflow: 'hidden', borderRadius: radii.md, backgroundColor: colors.background, elevation: 8, shadowColor: '#000000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } }, filterKinds: { paddingVertical: spacing.xs }, filterKind: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 10, fontWeight: '600' }, filterCheck: { marginLeft: spacing.xs, color: colors.primary, fontSize: 12, fontWeight: '700' },
+  timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xl, gap: spacing.sm }, timelineToolSpacer: { flex: 1 }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuTextActive: { color: '#FFFFFF' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, filterChevronActive: { borderColor: '#FFFFFF' }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] },
+  filterModalKeyboard: { flex: 1 }, filterOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, filterPicker: { height: '72%', minHeight: 430, maxHeight: 620, overflow: 'hidden', borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, elevation: 12, shadowColor: '#000000', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: -5 } }, filterHandle: { width: 36, height: 4, alignSelf: 'center', marginTop: spacing.sm, borderRadius: 2, backgroundColor: colors.border }, filterHeader: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, filterTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, filterClose: { fontSize: 25, lineHeight: 30, fontWeight: '300' }, filterBody: { minHeight: 0, flex: 1, flexDirection: 'row' }, filterKinds: { width: 106, paddingTop: spacing.xs }, filterKind: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 11, fontWeight: '600' }, filterSelectedDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary }, filterPressed: { opacity: 0.62 }, filterValues: { minWidth: 0, flex: 1, paddingTop: spacing.sm }, filterValueHeading: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, fontSize: 10, fontWeight: '600' }, filterSearchBox: { height: 38, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.sm, marginVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radii.sm }, filterSearchInput: { flex: 1, height: 38, paddingVertical: 0, fontSize: 12 }, filterValueScroll: { flex: 1 }, filterValueList: { paddingHorizontal: spacing.sm, paddingBottom: spacing.sm }, filterValue: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, paddingHorizontal: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, filterValueText: { flex: 1, fontSize: 11, lineHeight: 16 }, filterValueTextActive: { color: colors.primary, fontWeight: '700' }, filterValueCheck: { color: colors.primary, fontSize: 13, fontWeight: '700' }, filterEmpty: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xl, fontSize: 10, lineHeight: 16, textAlign: 'center' }, filterActions: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth }, filterReset: { width: 86, height: 42, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.pill }, filterResetText: { fontSize: 11, fontWeight: '700' }, filterApply: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary }, filterApplyText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   timeIndexOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, timeIndexSheet: { height: 324, paddingBottom: spacing.lg, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, timeIndexHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, timeIndexHeaderAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, timeWheel: { height: 176, overflow: 'hidden', flexDirection: 'row', marginTop: spacing.md, paddingHorizontal: spacing.lg }, timeWheelSelection: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: 66, height: NUMBER_WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexSummary: { marginTop: spacing.md, fontSize: 10, lineHeight: 14, textAlign: 'center' }, timeIndexActions: { minHeight: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xs, paddingHorizontal: spacing.xxl }, timeIndexAction: { color: colors.primary, fontSize: 12, fontWeight: '700' }, timeIndexActionDisabled: { opacity: 0.35 },
   dayHeader: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: -spacing.xs, paddingHorizontal: spacing.xs, paddingTop: 3, paddingBottom: 3, borderRadius: radii.sm }, dayHeaderPressed: { opacity: 0.58 },
   dayTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 23, fontWeight: '600', includeFontPadding: false },
