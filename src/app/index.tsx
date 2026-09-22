@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, FlatList, InteractionManager, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, FlatList, InteractionManager, Keyboard, Modal, PanResponder, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import * as SplashScreen from 'expo-splash-screen';
 import { Image } from 'expo-image';
@@ -37,6 +37,7 @@ import {
   type EntryMonthIndexItem,
 } from '@/database/journal-repository';
 import type { Entry } from '@/domain/journal';
+import { JOURNAL_MOODS, JOURNAL_WEATHERS } from '@/domain/journal-metadata';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { dateKey, groupLabel, weekdayLabel } from '@/utils/date';
 import { lunarDayLabel } from '@/utils/lunar';
@@ -199,10 +200,11 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const restoreEntryIdRef = useRef<string | null>(null);
   const availableTags = filterOptions.tags;
   const availableLocations = filterOptions.locations;
-  const availableMoods = filterOptions.moods;
-  const availableWeather = filterOptions.weather;
+  const availableMoods = [...new Set<string>([...JOURNAL_MOODS, ...filterOptions.moods])];
+  const availableWeather = [...new Set<string>([...JOURNAL_WEATHERS, ...filterOptions.weather])];
   const filterLabels: Record<FilterKind, string> = { none: '全部记录', time: '时间', location: '地点', tag: '标签', mood: '心情', weather: '天气' };
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
+  const pendingActiveFilterCount = Object.values(pendingFilters).filter(Boolean).length;
 
   useEffect(() => {
     if (!filterPickerVisible) return;
@@ -481,7 +483,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     setPendingFilterCount(null);
     setPendingFilters((current) => {
       const next = { ...current };
-      if (value) next[filterKind] = value;
+      if (value && current[filterKind] !== value) next[filterKind] = value;
       else delete next[filterKind];
       return next;
     });
@@ -495,18 +497,29 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     setFilterPickerVisible(true);
   }
 
-  function closeFilterPicker() { setFilterPickerVisible(false); setFilterSearch(''); }
+  function closeFilterPicker() { Keyboard.dismiss(); setFilterPickerVisible(false); setFilterSearch(''); }
 
-  function applyFilters() {
-    const shouldReload = jumpStartCursor !== null || JSON.stringify(filters) !== JSON.stringify(pendingFilters);
+  function applyFilterSelection(nextFilters: EntryListFilters) {
+    const shouldReload = jumpStartCursor !== null || JSON.stringify(filters) !== JSON.stringify(nextFilters);
     setJumpStartCursor(null);
     setNewerCursor(null);
     setHasNewer(false);
     setHistoryMode(false);
     pendingJumpRef.current = false;
     if (shouldReload) setLoading(true);
-    setFilters(pendingFilters);
+    setPendingFilterCount(null);
+    setFilters(nextFilters);
+    setPendingFilters(nextFilters);
+    setFilterSearch('');
+    Keyboard.dismiss();
     setFilterPickerVisible(false);
+  }
+
+  function applyFilters() { applyFilterSelection(pendingFilters); }
+
+  function resetFilters() {
+    setPendingFilterCount(null);
+    setPendingFilters({});
     setFilterSearch('');
   }
 
@@ -540,7 +553,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
     />
     {historyMode ? <Pressable accessibilityLabel="回到最新记录" onPress={jumpToToday} style={[styles.backToLatest, { backgroundColor: readingTheme.surface }]}><Text style={styles.backToLatestText}>↑ 回到最新</Text></Pressable> : null}
     <Modal visible={filterPickerVisible} transparent animationType="slide" onRequestClose={closeFilterPicker}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.filterModalKeyboard}><Pressable accessible={false} onPress={closeFilterPicker} style={styles.filterOverlay}><Pressable accessible={false} onPress={(event) => event.stopPropagation()} style={[styles.filterPicker, { backgroundColor: readingTheme.background, paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
+      <Pressable accessible={false} onPress={closeFilterPicker} style={styles.filterOverlay}><Pressable accessible={false} onPress={(event) => event.stopPropagation()} style={[styles.filterPicker, { backgroundColor: readingTheme.background, paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
         <View style={styles.filterHandle} /><View style={[styles.filterHeader, { borderBottomColor: readingTheme.border }]}><Text style={[styles.filterTitle, { color: readingTheme.text }]}>筛选记录</Text><Pressable accessibilityLabel="关闭筛选" hitSlop={10} onPress={closeFilterPicker}><Text style={[styles.filterClose, { color: readingTheme.secondary }]}>×</Text></Pressable></View>
         <View style={styles.filterBody}><View style={[styles.filterKinds, { backgroundColor: readingTheme.surface }]}>
           {([['time', '时间'], ['location', '地点'], ['tag', '标签'], ['mood', '心情'], ['weather', '天气']] as [ActiveFilterKind, string][]).map(([kind, title]) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: kind === filterKind }} key={kind} onPress={() => chooseFilterKind(kind)} style={({ pressed }) => [styles.filterKind, kind === filterKind && { backgroundColor: readingTheme.background }, pressed && styles.filterPressed]}><Text numberOfLines={1} style={[styles.filterKindTitle, { color: kind === filterKind ? colors.primary : readingTheme.text }]}>{title}</Text>{pendingFilters[kind] ? <View style={styles.filterSelectedDot} /> : null}</Pressable>)}
@@ -548,14 +561,14 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
         <View style={styles.filterValues}>
           <Text style={[styles.filterValueHeading, { color: readingTheme.secondary }]}>选择{filterLabels[filterKind]}</Text>
           {searchableFilter ? <View style={[styles.filterSearchBox, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }} size={15} tintColor={readingTheme.secondary} /><TextInput accessibilityLabel={`搜索${filterLabels[filterKind]}`} value={filterSearch} onChangeText={setFilterSearch} placeholder={`搜索${filterLabels[filterKind]}`} placeholderTextColor={readingTheme.secondary} style={[styles.filterSearchInput, { color: readingTheme.text }]} /></View> : null}
-          <ScrollView keyboardShouldPersistTaps="handled" style={styles.filterValueScroll} showsVerticalScrollIndicator={valueOptions.length > 6} contentContainerStyle={styles.filterValueList}>
+          <ScrollView keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} keyboardShouldPersistTaps="handled" style={styles.filterValueScroll} showsVerticalScrollIndicator={valueOptions.length > 6} contentContainerStyle={styles.filterValueList}>
             <Pressable accessibilityRole="menuitem" onPress={() => setFilterValue(null)} style={styles.filterValue}><Text style={[styles.filterValueText, { color: readingTheme.text }, !pendingFilters[filterKind as ActiveFilterKind] && styles.filterValueTextActive]}>不限{filterLabels[filterKind]}</Text>{!pendingFilters[filterKind as ActiveFilterKind] ? <Text style={styles.filterValueCheck}>✓</Text> : null}</Pressable>
             {visibleValueOptions.map((option) => <Pressable accessibilityRole="menuitem" key={option.value} onPress={() => setFilterValue(option.value)} style={styles.filterValue}><Text numberOfLines={1} ellipsizeMode="tail" style={[styles.filterValueText, { color: readingTheme.text }, pendingFilters[filterKind as ActiveFilterKind] === option.value && styles.filterValueTextActive]}>{option.label}</Text>{pendingFilters[filterKind as ActiveFilterKind] === option.value ? <Text style={styles.filterValueCheck}>✓</Text> : null}</Pressable>)}
             {!visibleValueOptions.length ? <Text style={[styles.filterEmpty, { color: readingTheme.secondary }]}>{filterSearch.trim() ? '没有找到相关内容' : '还没有可筛选的内容'}</Text> : null}
           </ScrollView>
         </View></View>
-        <View style={[styles.filterActions, { borderTopColor: readingTheme.border }]}><Pressable accessibilityRole="button" onPress={() => chooseFilterKind('none')} style={[styles.filterReset, { borderColor: readingTheme.border }]}><Text style={[styles.filterResetText, { color: readingTheme.text }]}>重置</Text></Pressable><Pressable accessibilityRole="button" onPress={applyFilters} style={styles.filterApply}><Text style={styles.filterApplyText}>{pendingFilterCount === null ? '正在统计…' : pendingFilterCount === 'error' ? '查看筛选结果' : `查看 ${pendingFilterCount} 条记录`}</Text></Pressable></View>
-      </Pressable></Pressable></KeyboardAvoidingView>
+        <View style={[styles.filterActions, { borderTopColor: readingTheme.border }]}><Pressable accessibilityRole="button" accessibilityHint="清空面板内尚未应用的全部筛选条件" onPress={resetFilters} style={[styles.filterReset, { borderColor: readingTheme.border }]}><Text style={[styles.filterResetText, { color: readingTheme.text }]}>重置</Text></Pressable><Pressable accessibilityRole="button" onPress={applyFilters} style={styles.filterApply}><Text style={styles.filterApplyText}>{pendingFilterCount === null ? '正在统计…' : pendingFilterCount === 'error' ? (pendingActiveFilterCount ? '查看筛选结果' : '查看全部记录') : pendingActiveFilterCount ? `查看 ${pendingFilterCount} 条记录` : '查看全部记录'}</Text></Pressable></View>
+      </Pressable></Pressable>
     </Modal>
     <Modal visible={timeIndexVisible} transparent animationType="fade" onRequestClose={() => setTimeIndexVisible(false)}>
       <Pressable accessibilityLabel="关闭时间索引" onPress={() => setTimeIndexVisible(false)} style={styles.timeIndexOverlay}>
@@ -758,8 +771,8 @@ const styles = StyleSheet.create({
   timelineContainer: { flex: 1 }, timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   backToLatest: { position: 'absolute', zIndex: 15, right: spacing.xl, bottom: spacing.lg, minHeight: 36, justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.pill, elevation: 4, shadowColor: '#000000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }, backToLatestText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   timelineNotice: { position: 'absolute', zIndex: 20, top: 46, alignSelf: 'center', paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: '#25302CEB' }, timelineNoticeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '600' },
-  timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xl, gap: spacing.sm }, timelineToolSpacer: { flex: 1 }, memoryShortcut: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuTextActive: { color: '#FFFFFF' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, filterChevronActive: { borderColor: '#FFFFFF' }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] },
-  filterModalKeyboard: { flex: 1 }, filterOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, filterPicker: { height: '72%', maxHeight: 620, overflow: 'hidden', borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, elevation: 12, shadowColor: '#000000', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: -5 } }, filterHandle: { width: 36, height: 4, alignSelf: 'center', marginTop: spacing.sm, borderRadius: 2, backgroundColor: colors.border }, filterHeader: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, filterTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, filterClose: { fontSize: 25, lineHeight: 30, fontWeight: '300' }, filterBody: { minHeight: 0, flex: 1, flexDirection: 'row' }, filterKinds: { width: 106, paddingTop: spacing.xs }, filterKind: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 11, fontWeight: '600' }, filterSelectedDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary }, filterPressed: { opacity: 0.62 }, filterValues: { minWidth: 0, flex: 1, paddingTop: spacing.sm }, filterValueHeading: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, fontSize: 10, fontWeight: '600' }, filterSearchBox: { height: 38, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.sm, marginVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radii.sm }, filterSearchInput: { flex: 1, height: 38, paddingVertical: 0, fontSize: 12 }, filterValueScroll: { flex: 1 }, filterValueList: { paddingHorizontal: spacing.sm, paddingBottom: spacing.sm }, filterValue: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, paddingHorizontal: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, filterValueText: { flex: 1, fontSize: 11, lineHeight: 16 }, filterValueTextActive: { color: colors.primary, fontWeight: '700' }, filterValueCheck: { color: colors.primary, fontSize: 13, fontWeight: '700' }, filterEmpty: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xl, fontSize: 10, lineHeight: 16, textAlign: 'center' }, filterActions: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth }, filterReset: { width: 86, height: 42, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.pill }, filterResetText: { fontSize: 11, fontWeight: '700' }, filterApply: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary }, filterApplyText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+  timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xl, gap: spacing.sm }, timelineToolSpacer: { flex: 1 }, memoryShortcut: { height: 30, flexShrink: 0, justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { height: 30, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuTextActive: { color: '#FFFFFF' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, filterChevronActive: { borderColor: '#FFFFFF' }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] },
+  filterOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, filterPicker: { height: '72%', maxHeight: 620, overflow: 'hidden', borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, elevation: 12, shadowColor: '#000000', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: -5 } }, filterHandle: { width: 36, height: 4, alignSelf: 'center', marginTop: spacing.sm, borderRadius: 2, backgroundColor: colors.border }, filterHeader: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, filterTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, filterClose: { fontSize: 25, lineHeight: 30, fontWeight: '300' }, filterBody: { minHeight: 0, flex: 1, flexDirection: 'row' }, filterKinds: { width: 106, paddingTop: spacing.xs }, filterKind: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 11, fontWeight: '600' }, filterSelectedDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary }, filterPressed: { opacity: 0.62 }, filterValues: { minWidth: 0, flex: 1, paddingTop: spacing.sm }, filterValueHeading: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, fontSize: 10, fontWeight: '600' }, filterSearchBox: { height: 38, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.sm, marginVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radii.sm }, filterSearchInput: { flex: 1, height: 38, paddingVertical: 0, fontSize: 12 }, filterValueScroll: { flex: 1 }, filterValueList: { paddingHorizontal: spacing.sm, paddingBottom: spacing.sm }, filterValue: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, paddingHorizontal: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, filterValueText: { flex: 1, fontSize: 11, lineHeight: 16 }, filterValueTextActive: { color: colors.primary, fontWeight: '700' }, filterValueCheck: { color: colors.primary, fontSize: 13, fontWeight: '700' }, filterEmpty: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xl, fontSize: 10, lineHeight: 16, textAlign: 'center' }, filterActions: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth }, filterReset: { width: 86, height: 42, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.pill }, filterResetText: { fontSize: 11, fontWeight: '700' }, filterApply: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary }, filterApplyText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   timeIndexOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, timeIndexSheet: { height: 324, paddingBottom: spacing.lg, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, timeIndexHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, timeIndexHeaderAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, timeWheel: { height: 176, overflow: 'hidden', flexDirection: 'row', marginTop: spacing.md, paddingHorizontal: spacing.lg }, timeWheelSelection: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: 66, height: NUMBER_WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexSummary: { marginTop: spacing.md, fontSize: 10, lineHeight: 14, textAlign: 'center' }, timeIndexActions: { minHeight: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xs, paddingHorizontal: spacing.xxl }, timeIndexAction: { color: colors.primary, fontSize: 12, fontWeight: '700' }, timeIndexActionDisabled: { opacity: 0.35 },
   dayHeader: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: -spacing.xs, paddingHorizontal: spacing.xs, paddingTop: 3, paddingBottom: 3, borderRadius: radii.sm }, dayHeaderPressed: { opacity: 0.58 },
   dayTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 23, fontWeight: '600', includeFontPadding: false },
