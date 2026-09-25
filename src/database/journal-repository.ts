@@ -1,9 +1,12 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
+
+import { parseEntryDateRange, parseLocalDateKey } from '../utils/entry-time-range.ts';
 import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, EntryVersion, FollowUp, FollowUpImage, FootprintEntry, ImportResult, JournalBackup, JournalMediaType, JournalStats, LibraryMedia, MemoryEntryIndex, PendingFootprintEntry, PendingLocationGroup, SearchResult, SearchResultSummary } from '@/domain/journal';
 import { getJournalTemplateSettings, saveJournalTemplateSettings } from './template-repository.ts';
 import { mergeJournalTemplateSettings } from '../utils/journal-templates.ts';
 import { findLocationDuplicates, type LocationDuplicateSuggestion } from '../utils/location-duplicates.ts';
 import { cleanupOrphanMediaMetadata, deleteMediaMetadataForUris } from './media-maintenance.ts';
+import { publishJournalDataChange } from '../utils/journal-data-events.ts';
 
 type EntryRow = { id: string; content: string; occurred_at: string; created_at: string; updated_at: string; mood: string | null; weather: string | null; favorited_at: string | null; location_name: string | null; latitude: number | null; longitude: number | null };
 type FollowUpRow = { id: string; entry_id: string; content: string; created_at: string; updated_at: string };
@@ -302,7 +305,12 @@ function appendEntryFilter(where: string[], params: (string | number)[], filter?
     const now = new Date();
     let start: Date | null = null;
     let end: Date | null = null;
-    if (filter.value === 'today') {
+    const customRange = parseEntryDateRange(filter.value);
+    if (customRange) {
+      start = parseLocalDateKey(customRange.start);
+      end = parseLocalDateKey(customRange.end);
+      if (end) end.setDate(end.getDate() + 1);
+    } else if (filter.value === 'today') {
       start = new Date(startOfLocalDay(now));
       end = new Date(start);
       end.setDate(end.getDate() + 1);
@@ -654,27 +662,40 @@ export async function isNewFootprintLocation(
   });
 }
 
+type LocationCoordinatesUpdate = { locationName: string; latitude: number; longitude: number };
+
+export async function applyCoordinatesToLocations(db: SQLiteDatabase, updates: LocationCoordinatesUpdate[]) {
+  for (const update of updates) {
+    if (!Number.isFinite(update.latitude) || !Number.isFinite(update.longitude) || Math.abs(update.latitude) > 90 || Math.abs(update.longitude) > 180) {
+      throw new Error('无效地点坐标');
+    }
+  }
+  if (!updates.length) return;
+  const now = new Date().toISOString();
+  await db.withTransactionAsync(async () => {
+    for (const update of updates) {
+      await db.runAsync(
+        `UPDATE entries SET latitude = ?, longitude = ?, updated_at = ?
+         WHERE deleted_at IS NULL AND location_name = ? AND (latitude IS NULL OR longitude IS NULL)`,
+        update.latitude, update.longitude, now, update.locationName,
+      );
+      await db.runAsync(
+        `UPDATE drafts SET latitude = ?, longitude = ?, updated_at = ?
+         WHERE location_name = ? AND (latitude IS NULL OR longitude IS NULL)`,
+        update.latitude, update.longitude, now, update.locationName,
+      );
+    }
+  });
+  publishJournalDataChange('entries', 'metadata', 'drafts');
+}
+
 export async function applyCoordinatesToLocation(
   db: SQLiteDatabase,
   locationName: string,
   latitude: number,
   longitude: number,
 ) {
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
-    throw new Error('无效地点坐标');
-  }
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
-      `UPDATE entries SET latitude = ?, longitude = ?, updated_at = ?
-       WHERE deleted_at IS NULL AND location_name = ? AND (latitude IS NULL OR longitude IS NULL)`,
-      latitude, longitude, new Date().toISOString(), locationName,
-    );
-    await db.runAsync(
-      `UPDATE drafts SET latitude = ?, longitude = ?, updated_at = ?
-       WHERE location_name = ? AND (latitude IS NULL OR longitude IS NULL)`,
-      latitude, longitude, new Date().toISOString(), locationName,
-    );
-  });
+  await applyCoordinatesToLocations(db, [{ locationName, latitude, longitude }]);
 }
 
 async function getMetadataCatalog(db: SQLiteDatabase): Promise<MetadataCatalog> {
@@ -727,6 +748,7 @@ export async function saveLocationDetail(db: SQLiteDatabase, name: string, detai
   catalog.locationDetails[next] = { ...catalog.locationDetails[next], ...detail, address: detail.address.trim() };
   if (!catalog.locations.includes(next)) catalog.locations.push(next);
   await saveMetadataCatalog(db, catalog);
+  publishJournalDataChange('metadata');
 }
 
 export async function updateLocationPreferences(
@@ -757,6 +779,7 @@ export async function updateLocationPreferences(
   };
   if (!catalog.locations.includes(next)) catalog.locations.push(next);
   await saveMetadataCatalog(db, catalog);
+  publishJournalDataChange('metadata');
 }
 
 export async function updateLocationCoordinates(
@@ -792,6 +815,7 @@ export async function updateLocationCoordinates(
     if (!catalog.locations.includes(next)) catalog.locations.push(next);
     await saveMetadataCatalog(db, catalog);
   });
+  publishJournalDataChange('entries', 'metadata', 'drafts');
 }
 
 export async function addMetadataItem(db: SQLiteDatabase, kind: 'tag' | 'location', value: string) {
@@ -801,6 +825,7 @@ export async function addMetadataItem(db: SQLiteDatabase, kind: 'tag' | 'locatio
   const key = kind === 'tag' ? 'tags' : 'locations';
   if (!catalog[key].includes(next)) catalog[key].push(next);
   await saveMetadataCatalog(db, catalog);
+  publishJournalDataChange('metadata');
 }
 
 export async function toggleMetadataPinned(db: SQLiteDatabase, kind: 'tag' | 'location', value: string) {
@@ -815,6 +840,7 @@ export async function toggleMetadataPinned(db: SQLiteDatabase, kind: 'tag' | 'lo
     catalog[pinnedKey].push(value);
   }
   await saveMetadataCatalog(db, catalog);
+  publishJournalDataChange('metadata');
 }
 
 export async function renameTagEverywhere(db: SQLiteDatabase, from: string, to: string) {
@@ -832,6 +858,7 @@ export async function renameTagEverywhere(db: SQLiteDatabase, from: string, to: 
     catalog.pinnedTags = [...new Set(catalog.pinnedTags.map((item) => item === from ? next : item))];
     await saveMetadataCatalog(db, catalog);
   });
+  publishJournalDataChange('entries', 'metadata');
 }
 
 export async function removeTagEverywhere(db: SQLiteDatabase, value: string) {
@@ -842,6 +869,7 @@ export async function removeTagEverywhere(db: SQLiteDatabase, value: string) {
     catalog.pinnedTags = catalog.pinnedTags.filter((item) => item !== value);
     await saveMetadataCatalog(db, catalog);
   });
+  publishJournalDataChange('entries', 'metadata');
 }
 
 export async function renameLocationEverywhere(db: SQLiteDatabase, from: string, to: string) {
@@ -857,6 +885,7 @@ export async function renameLocationEverywhere(db: SQLiteDatabase, from: string,
     delete catalog.locationDetails[from];
     await saveMetadataCatalog(db, catalog);
   });
+  publishJournalDataChange('entries', 'metadata', 'drafts');
 }
 
 export async function removeLocationEverywhere(db: SQLiteDatabase, value: string) {
@@ -875,6 +904,7 @@ export async function removeLocationEverywhere(db: SQLiteDatabase, value: string
     delete catalog.locationDetails[value];
     await saveMetadataCatalog(db, catalog);
   });
+  publishJournalDataChange('entries', 'metadata', 'drafts');
 }
 
 export async function listCalendarMonthCounts(
@@ -1026,6 +1056,7 @@ export async function createEntry(db: SQLiteDatabase, input: EntryInput): Promis
     'INSERT INTO entries (id, content, occurred_at, created_at, updated_at, mood, weather, location_name, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     id, input.content.trim(), input.occurredAt, now, now, input.mood ?? null, input.weather ?? null, input.locationName?.trim() || null, input.latitude ?? null, input.longitude ?? null,
   );
+  publishJournalDataChange('entries', 'metadata');
   return id;
 }
 
@@ -1053,6 +1084,7 @@ export async function createEntryWithDetails(
       'INSERT INTO entry_tags (entry_id, label, sort_order) VALUES (?, ?, ?)', id, label, index,
     );
   });
+  publishJournalDataChange('entries', 'metadata', 'media');
   return id;
 }
 
@@ -1068,6 +1100,7 @@ export async function updateEntry(db: SQLiteDatabase, id: string, input: EntryIn
       input.content.trim(), input.occurredAt, input.mood ?? null, input.weather ?? null, input.locationName?.trim() || null, input.latitude ?? null, input.longitude ?? null, new Date().toISOString(), id,
     );
   });
+  publishJournalDataChange('entries', 'metadata');
 }
 
 export async function updateEntryWithDetails(
@@ -1103,6 +1136,7 @@ export async function updateEntryWithDetails(
       'INSERT INTO entry_tags (entry_id, label, sort_order) VALUES (?, ?, ?)', id, label, index,
     );
   });
+  publishJournalDataChange('entries', 'metadata', 'media');
   return existing.filter((image) => !keptUris.has(image.uri)).map((image) => image.uri);
 }
 
@@ -1156,6 +1190,7 @@ export async function restoreEntryVersion(db: SQLiteDatabase, versionId: string)
     await txn.runAsync('DELETE FROM entry_tags WHERE entry_id = ?', version.entry_id);
     for (const [index, label] of tags.entries()) await txn.runAsync('INSERT INTO entry_tags (entry_id, label, sort_order) VALUES (?, ?, ?)', version.entry_id, label, index);
   });
+  publishJournalDataChange('entries', 'metadata');
   return true;
 }
 
@@ -1194,6 +1229,7 @@ export async function listFavoriteEntryPage(
 
 export async function setEntryFavorite(db: SQLiteDatabase, id: string, favorite: boolean) {
   await db.runAsync('UPDATE entries SET favorited_at = ? WHERE id = ? AND deleted_at IS NULL', favorite ? new Date().toISOString() : null, id);
+  publishJournalDataChange('entries');
 }
 
 function sqlPlaceholders(values: string[]) {
@@ -1206,6 +1242,7 @@ export async function batchSetEntryFavorite(db: SQLiteDatabase, ids: string[], f
     `UPDATE entries SET favorited_at = ?, updated_at = ? WHERE deleted_at IS NULL AND id IN (${sqlPlaceholders(ids)})`,
     favorite ? new Date().toISOString() : null, new Date().toISOString(), ...ids,
   );
+  publishJournalDataChange('entries');
 }
 
 export async function batchAddEntryTag(db: SQLiteDatabase, ids: string[], label: string) {
@@ -1223,6 +1260,7 @@ export async function batchAddEntryTag(db: SQLiteDatabase, ids: string[], label:
       );
     }
   });
+  publishJournalDataChange('entries', 'metadata');
 }
 
 export async function batchRemoveEntryTag(db: SQLiteDatabase, ids: string[], label: string) {
@@ -1232,6 +1270,7 @@ export async function batchRemoveEntryTag(db: SQLiteDatabase, ids: string[], lab
     `DELETE FROM entry_tags WHERE label = ? AND entry_id IN (${sqlPlaceholders(ids)})`,
     normalized, ...ids,
   );
+  publishJournalDataChange('entries', 'metadata');
 }
 
 export async function batchSetEntryLocation(
@@ -1263,6 +1302,7 @@ export async function batchSetEntryLocation(
      WHERE deleted_at IS NULL AND id IN (${sqlPlaceholders(ids)})`,
     normalized, latitude, longitude, new Date().toISOString(), ...ids,
   );
+  publishJournalDataChange('entries', 'metadata');
 }
 
 export async function transformHistoricalCoordinates(db: SQLiteDatabase, action: 'approximate' | 'remove') {
@@ -1293,6 +1333,7 @@ export async function transformHistoricalCoordinates(db: SQLiteDatabase, action:
     }
   }
   await saveMetadataCatalog(db, catalog);
+  publishJournalDataChange('entries', 'metadata', 'drafts');
   return count?.count ?? 0;
 }
 
@@ -1311,6 +1352,7 @@ export async function clearCoordinatesForLocation(db: SQLiteDatabase, name: stri
     catalog.locationDetails[normalized].longitude = null;
   }
   await saveMetadataCatalog(db, catalog);
+  publishJournalDataChange('entries', 'metadata', 'drafts');
 }
 
 export async function batchDeleteEntries(db: SQLiteDatabase, ids: string[]) {
@@ -1322,6 +1364,7 @@ export async function batchDeleteEntries(db: SQLiteDatabase, ids: string[]) {
     await txn.runAsync(`UPDATE entries SET deleted_at = ?, updated_at = ? WHERE id IN (${placeholders})`, now, now, ...ids);
     await txn.runAsync(`UPDATE follow_ups SET deleted_at = ?, updated_at = ? WHERE entry_id IN (${placeholders})`, now, now, ...ids);
   });
+  publishJournalDataChange('entries', 'metadata', 'media');
 }
 
 export async function listEntriesForReadableExport(db: SQLiteDatabase, startAt?: string, endAt?: string): Promise<Entry[]> {
@@ -1386,6 +1429,7 @@ export async function deleteEntry(db: SQLiteDatabase, id: string) {
     await txn.runAsync('UPDATE entries SET deleted_at = ?, updated_at = ? WHERE id = ?', now, now, id);
     await txn.runAsync('UPDATE follow_ups SET deleted_at = ?, updated_at = ? WHERE entry_id = ?', now, now, id);
   });
+  publishJournalDataChange('entries', 'metadata', 'media');
   return [];
 }
 
@@ -1415,6 +1459,7 @@ export async function restoreEntry(db: SQLiteDatabase, id: string) {
     await txn.runAsync('UPDATE entries SET deleted_at = NULL, updated_at = ? WHERE id = ?', now, id);
     await txn.runAsync('UPDATE follow_ups SET deleted_at = NULL, updated_at = ? WHERE entry_id = ? AND deleted_at = ?', now, id, row.deleted_at);
   });
+  publishJournalDataChange('entries', 'metadata', 'media');
 }
 
 export async function permanentlyDeleteEntry(db: SQLiteDatabase, id: string) {
@@ -1437,6 +1482,7 @@ export async function permanentlyDeleteEntry(db: SQLiteDatabase, id: string) {
   );
   await db.runAsync('DELETE FROM entries WHERE id = ? AND deleted_at IS NOT NULL', id);
   await cleanupOrphanMediaMetadata(db).catch(() => undefined);
+  publishJournalDataChange('entries', 'metadata', 'media');
   return images.map((image) => image.uri);
 }
 
@@ -1471,8 +1517,9 @@ export async function cleanupExpiredTrash(db: SQLiteDatabase, retentionDays = 30
      WHERE e.deleted_at IS NOT NULL AND e.deleted_at < ? AND i.thumbnail_uri IS NOT NULL`,
     cutoff, cutoff, cutoff, cutoff, cutoff, cutoff,
   );
-  await db.runAsync('DELETE FROM entries WHERE deleted_at IS NOT NULL AND deleted_at < ?', cutoff);
+  const deleted = await db.runAsync('DELETE FROM entries WHERE deleted_at IS NOT NULL AND deleted_at < ?', cutoff);
   await cleanupOrphanMediaMetadata(db).catch(() => undefined);
+  if (deleted.changes) publishJournalDataChange('entries', 'metadata', 'media');
   return images.map((image) => image.uri);
 }
 
@@ -1747,6 +1794,7 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
     const integrity = await txn.getAllAsync<{ quick_check: string }>('PRAGMA quick_check');
     if (foreignKeyProblems.length || integrity.some((row) => row.quick_check !== 'ok')) throw new Error('restore-integrity-check-failed');
   });
+  publishJournalDataChange('entries', 'metadata', 'media', 'drafts');
   return result;
 }
 
@@ -1756,6 +1804,7 @@ export async function createFollowUp(db: SQLiteDatabase, entryId: string, conten
     'INSERT INTO follow_ups (id, entry_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
     id, entryId, content.trim(), now, now,
   );
+  publishJournalDataChange('entries');
   return id;
 }
 
@@ -1777,6 +1826,7 @@ export async function createFollowUpWithImages(
       createId(), id, image.uri, image.width, image.height, index, now, image.mediaType ?? 'image', image.pairedVideoUri ?? null, image.duration ?? null, image.thumbnailUri ?? null,
     );
   });
+  publishJournalDataChange('entries', 'media');
   return id;
 }
 
@@ -1785,6 +1835,7 @@ export async function updateFollowUp(db: SQLiteDatabase, id: string, content: st
     'UPDATE follow_ups SET content = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
     content.trim(), new Date().toISOString(), id,
   );
+  publishJournalDataChange('entries');
 }
 
 export async function updateFollowUpWithImages(
@@ -1816,6 +1867,7 @@ export async function updateFollowUpWithImages(
     );
   });
   await cleanupOrphanMediaMetadata(db).catch(() => undefined);
+  publishJournalDataChange('entries', 'media');
   return removedUris;
 }
 
@@ -1829,6 +1881,7 @@ export async function deleteFollowUp(db: SQLiteDatabase, id: string) {
   const now = new Date().toISOString();
   await db.runAsync('UPDATE follow_ups SET deleted_at = ?, updated_at = ? WHERE id = ?', now, now, id);
   await deleteMediaMetadataForUris(db, images.map((image) => image.uri)).catch(() => undefined);
+  publishJournalDataChange('entries', 'media');
   return images.map((image) => image.uri);
 }
 
@@ -1856,6 +1909,7 @@ export async function replaceEntryImages(
     }
   });
   await cleanupOrphanMediaMetadata(db).catch(() => undefined);
+  publishJournalDataChange('entries', 'media');
   return existing.filter((image) => !keptUris.has(image.uri)).map((image) => image.uri);
 }
 
@@ -1870,6 +1924,7 @@ export async function replaceEntryTags(db: SQLiteDatabase, entryId: string, tags
       );
     }
   });
+  publishJournalDataChange('entries', 'metadata');
 }
 
 type DraftRow = { id: string; content: string; occurred_at: string; mood: string | null; weather: string | null; tags_json: string; images_json: string; location_name: string | null; latitude: number | null; longitude: number | null; created_at: string; updated_at: string };
@@ -1929,12 +1984,14 @@ export async function saveDraft(db: SQLiteDatabase, draft: Omit<Draft, 'createdA
        location_name = excluded.location_name, latitude = excluded.latitude, longitude = excluded.longitude, updated_at = excluded.updated_at`,
     draft.id, draft.content, draft.occurredAt, draft.mood, draft.weather, JSON.stringify(draft.tags), JSON.stringify(draft.images), draft.locationName?.trim() || null, draft.latitude, draft.longitude, draft.updatedAt, draft.updatedAt,
   );
+  publishJournalDataChange('drafts');
 }
 
 export async function deleteDraft(db: SQLiteDatabase, id: string, keepImages = false) {
   const draft = await getDraft(db, id);
   await db.runAsync('DELETE FROM drafts WHERE id = ?', id);
   if (!keepImages) await cleanupOrphanMediaMetadata(db).catch(() => undefined);
+  publishJournalDataChange('drafts');
   return keepImages ? [] : draft?.images.flatMap((image) => [image.uri, image.pairedVideoUri, image.thumbnailUri].filter((uri): uri is string => Boolean(uri))) ?? [];
 }
 

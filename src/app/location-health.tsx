@@ -7,6 +7,7 @@ import { getLocationHealthReport, transformHistoricalCoordinates, type LocationH
 import { showAppDialog } from '@/components/app-dialog-host';
 import { useAppPreferences, type ExportLocationMode, type LocationPrivacyMode } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
+import { ButtonLabel, DangerButton, SecondaryButton } from '@/components/ui/buttons';
 
 export default function LocationHealthScreen() {
   const db = useSQLiteContext();
@@ -59,8 +60,8 @@ export default function LocationHealthScreen() {
         <Text style={[styles.coordinateCount, { color: readingTheme.text }]}>当前有 {report?.savedCoordinates ?? 0} 条记录保存了坐标</Text>
         <Text style={[styles.description, { color: readingTheme.secondary }]}>这是一次性清理；不会修改地点名称、正文或完整 ZIP 备份文件。</Text>
         <View style={styles.coordinateActions}>
-          <Pressable onPress={() => void confirmCoordinateTransform('approximate')} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>全部模糊到约 1 公里</Text></Pressable>
-          <Pressable onPress={() => void confirmCoordinateTransform('remove')} style={[styles.secondaryButton, styles.removeButton]}><Text style={styles.removeButtonText}>全部删除坐标</Text></Pressable>
+          <SecondaryButton onPress={() => void confirmCoordinateTransform('approximate')}><ButtonLabel tone="secondary">全部模糊到约 1 公里</ButtonLabel></SecondaryButton>
+          <DangerButton onPress={() => void confirmCoordinateTransform('remove')}><ButtonLabel tone="danger">全部删除坐标</ButtonLabel></DangerButton>
         </View>
       </View>
 
@@ -88,5 +89,5 @@ const styles = StyleSheet.create({
   safe: { flex: 1 }, header: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, title: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, space: { width: 40 },
   content: { padding: spacing.xl, paddingBottom: spacing.xxxl }, sectionTitle: { marginTop: spacing.xl, marginBottom: spacing.sm, fontSize: 11 }, description: { marginBottom: spacing.md, fontSize: 11, lineHeight: 18 }, loadFailure: { alignItems: 'center', paddingVertical: spacing.xl }, retry: { minHeight: 42, justifyContent: 'center', paddingHorizontal: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' }, card: { borderRadius: radii.md, overflow: 'hidden' }, healthRow: { minHeight: 60, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm }, healthText: { flex: 1, paddingRight: spacing.md }, healthLabel: { fontSize: 12, fontWeight: '600' }, healthDetail: { marginTop: 3, fontSize: 10, lineHeight: 14 }, count: { color: '#B46B54', fontSize: 11, fontWeight: '700' }, ok: { color: colors.primary },
   options: { gap: spacing.sm }, option: { minHeight: 46, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, borderRadius: radii.md }, optionActive: { borderWidth: 1, borderColor: colors.primary }, radio: { width: 16, height: 16, marginRight: spacing.md, borderRadius: 8, borderWidth: 1, borderColor: colors.textFaint }, radioActive: { borderWidth: 5, borderColor: colors.primary }, optionText: { fontSize: 12 },
-  coordinateCard: { padding: spacing.lg, borderRadius: radii.lg }, coordinateCount: { fontSize: 13, fontWeight: '600' }, coordinateActions: { gap: spacing.sm, marginTop: spacing.md }, secondaryButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primarySoft }, secondaryButtonText: { color: colors.primary, fontSize: 11, fontWeight: '700' }, removeButton: { backgroundColor: '#F8E9E6' }, removeButtonText: { color: '#A85248', fontSize: 11, fontWeight: '700' },
+  coordinateCard: { padding: spacing.lg, borderRadius: radii.lg }, coordinateCount: { fontSize: 13, fontWeight: '600' }, coordinateActions: { gap: spacing.sm, marginTop: spacing.md },
 });

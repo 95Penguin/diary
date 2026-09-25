@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, InteractionManager, Modal, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, InteractionManager, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import * as Sharing from 'expo-sharing';
 import { router, useFocusEffect } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -8,6 +8,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { MediaThumbnail, MediaViewer } from '@/components/media-view';
 import { MediaMonthPicker } from '@/components/media-month-picker';
+import { BottomSheet } from '@/components/ui/bottom-sheet';
+import { ButtonLabel, DangerButton, PrimaryButton, SecondaryButton } from '@/components/ui/buttons';
 import { listJournalMedia } from '@/database/journal-repository';
 import { removeMissingLibraryMediaReference, updateLibraryMediaThumbnail } from '@/database/media-maintenance';
 import type { LibraryMedia } from '@/domain/journal';
@@ -20,10 +22,13 @@ import { createPersistentImageThumbnail } from '@/utils/image-thumbnail-cache';
 import { createPersistentVideoThumbnail } from '@/utils/video-thumbnail-cache';
 import { deleteJournalImage } from '@/utils/image-storage';
 import { showAppDialog } from '@/components/app-dialog-host';
+import { useJournalDataRevision } from '@/hooks/use-journal-data-revision';
 
 const FILTERS: { key: MediaLibraryFilter; label: string }[] = [
   { key: 'all', label: '全部' }, { key: 'image', label: '图片' }, { key: 'video', label: '视频' },
 ];
+
+type MediaDetailState = { key: string; metadata: MediaMetadata };
 
 export default function MediaLibraryScreen() {
   const db = useSQLiteContext();
@@ -37,15 +42,20 @@ export default function MediaLibraryScreen() {
   const [monthIndexVisible, setMonthIndexVisible] = useState(false);
   const [monthIndexKey, setMonthIndexKey] = useState<string | null>(null);
   const [monthIndexYear, setMonthIndexYear] = useState<number | null>(null);
-  const [details, setDetails] = useState<MediaMetadata | null>(null);
+  const [details, setDetails] = useState<MediaDetailState | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [detailWorking, setDetailWorking] = useState(false);
   const listRef = useRef<FlatList<MediaLibraryListItem>>(null);
+  const viewerRef = useRef<FlatList<LibraryMedia>>(null);
   const loadedRef = useRef(false);
+  const selectedPreviewKeyRef = useRef<string | null>(null);
+  const detailRequestIdRef = useRef(0);
+  const mediaRevision = useJournalDataRevision(['entries', 'media']);
 
   useFocusEffect(useCallback(() => {
+    void mediaRevision;
     void reloadKey;
     let active = true;
     const firstLoad = !loadedRef.current;
@@ -62,7 +72,7 @@ export default function MediaLibraryScreen() {
       });
     });
     return () => { active = false; task.cancel(); };
-  }, [db, reloadKey]));
+  }, [db, mediaRevision, reloadKey]));
 
   const filtered = useMemo(() => filterLibraryMedia(media, filter), [filter, media]);
   const rows = useMemo(() => buildMediaLibraryRows(filtered), [filtered]);
@@ -72,21 +82,55 @@ export default function MediaLibraryScreen() {
   const tileSize = Math.floor((width - horizontalPadding * 2 - gap * 2) / 3);
 
   function openEntry(item: LibraryMedia) {
-    setPreviewIndex(null);
+    closePreview();
     router.push({ pathname: '/entry/[id]', params: { id: item.entryId } });
+  }
+
+  function closeDetails() {
+    detailRequestIdRef.current += 1;
+    setDetails(null);
+  }
+
+  function closePreview() {
+    selectedPreviewKeyRef.current = null;
+    closeDetails();
+    setPreviewIndex(null);
   }
 
   function openPreview(item: LibraryMedia) {
     const index = filtered.findIndex((medium) => medium.id === item.id && medium.source === item.source);
-    if (index >= 0) { setViewerChromeVisible(true); setPreviewIndex(index); }
+    if (index >= 0) {
+      closeDetails();
+      selectedPreviewKeyRef.current = `${item.source}:${item.id}`;
+      setViewerChromeVisible(true);
+      setPreviewIndex(index);
+    }
   }
 
+  useEffect(() => {
+    if (previewIndex === null || !selectedPreviewKeyRef.current) return;
+    const nextIndex = filtered.findIndex((item) => `${item.source}:${item.id}` === selectedPreviewKeyRef.current);
+    if (nextIndex < 0) closePreview();
+    else if (nextIndex !== previewIndex) {
+      setPreviewIndex(nextIndex);
+      requestAnimationFrame(() => viewerRef.current?.scrollToIndex({ index: nextIndex, animated: false }));
+    }
+    // closePreview only writes state and refs; changing its identity must not retrigger reconciliation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, previewIndex]);
+
   const preview = previewIndex === null ? null : filtered[previewIndex] ?? null;
+  const previewKey = preview ? `${preview.source}:${preview.id}` : null;
+  const detailMetadata = previewKey && details?.key === previewKey ? details.metadata : null;
   const previewPosition = preview ? mediaPositionInSource(filtered, preview) : null;
 
   async function openDetails() {
     if (!preview) return;
-    setDetails(await inspectMediaFile(preview.uri));
+    const targetKey = `${preview.source}:${preview.id}`;
+    const requestId = ++detailRequestIdRef.current;
+    const metadata = await inspectMediaFile(preview.uri);
+    if (requestId !== detailRequestIdRef.current || selectedPreviewKeyRef.current !== targetKey) return;
+    setDetails({ key: targetKey, metadata });
   }
   async function shareOriginal() {
     if (!preview || Platform.OS === 'web' || !await Sharing.isAvailableAsync()) return;
@@ -94,7 +138,7 @@ export default function MediaLibraryScreen() {
   }
 
   async function regenerateThumbnail() {
-    if (!preview || !details?.exists || detailWorking) return;
+    if (!preview || !detailMetadata?.exists || detailWorking) return;
     setDetailWorking(true);
     try {
       const thumbnailUri = preview.mediaType === 'video'
@@ -113,7 +157,7 @@ export default function MediaLibraryScreen() {
   }
 
   async function removeMissingReference() {
-    if (!preview || details?.exists || detailWorking) return;
+    if (!preview || detailMetadata?.exists || detailWorking) return;
     const decision = await showAppDialog({ title: '移除失效媒体？', message: '只会从这条记录中移除已经缺失的媒体关联，记录文字和其他媒体会保留。', actions: [{ label: '取消', value: 'cancel' }, { label: '移除', value: 'remove', tone: 'danger' }] });
     if (decision !== 'remove') return;
     setDetailWorking(true);
@@ -121,8 +165,7 @@ export default function MediaLibraryScreen() {
       const uris = await removeMissingLibraryMediaReference(db, preview.source, preview.id);
       uris.forEach(deleteJournalImage);
       setMedia((items) => items.filter((item) => !(item.id === preview.id && item.source === preview.source)));
-      setDetails(null);
-      setPreviewIndex(null);
+      closePreview();
       await showAppDialog({ title: '失效媒体已移除', message: '所属记录的文字和其他内容仍然保留。' });
     } catch {
       await showAppDialog({ title: '移除失败', message: '数据库没有发生不完整修改，请稍后重试。' });
@@ -160,7 +203,7 @@ export default function MediaLibraryScreen() {
         onPress={() => setFilter(item.key)} style={[styles.filter, filter === item.key && styles.filterActive]}
       ><Text style={[styles.filterText, { color: readingTheme.secondary }, filter === item.key && styles.filterTextActive]}>{item.label}</Text></Pressable>)}
     </View>
-    {loading ? <ActivityIndicator color={colors.primary} style={styles.loader} /> : loadError ? <View style={styles.empty}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>媒体暂时没有加载出来</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>内容仍保存在本机，可以重新加载。</Text><Pressable onPress={() => setReloadKey((value) => value + 1)} style={styles.retryButton}><Text style={styles.retryText}>重新加载</Text></Pressable></View> : rows.length ? <FlatList
+    {loading ? <ActivityIndicator color={colors.primary} style={styles.loader} /> : loadError ? <View style={styles.empty}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>媒体暂时没有加载出来</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>内容仍保存在本机，可以重新加载。</Text><PrimaryButton onPress={() => setReloadKey((value) => value + 1)} style={styles.retryButton}><ButtonLabel>重新加载</ButtonLabel></PrimaryButton></View> : rows.length ? <FlatList
       ref={(instance) => { listRef.current = instance; }} data={rows} keyExtractor={(item) => item.key} showsVerticalScrollIndicator={false}
       onScrollToIndexFailed={({ index, averageItemLength }) => { listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: false }); setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 }), 120); }}
       contentContainerStyle={styles.list}
@@ -172,19 +215,22 @@ export default function MediaLibraryScreen() {
         ><MediaThumbnail media={medium} allowRuntimeVideoPoster style={{ width: tileSize, height: tileSize, borderRadius: radii.sm }} /></Pressable>)}</View>}
       initialNumToRender={12} maxToRenderPerBatch={12} windowSize={7}
     /> : <View style={styles.empty}><Text style={[styles.emptyTitle, { color: readingTheme.text }]}>{media.length ? '没有这类媒体' : '还没有图片或视频'}</Text><Text style={[styles.emptyText, { color: readingTheme.secondary }]}>{media.length ? '换一个筛选条件看看。' : '记录中的图片和视频会按月份出现在这里。'}</Text></View>}
-    <Modal visible={previewIndex !== null} animationType="fade" onRequestClose={() => setPreviewIndex(null)}>
+    <Modal visible={previewIndex !== null} animationType="fade" onRequestClose={closePreview}>
       <GestureHandlerRootView style={styles.viewer}>
-        {previewIndex !== null ? <FlatList horizontal pagingEnabled data={filtered} initialScrollIndex={previewIndex} keyExtractor={(medium) => `${medium.source}-${medium.id}`} getItemLayout={(_, index) => ({ index, length: width, offset: width * index })} initialNumToRender={1} maxToRenderPerBatch={3} windowSize={3} removeClippedSubviews showsHorizontalScrollIndicator={false} style={styles.viewerPager} onMomentumScrollEnd={(event) => setPreviewIndex(Math.max(0, Math.min(filtered.length - 1, Math.round(event.nativeEvent.contentOffset.x / width))))} onScrollToIndexFailed={({ index }) => requestAnimationFrame(() => setPreviewIndex(index))} renderItem={({ item: medium }) => <View style={[styles.viewerPage, { width }]}><MediaViewer media={medium} onPress={() => setViewerChromeVisible((visible) => !visible)} /></View>} /> : null}
+        {previewIndex !== null ? <FlatList ref={viewerRef} horizontal pagingEnabled data={filtered} initialScrollIndex={previewIndex} keyExtractor={(medium) => `${medium.source}-${medium.id}`} getItemLayout={(_, index) => ({ index, length: width, offset: width * index })} initialNumToRender={1} maxToRenderPerBatch={3} windowSize={3} removeClippedSubviews showsHorizontalScrollIndicator={false} style={styles.viewerPager} onMomentumScrollEnd={(event) => { const index = Math.max(0, Math.min(filtered.length - 1, Math.round(event.nativeEvent.contentOffset.x / width))); const item = filtered[index]; closeDetails(); selectedPreviewKeyRef.current = item ? `${item.source}:${item.id}` : null; setPreviewIndex(index); }} onScrollToIndexFailed={({ index }) => requestAnimationFrame(() => setPreviewIndex(index))} renderItem={({ item: medium }) => <View style={[styles.viewerPage, { width }]}><MediaViewer media={medium} onPress={() => setViewerChromeVisible((visible) => !visible)} /></View>} /> : null}
         {viewerChromeVisible ? <View style={[styles.viewerTop, { paddingTop: Math.max(insets.top, spacing.md) }]}> 
-          <Pressable accessibilityLabel="关闭预览" onPress={() => setPreviewIndex(null)} style={styles.viewerButton}><Text style={styles.viewerButtonText}>×</Text></Pressable>
+          <Pressable accessibilityLabel="关闭预览" onPress={closePreview} style={styles.viewerButton}><Text style={styles.viewerButtonText}>×</Text></Pressable>
           {preview ? <View style={styles.viewerHeading}><Text style={styles.viewerDateTime}>{formatDateTime(preview.occurredAt)}</Text>{previewPosition && previewPosition.total > 1 ? <Text style={styles.viewerCount}>{previewPosition.index + 1} / {previewPosition.total}</Text> : null}</View> : null}
           <Pressable accessibilityLabel="媒体详情" onPress={() => void openDetails()} style={styles.viewerButton}><Text style={styles.infoButtonText}>i</Text></Pressable>
         </View> : null}
         {preview && viewerChromeVisible ? <View style={[styles.viewerBottom, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}><View style={styles.viewerCaption}>{preview.source === 'followUp' ? <Text style={styles.viewerSource}>后续 · {formatDateTime(preview.attachedAt)}</Text> : null}<Text numberOfLines={3} style={styles.viewerDescription}>{preview.sourceContent || '这一刻没有写下文字'}</Text></View><Pressable accessibilityLabel="查看所属记录" onPress={() => openEntry(preview)} style={styles.openEntry}><Text style={styles.openEntryText}>查看记录</Text></Pressable></View> : null}
       </GestureHandlerRootView>
     </Modal>
-    <Modal visible={details !== null} transparent animationType="fade" onRequestClose={() => setDetails(null)}><Pressable onPress={() => setDetails(null)} style={styles.detailOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.detailSheet, { backgroundColor: readingTheme.background }]}><View style={styles.detailHeader}><Text style={[styles.detailTitle, { color: readingTheme.text }]}>媒体详情</Text><Pressable onPress={() => setDetails(null)}><Text style={[styles.detailClose, { color: readingTheme.secondary }]}>×</Text></Pressable></View>{preview && details ? <><DetailRow label="分辨率" value={`${preview.width} × ${preview.height}`} /><DetailRow label="文件大小" value={details.exists ? formatFileSize(details.bytes) : '原文件缺失'} danger={!details.exists} /><DetailRow label="格式" value={preview.mimeType ?? details.format} /><DetailRow label="原始文件名" value={preview.originalFilename ?? '未提供'} /><DetailRow label="拍摄时间" value={preview.capturedAt ? formatDateTime(preview.capturedAt) : '未提供'} /><DetailRow label="文件时间" value={details.createdAt ? formatDateTime(details.createdAt) : '文件未提供'} /><DetailRow label="加入拾时" value={formatDateTime(preview.attachedAt)} />{!details.exists ? <Text style={styles.missingHint}>数据库记录仍在，但本机原文件不存在。可以先从备份恢复，或移除这条失效媒体关联。</Text> : null}{details.exists ? <Pressable disabled={detailWorking || Platform.OS === 'web'} onPress={() => void regenerateThumbnail()} style={[styles.secondaryButton, (detailWorking || Platform.OS === 'web') && styles.shareDisabled]}><Text style={styles.secondaryButtonText}>{detailWorking ? '正在生成…' : '重新生成缩略图'}</Text></Pressable> : <Pressable disabled={detailWorking} onPress={() => void removeMissingReference()} style={[styles.removeButton, detailWorking && styles.shareDisabled]}><Text style={styles.removeButtonText}>{detailWorking ? '正在处理…' : '移除失效关联'}</Text></Pressable>}<Pressable disabled={!details.exists || Platform.OS === 'web' || detailWorking} onPress={() => void shareOriginal()} style={[styles.shareButton, (!details.exists || Platform.OS === 'web' || detailWorking) && styles.shareDisabled]}><Text style={styles.shareButtonText}>分享原文件</Text></Pressable></> : null}</Pressable></Pressable></Modal>
-    <MediaMonthPicker visible={monthIndexVisible} months={months} selectedKey={monthIndexKey} selectedYear={monthIndexYear} bottomInset={insets.bottom} onChangeKey={setMonthIndexKey} onChangeYear={setMonthIndexYear} onClose={() => setMonthIndexVisible(false)} onConfirm={confirmMonthIndex} />
+    <BottomSheet visible={detailMetadata !== null} onClose={closeDetails} backgroundColor={readingTheme.background} sheetStyle={styles.detailSheet}>
+      <View style={styles.detailHeader}><Text style={[styles.detailTitle, { color: readingTheme.text }]}>媒体详情</Text><Pressable accessibilityLabel="关闭媒体详情" hitSlop={10} onPress={closeDetails}><Text style={[styles.detailClose, { color: readingTheme.secondary }]}>×</Text></Pressable></View>
+      {preview && detailMetadata ? <ScrollView style={styles.detailScroll} contentContainerStyle={styles.detailBody} showsVerticalScrollIndicator={false}><DetailRow label="分辨率" value={`${preview.width} × ${preview.height}`} /><DetailRow label="文件大小" value={detailMetadata.exists ? formatFileSize(detailMetadata.bytes) : '原文件缺失'} danger={!detailMetadata.exists} /><DetailRow label="格式" value={preview.mimeType ?? detailMetadata.format} /><DetailRow label="原始文件名" value={preview.originalFilename ?? '未提供'} /><DetailRow label="拍摄时间" value={preview.capturedAt ? formatDateTime(preview.capturedAt) : '未提供'} /><DetailRow label="文件时间" value={detailMetadata.createdAt ? formatDateTime(detailMetadata.createdAt) : '文件未提供'} /><DetailRow label="加入拾时" value={formatDateTime(preview.attachedAt)} />{!detailMetadata.exists ? <Text style={styles.missingHint}>数据库记录仍在，但本机原文件不存在。可以先从备份恢复，或移除这条失效媒体关联。</Text> : null}{detailMetadata.exists ? <SecondaryButton disabled={detailWorking || Platform.OS === 'web'} onPress={() => void regenerateThumbnail()} style={styles.secondaryButton}><ButtonLabel tone="secondary">{detailWorking ? '正在生成…' : '重新生成缩略图'}</ButtonLabel></SecondaryButton> : <DangerButton disabled={detailWorking} onPress={() => void removeMissingReference()} style={styles.removeButton}><ButtonLabel tone="danger">{detailWorking ? '正在处理…' : '移除失效关联'}</ButtonLabel></DangerButton>}<PrimaryButton disabled={!detailMetadata.exists || Platform.OS === 'web' || detailWorking} onPress={() => void shareOriginal()} style={styles.shareButton}><ButtonLabel>分享原文件</ButtonLabel></PrimaryButton></ScrollView> : null}
+    </BottomSheet>
+    <MediaMonthPicker visible={monthIndexVisible} months={months} selectedKey={monthIndexKey} selectedYear={monthIndexYear} onChangeKey={setMonthIndexKey} onChangeYear={setMonthIndexYear} onClose={() => setMonthIndexVisible(false)} onConfirm={confirmMonthIndex} />
   </SafeAreaView>;
 }
 
@@ -208,12 +254,12 @@ const styles = StyleSheet.create({
   loader: { flex: 1 }, list: { paddingHorizontal: spacing.md, paddingBottom: spacing.xxxl },
   monthHeader: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: spacing.sm, paddingBottom: 6 }, monthButton: { minHeight: 36, justifyContent: 'center' }, month: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '600' }, monthCount: { fontSize: 10, lineHeight: 14 },
   mediaRow: { flexDirection: 'row', marginBottom: 4 },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, emptyTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, emptyText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { minHeight: 42, justifyContent: 'center', marginTop: spacing.lg, paddingHorizontal: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, emptyTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, emptyText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { marginTop: spacing.lg },
   viewer: { flex: 1, backgroundColor: '#101411' }, viewerPager: { flex: 1 }, viewerPage: { flex: 1 }, viewerTop: { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingBottom: spacing.md, backgroundColor: '#00000066' },
   viewerButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#FFFFFF22' }, viewerButtonText: { color: '#FFFFFF', fontSize: 30, lineHeight: 34, fontWeight: '300' }, infoButtonText:{color:'#FFFFFF',fontFamily:fonts.serif,fontSize:18,fontWeight:'700'}, viewerHeading: { flex: 1, alignItems: 'center' }, viewerDateTime: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' }, viewerCount: { marginTop: 2, color: '#FFFFFFCC', fontSize: 10, fontWeight: '600' }, viewerTopSpacer: { width: 40 },
   viewerBottom: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'flex-end', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.md, backgroundColor: '#00000088' }, viewerCaption: { flex: 1 }, viewerSource: { marginBottom: 3, color: '#FFFFFFB3', fontSize: 10, fontWeight: '700' }, viewerDescription: { color: '#FFFFFFE6', fontSize: 13, lineHeight: 20 },
   openEntry: { flexShrink: 0, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: '#FFFFFFE8' }, openEntryText: { color: colors.text, fontSize: 11, fontWeight: '700' },
-  detailOverlay:{flex:1,justifyContent:'flex-end',backgroundColor:'#00000066'},detailSheet:{paddingHorizontal:spacing.xl,paddingTop:spacing.lg,paddingBottom:spacing.xxxl,borderTopLeftRadius:radii.lg,borderTopRightRadius:radii.lg},detailHeader:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginBottom:spacing.md},detailTitle:{fontFamily:fonts.serif,fontSize:18,fontWeight:'700'},detailClose:{fontSize:26},detailRow:{minHeight:43,flexDirection:'row',alignItems:'center',justifyContent:'space-between',borderBottomWidth:StyleSheet.hairlineWidth,borderBottomColor:'#00000012'},detailLabel:{fontSize:12},detailValue:{fontSize:12,fontWeight:'600'},missingHint:{marginTop:spacing.md,color:colors.danger,fontSize:10,lineHeight:17},secondaryButton:{minHeight:44,alignItems:'center',justifyContent:'center',marginTop:spacing.xl,borderWidth:1,borderColor:colors.primary,borderRadius:radii.pill},secondaryButtonText:{color:colors.primary,fontSize:12,fontWeight:'700'},removeButton:{minHeight:44,alignItems:'center',justifyContent:'center',marginTop:spacing.xl,borderWidth:1,borderColor:colors.danger,borderRadius:radii.pill},removeButtonText:{color:colors.danger,fontSize:12,fontWeight:'700'},shareButton:{minHeight:44,alignItems:'center',justifyContent:'center',marginTop:spacing.md,borderRadius:radii.pill,backgroundColor:colors.primary},shareButtonText:{color:'#fff',fontSize:12,fontWeight:'700'},shareDisabled:{opacity:.4},
+  detailSheet:{paddingHorizontal:spacing.xl},detailHeader:{height:52,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},detailTitle:{fontFamily:fonts.serif,fontSize:18,fontWeight:'700'},detailClose:{fontSize:26},detailScroll:{flex:1},detailBody:{paddingBottom:spacing.md},detailRow:{minHeight:43,flexDirection:'row',alignItems:'center',justifyContent:'space-between',borderBottomWidth:StyleSheet.hairlineWidth,borderBottomColor:'#00000012'},detailLabel:{fontSize:12},detailValue:{fontSize:12,fontWeight:'600'},missingHint:{marginTop:spacing.md,color:colors.danger,fontSize:10,lineHeight:17},secondaryButton:{marginTop:spacing.xl},removeButton:{marginTop:spacing.xl},shareButton:{marginTop:spacing.md},
 });
 
 function DetailRow({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) { const { readingTheme } = useAppPreferences(); return <View style={styles.detailRow}><Text style={[styles.detailLabel,{color:readingTheme.secondary}]}>{label}</Text><Text style={[styles.detailValue,{color:danger?colors.danger:readingTheme.text}]}>{value}</Text></View>; }

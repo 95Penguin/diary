@@ -11,6 +11,8 @@ import { listFavoriteEntryPage } from '@/database/journal-repository';
 import type { Entry } from '@/domain/journal';
 import { colors, fonts, spacing } from '@/theme/tokens';
 import { useAppPreferences } from '@/preferences/app-preferences';
+import { useJournalDataRevision } from '@/hooks/use-journal-data-revision';
+import { ButtonLabel, PrimaryButton } from '@/components/ui/buttons';
 
 export default function FavoritesScreen() {
   const db = useSQLiteContext();
@@ -19,32 +21,40 @@ export default function FavoritesScreen() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
+  const requestIdRef = useRef(0);
   const [nextCursor, setNextCursor] = useState<{ favoritedAt: string; id: string } | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const loadedRef = useRef(false);
+  const entriesRevision = useJournalDataRevision(['entries']);
   useFocusEffect(useCallback(() => {
+    void entriesRevision;
     void reloadKey;
+    const currentRequest = ++requestIdRef.current;
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
     let active = true;
     const firstLoad = !loadedRef.current;
     if (firstLoad) { setLoading(true); setLoadError(false); }
-    void listFavoriteEntryPage(db).then((page) => { if (active) { loadedRef.current = true; setEntries(page.entries); setNextCursor(page.nextCursor); setLoadError(false); setLoading(false); } }).catch(() => { if (active && firstLoad) { setLoadError(true); setLoading(false); } });
+    void listFavoriteEntryPage(db).then((page) => { if (active && currentRequest === requestIdRef.current) { loadedRef.current = true; setEntries(page.entries); setNextCursor(page.nextCursor); setLoadError(false); setLoading(false); } }).catch(() => { if (active && currentRequest === requestIdRef.current && firstLoad) { setLoadError(true); setLoading(false); } });
     return () => { active = false; };
-  }, [db, reloadKey]));
+  }, [db, entriesRevision, reloadKey]));
 
   async function loadMore() {
     if (!nextCursor || loadingMoreRef.current) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
+    const currentRequest = requestIdRef.current;
     try {
       const page = await listFavoriteEntryPage(db, { cursor: nextCursor });
+      if (currentRequest !== requestIdRef.current) return;
       setEntries((current) => [...current, ...page.entries]);
       setNextCursor(page.nextCursor);
-    } catch { await showAppDialog({ title: '暂时无法继续加载', message: '已加载的收藏仍可正常查看，请稍后重试。' }); }
-    finally { loadingMoreRef.current = false; setLoadingMore(false); }
+    } catch { if (currentRequest === requestIdRef.current) await showAppDialog({ title: '暂时无法继续加载', message: '已加载的收藏仍可正常查看，请稍后重试。' }); }
+    finally { if (currentRequest === requestIdRef.current) { loadingMoreRef.current = false; setLoadingMore(false); } }
   }
 
-  if (loadError) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}><View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>我的收藏</Text><View style={styles.space} /></View><View style={styles.failure}><Text style={[styles.failureTitle, { color: readingTheme.text }]}>收藏暂时没有加载出来</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>记录仍保存在本机，可以重新加载。</Text><Pressable onPress={() => setReloadKey((value) => value + 1)} style={styles.retryButton}><Text style={styles.retryText}>重新加载</Text></Pressable></View></SafeAreaView>;
+  if (loadError) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}><View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>我的收藏</Text><View style={styles.space} /></View><View style={styles.failure}><Text style={[styles.failureTitle, { color: readingTheme.text }]}>收藏暂时没有加载出来</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>记录仍保存在本机，可以重新加载。</Text><PrimaryButton onPress={() => setReloadKey((value) => value + 1)} style={styles.retryButton}><ButtonLabel>重新加载</ButtonLabel></PrimaryButton></View></SafeAreaView>;
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]} edges={['top', 'bottom']}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.canGoBack() ? router.back() : router.replace('/')}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.title, { color: readingTheme.text }]}>我的收藏</Text><View style={styles.space} /></View>
@@ -54,5 +64,5 @@ export default function FavoritesScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background }, header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, space: { width: 42 }, loader: { marginTop: 80 }, moreLoader: { marginVertical: spacing.lg }, list: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, count: { paddingVertical: spacing.md, color: colors.textSecondary, fontSize: 10 }, failure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, failureTitle: { fontFamily: fonts.serif, fontSize: 18 }, failureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { minHeight: 42, justifyContent: 'center', marginTop: spacing.lg, paddingHorizontal: spacing.xl, borderRadius: 21, backgroundColor: colors.primary }, retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  back: { color: colors.primary, fontSize: 13 }, title: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, space: { width: 42 }, loader: { marginTop: 80 }, moreLoader: { marginVertical: spacing.lg }, list: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }, count: { paddingVertical: spacing.md, color: colors.textSecondary, fontSize: 10 }, failure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl }, failureTitle: { fontFamily: fonts.serif, fontSize: 18 }, failureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { marginTop: spacing.lg },
 });

@@ -5,6 +5,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppDialog } from '@/components/app-dialog';
+import { CompactPillButton, PrimaryButton } from '@/components/ui/buttons';
 import {
   addMetadataItem,
   listLocationDuplicateSuggestions,
@@ -118,7 +119,7 @@ export default function MetadataScreen() {
         onTogglePinned={(item) => void togglePinned('tag', item)}
         onDelete={(item) => setDeleting({ kind: 'tag', item })}
       />
-      <View style={styles.duplicateCheckRow}><View><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>重复地点检查</Text><Text style={[styles.sectionCount, { color: readingTheme.secondary }]}>{duplicatesChecked ? duplicates.length ? `发现 ${duplicates.length} 组` : '没有发现疑似重复地点' : '需要时再进行本地检测'}</Text></View><Pressable disabled={checkingDuplicates} onPress={() => void checkDuplicates()} style={[styles.addButton, { backgroundColor: readingTheme.surface }]}>{checkingDuplicates ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.addText}>{duplicatesChecked ? '重新检查' : '开始检查'}</Text>}</Pressable></View>
+      <View style={styles.duplicateCheckRow}><View><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>重复地点检查</Text><Text style={[styles.sectionCount, { color: readingTheme.secondary }]}>{duplicatesChecked ? duplicates.length ? `发现 ${duplicates.length} 组` : '没有发现疑似重复地点' : '需要时再进行本地检测'}</Text></View><CompactPillButton disabled={checkingDuplicates} onPress={() => void checkDuplicates()} style={[styles.addButton, { backgroundColor: readingTheme.surface }]}>{checkingDuplicates ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.addText}>{duplicatesChecked ? '重新检查' : '开始检查'}</Text>}</CompactPillButton></View>
       {duplicates.length ? <View style={styles.duplicateSection}>
         <View style={styles.duplicateHeading}><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>疑似重复地点</Text><Text style={[styles.sectionCount, { color: readingTheme.secondary }]}>本地检测 · {duplicates.length} 组</Text></View>
         <Text style={[styles.duplicateHint, { color: readingTheme.secondary }]}>只有确认后才会合并。坐标和记录正文不会删除。</Text>
@@ -148,8 +149,8 @@ export default function MetadataScreen() {
           <TextInput autoFocus maxLength={editing?.kind === 'tag' ? 12 : 100} value={editValue} onChangeText={setEditValue} onSubmitEditing={() => void saveRename()} returnKeyType="done" placeholderTextColor={readingTheme.secondary} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} />
           <Text style={[styles.mergeHint, { color: readingTheme.secondary }]}>{editing?.kind === 'location' ? '输入“学校”等别名；如果名称已经存在，会把记录自动合并到该地点。坐标不会被删除。' : '如果名称已经存在，会自动合并。'}</Text>
           <View style={styles.editorActions}>
-            <Pressable onPress={() => setEditing(null)}><Text style={[styles.cancel, { color: readingTheme.secondary }]}>取消</Text></Pressable>
-            <Pressable disabled={!editValue.trim()} onPress={() => void saveRename()}><Text style={[styles.save, !editValue.trim() && styles.disabled]}>保存</Text></Pressable>
+            <Pressable onPress={() => setEditing(null)} style={styles.editorCancel}><Text style={[styles.cancel, { color: readingTheme.secondary }]}>取消</Text></Pressable>
+            <PrimaryButton disabled={!editValue.trim()} onPress={() => void saveRename()} style={styles.editorSave}><Text style={styles.save}>保存</Text></PrimaryButton>
           </View>
         </Pressable>
       </Pressable>
@@ -186,7 +187,7 @@ function MetadataSection({ title, emptyText, items, prefix, maxPinned, onAdd, on
   return <View>
     <View style={styles.sectionHeading}>
       <View><Text style={[styles.sectionTitle, { color: readingTheme.text }]}>{title}</Text><Text style={[styles.sectionCount, { color: readingTheme.secondary }]}>最多置顶 {maxPinned} 个 · 共 {items.length} 个</Text></View>
-      <Pressable onPress={onAdd} style={[styles.addButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.addText}>＋ 新增</Text></Pressable>
+      <CompactPillButton onPress={onAdd} style={[styles.addButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.addText}>＋ 新增</Text></CompactPillButton>
     </View>
     <View style={[styles.card, { backgroundColor: readingTheme.surface }]}>
       {items.length ? items.map((item) => <View key={item.value} style={[styles.itemRow, { borderBottomColor: readingTheme.border }]}>
@@ -214,7 +215,7 @@ const styles = StyleSheet.create({
   duplicateCard: { marginBottom: spacing.sm, padding: spacing.md, borderRadius: radii.md }, duplicateNames: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   duplicateName: { flex: 1, fontSize: 12, fontWeight: '700' }, duplicateSwap: { color: colors.primary, fontSize: 13 }, duplicateReason: { marginTop: spacing.xs, fontSize: 11 },
   duplicateActions: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md, marginTop: spacing.md }, mergeAction: { minHeight: 36, color: colors.primary, fontSize: 11, fontWeight: '700' },
-  addButton: { minHeight: 34, justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radii.pill }, addText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
+  addButton: { paddingHorizontal: spacing.sm }, addText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   card: { overflow: 'hidden', borderRadius: radii.md },
   itemRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth },
   itemMain: { flex: 1, minWidth: 0, paddingVertical: spacing.sm }, itemName: { fontSize: 12, fontWeight: '600' }, itemAddress: { marginTop: 2, fontSize: 11 }, itemCount: { marginTop: 2, fontSize: 11 },
@@ -224,6 +225,6 @@ const styles = StyleSheet.create({
   editorTitle: { marginBottom: spacing.md, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600', textAlign: 'center' },
   input: { height: 44, paddingHorizontal: spacing.md, borderRadius: radii.md, fontSize: 13 },
   mergeHint: { marginTop: spacing.sm, fontSize: 11, textAlign: 'center' },
-  editorActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.xxl, marginTop: spacing.xl },
-  cancel: { fontSize: 12 }, save: { color: colors.primary, fontSize: 12, fontWeight: '700' }, disabled: { opacity: 0.35 },
+  editorActions: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.md, marginTop: spacing.xl }, editorCancel: { minHeight: 42, justifyContent: 'center', paddingHorizontal: spacing.md }, editorSave: { minWidth: 92 },
+  cancel: { fontSize: 12 }, save: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
 });

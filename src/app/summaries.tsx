@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -28,6 +27,7 @@ import {
 } from '@/database/statistics-repository';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
+import { BottomSheet } from '@/components/ui/bottom-sheet';
 
 const PERIODS: { value: StatisticsPeriod; label: string }[] = [
   { value: 'week', label: '周总结' },
@@ -297,7 +297,7 @@ export default function SummariesScreen() {
           ) : null}
         </ScrollView>
       ) : null}
-      <Modal visible={yearPickerVisible} transparent animationType="fade" onRequestClose={() => setYearPickerVisible(false)}><Pressable accessibilityLabel="关闭年份选择" onPress={() => setYearPickerVisible(false)} style={styles.yearOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.yearPicker, { backgroundColor: readingTheme.background }]}><Text style={[styles.yearPickerTitle, { color: readingTheme.text }]}>选择回顾年份</Text><ScrollView style={styles.yearList} showsVerticalScrollIndicator>{[...yearOptions].reverse().map((item) => { const active = item.year === anchor.getFullYear(); return <Pressable accessibilityRole="menuitem" key={item.year} onPress={() => selectYear(item.year)} style={[styles.yearItem, { borderBottomColor: readingTheme.border }, active && { backgroundColor: readingTheme.surface }]}><View><Text style={[styles.yearItemTitle, { color: active ? colors.primary : readingTheme.text }]}>{item.year} 年</Text><Text style={[styles.yearItemCount, { color: readingTheme.secondary }]}>{item.count ? `${item.count} 条记录` : '这一年还没有记录'}</Text></View>{active ? <Text style={styles.yearCheck}>✓</Text> : null}</Pressable>; })}</ScrollView><Pressable onPress={() => setYearPickerVisible(false)} style={styles.yearCancel}><Text style={[styles.yearCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable></Pressable></Pressable></Modal>
+      <BottomSheet visible={yearPickerVisible} onClose={() => setYearPickerVisible(false)} backgroundColor={readingTheme.background} contentHeight={420} sheetStyle={styles.yearPicker}><Text style={[styles.yearPickerTitle, { color: readingTheme.text }]}>选择回顾年份</Text><ScrollView style={styles.yearList} showsVerticalScrollIndicator>{[...yearOptions].reverse().map((item) => { const active = item.year === anchor.getFullYear(); return <Pressable accessibilityRole="menuitem" key={item.year} onPress={() => selectYear(item.year)} style={[styles.yearItem, { borderBottomColor: readingTheme.border }, active && { backgroundColor: readingTheme.surface }]}><View><Text style={[styles.yearItemTitle, { color: active ? colors.primary : readingTheme.text }]}>{item.year} 年</Text><Text style={[styles.yearItemCount, { color: readingTheme.secondary }]}>{item.count ? `${item.count} 条记录` : '这一年还没有记录'}</Text></View>{active ? <Text style={styles.yearCheck}>✓</Text> : null}</Pressable>; })}</ScrollView><Pressable onPress={() => setYearPickerVisible(false)} style={styles.yearCancel}><Text style={[styles.yearCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable></BottomSheet>
     </SafeAreaView>
   );
 }
@@ -567,7 +567,7 @@ const styles = StyleSheet.create({
   heatLegendText: { fontSize: 9 },
   momentStack: { gap: spacing.sm }, momentCard: { padding: spacing.md, borderRadius: radii.lg }, momentPressed: { opacity: 0.62 }, momentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, momentLabel: { color: colors.primary, fontSize: 10, fontWeight: '700' }, momentDate: { fontSize: 9 }, momentContent: { marginTop: spacing.sm, fontSize: 13, lineHeight: 20 }, momentMeta: { marginTop: spacing.sm, fontSize: 9 },
   annualEmpty: { alignItems: 'center', padding: spacing.xl, borderRadius: radii.lg }, annualEmptyTitle: { fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' }, annualEmptyText: { marginTop: spacing.xs, fontSize: 10, textAlign: 'center' },
-  yearOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, yearPicker: { width: '100%', maxWidth: 310, maxHeight: '72%', paddingTop: spacing.xl, borderRadius: radii.lg }, yearPickerTitle: { paddingHorizontal: spacing.xl, paddingBottom: spacing.md, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, yearList: { flexGrow: 0 }, yearItem: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, yearItemTitle: { fontSize: 14, fontWeight: '700' }, yearItemCount: { marginTop: 2, fontSize: 10 }, yearCheck: { color: colors.primary, fontSize: 15, fontWeight: '700' }, yearCancel: { minHeight: 48, alignItems: 'center', justifyContent: 'center' }, yearCancelText: { fontSize: 12, fontWeight: '600' },
+  yearPicker: { paddingTop: spacing.xxl }, yearPickerTitle: { paddingHorizontal: spacing.xl, paddingBottom: spacing.md, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, yearList: { flex: 1 }, yearItem: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, yearItemTitle: { fontSize: 14, fontWeight: '700' }, yearItemCount: { marginTop: 2, fontSize: 10 }, yearCheck: { color: colors.primary, fontSize: 15, fontWeight: '700' }, yearCancel: { minHeight: 48, alignItems: 'center', justifyContent: 'center' }, yearCancelText: { fontSize: 12, fontWeight: '600' },
   exportHint: { marginTop: spacing.md, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.lg },
   exportHintTitle: { fontSize: 11, fontWeight: '700' },
   exportHintText: { marginTop: spacing.xs, fontSize: 10 },

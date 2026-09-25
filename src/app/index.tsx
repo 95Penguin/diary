@@ -1,21 +1,23 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, FlatList, InteractionManager, Keyboard, Modal, PanResponder, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, FlatList, InteractionManager, PanResponder, Platform, Pressable, ScrollView, SectionList, StyleSheet, Text, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import * as SplashScreen from 'expo-splash-screen';
 import { Image } from 'expo-image';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
 import { BottomNavigation, type HomeView } from '@/components/bottom-navigation';
+import { BottomSheet } from '@/components/ui/bottom-sheet';
+import { CompactPillButton, IconButton } from '@/components/ui/buttons';
 import { NUMBER_WHEEL_ITEM_HEIGHT, NumberWheelColumn } from '@/components/number-wheel-column';
+import { TimelineFilterSheet } from '@/components/timeline-filter-sheet';
 import { showAppDialog } from '@/components/app-dialog-host';
 import { EmptyState } from '@/components/empty-state';
 import { EntryCard } from '@/components/entry-card';
 import { EntryActionModal } from '@/components/entry-action-modal';
 import {
   cleanupExpiredTrash,
-  countEntriesMatchingFilters,
   countEntriesForLocalDate,
   deleteEntry,
   getDraftCount,
@@ -23,26 +25,23 @@ import {
   getCalendarOrder,
   listCalendarMonthCounts,
   listEntriesForDate,
-  listEntryFilterOptions,
   listEntryMonthIndex,
   findTimelineJumpTarget,
   listNewerEntryPage,
   listEntryPage,
   listReferencedMediaUris,
   saveCalendarOrder,
-  type EntryFilterKind,
-  type EntryFilterOptions,
   type EntryListFilters,
   type EntryPageCursor,
   type EntryMonthIndexItem,
 } from '@/database/journal-repository';
 import type { Entry } from '@/domain/journal';
-import { JOURNAL_MOODS, JOURNAL_WEATHERS } from '@/domain/journal-metadata';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { dateKey, groupLabel, weekdayLabel } from '@/utils/date';
 import { lunarDayLabel } from '@/utils/lunar';
 import { cleanupUnusedJournalMedia, deleteJournalImage } from '@/utils/image-storage';
 import { useAppPreferences } from '@/preferences/app-preferences';
+import { useJournalDataRevision } from '@/hooks/use-journal-data-revision';
 import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
 import { cleanupExpiredTimeCapsules } from '@/database/time-capsule-repository';
 import { recordAppError } from '@/utils/app-error-log';
@@ -62,6 +61,7 @@ export default function HomeScreen() {
   const cleanupStarted = useRef(false);
   const pendingDetailEntryId = useRef<string | null>(null);
   const [entryRefresh, setEntryRefresh] = useState<{ id: string; revision: number } | null>(null);
+  const draftRevision = useJournalDataRevision(['drafts']);
 
   const refresh = useCallback(async () => {
     const returningEntryId = pendingDetailEntryId.current;
@@ -89,6 +89,10 @@ export default function HomeScreen() {
   }, [db]);
 
   useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
+  useEffect(() => {
+    if (!draftRevision) return;
+    void getDraftCount(db).then(setDraftCount);
+  }, [db, draftRevision]);
   useEffect(() => {
     let active = true;
     void db.getFirstAsync<{ value: string }>("SELECT value FROM kv_store WHERE key = 'quick-compose-hint-seen'").then((row) => {
@@ -125,8 +129,8 @@ export default function HomeScreen() {
       <View style={styles.header}>
         <View style={styles.headerIdentity}><Text style={[styles.brand, { color: readingTheme.text }]}>拾时</Text><Text numberOfLines={1} style={[styles.subtitle, { color: readingTheme.secondary }]}>{preferences.signature.trim() || '我的日迹'}</Text></View>
         <View style={styles.headerActions}>
-          <Pressable accessibilityLabel={`草稿箱${draftCount > 0 ? `，${draftCount} 份草稿` : ''}`} onPress={() => router.push('/drafts' as Href)} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'doc.text', android: 'draft', web: 'draft' }} size={18} tintColor={colors.primary} />{draftCount > 0 ? <View style={styles.draftDot} /> : null}</Pressable>
-          <Pressable accessibilityLabel="搜索" onPress={() => router.push('/search')} style={[styles.searchButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }} size={19} tintColor={colors.primary} /></Pressable>
+          <IconButton accessibilityLabel={`草稿箱${draftCount > 0 ? `，${draftCount} 份草稿` : ''}`} onPress={() => router.push('/drafts' as Href)} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'doc.text', android: 'draft', web: 'draft' }} size={18} tintColor={colors.primary} />{draftCount > 0 ? <View style={styles.draftDot} /> : null}</IconButton>
+          <IconButton accessibilityLabel="搜索" onPress={() => router.push('/search')} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }} size={19} tintColor={colors.primary} /></IconButton>
           <Pressable accessibilityLabel={`我的，${preferences.nickname}`} onPress={() => router.push('/settings')} style={styles.profileButton}>{preferences.avatarUri ? <Image source={preferences.avatarUri} contentFit="cover" style={styles.profileImage} /> : <Text style={styles.profileText}>{preferences.nickname.slice(0, 1)}</Text>}</Pressable>
         </View>
       </View>
@@ -149,15 +153,11 @@ export default function HomeScreen() {
   );
 }
 
-type FilterKind = EntryFilterKind;
-type ActiveFilterKind = Exclude<FilterKind, 'none'>;
 const PAGE_SIZE = 30;
 const TIMELINE_MEMORY_WINDOW = PAGE_SIZE * 6;
-const EMPTY_FILTER_OPTIONS: EntryFilterOptions = { locations: [], tags: [], moods: [], weather: [] };
 
 function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress }: { refreshKey: number; entryRefresh: { id: string; revision: number } | null; scrollRequest: number; onOpen: (entry: Entry) => void; onLongPress: (entry: Entry) => void }) {
   const db = useSQLiteContext();
-  const insets = useSafeAreaInsets();
   const { readingTheme } = useAppPreferences();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [cursor, setCursor] = useState<EntryPageCursor | null>(null);
@@ -168,15 +168,9 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const [loadError, setLoadError] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const requestId = useRef(0);
-  const filterOptionsLoaded = useRef(false);
   const listRef = useRef<SectionList<Entry>>(null);
   const initialLoadStartedAt = useRef(startupTimer());
-  const [filterOptions, setFilterOptions] = useState<EntryFilterOptions>(EMPTY_FILTER_OPTIONS);
-  const [filterKind, setFilterKind] = useState<FilterKind>('none');
   const [filters, setFilters] = useState<EntryListFilters>({});
-  const [pendingFilters, setPendingFilters] = useState<EntryListFilters>({});
-  const [pendingFilterCount, setPendingFilterCount] = useState<number | null | 'error'>(null);
-  const [filterSearch, setFilterSearch] = useState('');
   const [filterPickerVisible, setFilterPickerVisible] = useState(false);
   const [timeIndexVisible, setTimeIndexVisible] = useState(false);
   const [monthIndex, setMonthIndex] = useState<EntryMonthIndexItem[]>([]);
@@ -198,24 +192,7 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
   const visibleEntryIdRef = useRef<string | null>(null);
   const visibleEntryDateRef = useRef<string | null>(null);
   const restoreEntryIdRef = useRef<string | null>(null);
-  const availableTags = filterOptions.tags;
-  const availableLocations = filterOptions.locations;
-  const availableMoods = [...new Set<string>([...JOURNAL_MOODS, ...filterOptions.moods])];
-  const availableWeather = [...new Set<string>([...JOURNAL_WEATHERS, ...filterOptions.weather])];
-  const filterLabels: Record<FilterKind, string> = { none: '全部记录', time: '时间', location: '地点', tag: '标签', mood: '心情', weather: '天气' };
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
-  const pendingActiveFilterCount = Object.values(pendingFilters).filter(Boolean).length;
-
-  useEffect(() => {
-    if (!filterPickerVisible) return;
-    let active = true;
-    const timer = setTimeout(() => {
-      void countEntriesMatchingFilters(db, pendingFilters)
-        .then((count) => { if (active) setPendingFilterCount(count); })
-        .catch(() => { if (active) setPendingFilterCount('error'); });
-    }, 120);
-    return () => { active = false; clearTimeout(timer); };
-  }, [db, filterPickerVisible, pendingFilters]);
 
   const loadFirstPage = useCallback(async () => {
     const currentRequest = ++requestId.current;
@@ -241,10 +218,6 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
         requestAnimationFrame(() => listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: false, viewOffset: 0 }));
       }
       finishStartupMetric('home', initialLoadStartedAt.current);
-      if (!filterOptionsLoaded.current) {
-        filterOptionsLoaded.current = true;
-        void listEntryFilterOptions(db).then(setFilterOptions).catch(() => { filterOptionsLoaded.current = false; });
-      }
     } catch (error) {
       void recordAppError('timeline.load', error);
       if (currentRequest === requestId.current) setLoadError(true);
@@ -456,77 +429,27 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
 
   if (loading && !entries.length) return showInitialLoader ? <ActivityIndicator style={styles.loader} color={colors.primary} /> : <View />;
   if (loadError && !entries.length) return <View style={styles.loadFailure}><Text style={[styles.loadFailureTitle, { color: readingTheme.text }]}>时间轴暂时没有加载出来</Text><Text style={[styles.loadFailureText, { color: readingTheme.secondary }]}>记录仍保存在本机，可以重新读取。</Text><Pressable onPress={() => void loadFirstPage()} style={styles.retryButton}><Text style={styles.retryButtonText}>重新读取</Text></Pressable></View>;
-  const valueOptions = filterKind === 'time'
-    ? [{ value: 'today', label: '今天' }, { value: '7days', label: '最近 7 天' }, { value: '30days', label: '最近 30 天' }, { value: 'year', label: '今年' }]
-    : filterKind === 'location' ? availableLocations.map((value) => ({ value, label: `⌖ ${value}` }))
-      : filterKind === 'tag' ? availableTags.map((value) => ({ value, label: `#${value}` }))
-        : filterKind === 'mood' ? availableMoods.map((value) => ({ value, label: value }))
-          : filterKind === 'weather' ? availableWeather.map((value) => ({ value, label: value })) : [];
-  const searchableFilter = (filterKind === 'location' || filterKind === 'tag') && valueOptions.length > 6;
-  const visibleValueOptions = searchableFilter && filterSearch.trim()
-    ? valueOptions.filter((option) => option.label.toLocaleLowerCase().includes(filterSearch.trim().toLocaleLowerCase()))
-    : valueOptions;
-
-  function chooseFilterKind(kind: FilterKind) {
-    if (kind === 'none') {
-      setPendingFilterCount(null);
-      setPendingFilters({});
-      setFilterKind('time');
-    } else {
-      setFilterKind(kind);
-      setFilterSearch('');
-    }
-  }
-
-  function setFilterValue(value: string | null) {
-    if (filterKind === 'none') return;
-    setPendingFilterCount(null);
-    setPendingFilters((current) => {
-      const next = { ...current };
-      if (value && current[filterKind] !== value) next[filterKind] = value;
-      else delete next[filterKind];
-      return next;
-    });
-  }
-
   function openFilterPicker() {
-    setPendingFilterCount(null);
-    setPendingFilters(filters);
-    setFilterSearch('');
-    if (filterKind === 'none') setFilterKind('time');
     setFilterPickerVisible(true);
   }
 
-  function closeFilterPicker() { Keyboard.dismiss(); setFilterPickerVisible(false); setFilterSearch(''); }
-
   function applyFilterSelection(nextFilters: EntryListFilters) {
-    const shouldReload = jumpStartCursor !== null || JSON.stringify(filters) !== JSON.stringify(nextFilters);
+    const filtersChanged = !sameEntryFilters(filters, nextFilters);
+    const shouldReload = jumpStartCursor !== null || filtersChanged;
     setJumpStartCursor(null);
     setNewerCursor(null);
     setHasNewer(false);
     setHistoryMode(false);
     pendingJumpRef.current = false;
     if (shouldReload) setLoading(true);
-    setPendingFilterCount(null);
-    setFilters(nextFilters);
-    setPendingFilters(nextFilters);
-    setFilterSearch('');
-    Keyboard.dismiss();
+    if (filtersChanged) setFilters(nextFilters);
     setFilterPickerVisible(false);
-  }
-
-  function applyFilters() { applyFilterSelection(pendingFilters); }
-
-  function resetFilters() {
-    setPendingFilterCount(null);
-    setPendingFilters({});
-    setFilterSearch('');
   }
 
   return <View style={styles.timelineContainer}>
     {loadError && entries.length ? <Pressable onPress={() => void loadFirstPage()} style={styles.refreshFailure}><Text style={styles.refreshFailureText}>暂时无法刷新，正在显示上次内容　重试</Text></Pressable> : null}
     {jumpNotice ? <View pointerEvents="none" style={styles.timelineNotice}><Text style={styles.timelineNoticeText}>{jumpNotice}</Text></View> : null}
-    <View style={styles.timelineTools}><Pressable accessibilityLabel={activeFilterCount ? `筛选，已选择 ${activeFilterCount} 项` : '筛选'} onPress={openFilterPicker} style={[styles.filterMenuButton, { backgroundColor: activeFilterCount ? colors.primary : readingTheme.surface }]}><Text style={[styles.filterMenuText, Boolean(activeFilterCount) && styles.filterMenuTextActive]}>{activeFilterCount ? `筛选 ${activeFilterCount}` : '筛选'}</Text><View style={[styles.filterChevron, Boolean(activeFilterCount) && styles.filterChevronActive, filterPickerVisible && styles.filterChevronOpen]} /></Pressable><View style={styles.timelineToolSpacer} /><Pressable accessibilityLabel="打开回忆" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></Pressable></View>
+    <View style={styles.timelineTools}><CompactPillButton accessibilityLabel={activeFilterCount ? `筛选，已选择 ${activeFilterCount} 项` : '筛选'} onPress={openFilterPicker} style={[styles.filterMenuButton, { backgroundColor: activeFilterCount ? colors.primary : readingTheme.surface }]}><Text style={[styles.filterMenuText, Boolean(activeFilterCount) && styles.filterMenuTextActive]}>{activeFilterCount ? `筛选 ${activeFilterCount}` : '筛选'}</Text><View style={[styles.filterChevron, Boolean(activeFilterCount) && styles.filterChevronActive, filterPickerVisible && styles.filterChevronOpen]} /></CompactPillButton><View style={styles.timelineToolSpacer} /><CompactPillButton accessibilityLabel="打开回忆" onPress={() => router.push('/memories' as Href)} style={[styles.memoryShortcut, { backgroundColor: readingTheme.surface }]}><Text style={styles.memoryShortcutText}>✦ 回忆</Text></CompactPillButton></View>
     <SectionList
       ref={listRef}
       sections={groups}
@@ -552,34 +475,13 @@ function Timeline({ refreshKey, entryRefresh, scrollRequest, onOpen, onLongPress
       ListFooterComponent={loadingMore ? <ActivityIndicator style={styles.pageLoader} color={colors.primary} /> : null}
     />
     {historyMode ? <Pressable accessibilityLabel="回到最新记录" onPress={jumpToToday} style={[styles.backToLatest, { backgroundColor: readingTheme.surface }]}><Text style={styles.backToLatestText}>↑ 回到最新</Text></Pressable> : null}
-    <Modal visible={filterPickerVisible} transparent animationType="slide" onRequestClose={closeFilterPicker}>
-      <Pressable accessible={false} onPress={closeFilterPicker} style={styles.filterOverlay}><Pressable accessible={false} onPress={(event) => event.stopPropagation()} style={[styles.filterPicker, { backgroundColor: readingTheme.background, paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
-        <View style={styles.filterHandle} /><View style={[styles.filterHeader, { borderBottomColor: readingTheme.border }]}><Text style={[styles.filterTitle, { color: readingTheme.text }]}>筛选记录</Text><Pressable accessibilityLabel="关闭筛选" hitSlop={10} onPress={closeFilterPicker}><Text style={[styles.filterClose, { color: readingTheme.secondary }]}>×</Text></Pressable></View>
-        <View style={styles.filterBody}><View style={[styles.filterKinds, { backgroundColor: readingTheme.surface }]}>
-          {([['time', '时间'], ['location', '地点'], ['tag', '标签'], ['mood', '心情'], ['weather', '天气']] as [ActiveFilterKind, string][]).map(([kind, title]) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: kind === filterKind }} key={kind} onPress={() => chooseFilterKind(kind)} style={({ pressed }) => [styles.filterKind, kind === filterKind && { backgroundColor: readingTheme.background }, pressed && styles.filterPressed]}><Text numberOfLines={1} style={[styles.filterKindTitle, { color: kind === filterKind ? colors.primary : readingTheme.text }]}>{title}</Text>{pendingFilters[kind] ? <View style={styles.filterSelectedDot} /> : null}</Pressable>)}
-        </View>
-        <View style={styles.filterValues}>
-          <Text style={[styles.filterValueHeading, { color: readingTheme.secondary }]}>选择{filterLabels[filterKind]}</Text>
-          {searchableFilter ? <View style={[styles.filterSearchBox, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }} size={15} tintColor={readingTheme.secondary} /><TextInput accessibilityLabel={`搜索${filterLabels[filterKind]}`} value={filterSearch} onChangeText={setFilterSearch} placeholder={`搜索${filterLabels[filterKind]}`} placeholderTextColor={readingTheme.secondary} style={[styles.filterSearchInput, { color: readingTheme.text }]} /></View> : null}
-          <ScrollView keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} keyboardShouldPersistTaps="handled" style={styles.filterValueScroll} showsVerticalScrollIndicator={valueOptions.length > 6} contentContainerStyle={styles.filterValueList}>
-            <Pressable accessibilityRole="menuitem" onPress={() => setFilterValue(null)} style={styles.filterValue}><Text style={[styles.filterValueText, { color: readingTheme.text }, !pendingFilters[filterKind as ActiveFilterKind] && styles.filterValueTextActive]}>不限{filterLabels[filterKind]}</Text>{!pendingFilters[filterKind as ActiveFilterKind] ? <Text style={styles.filterValueCheck}>✓</Text> : null}</Pressable>
-            {visibleValueOptions.map((option) => <Pressable accessibilityRole="menuitem" key={option.value} onPress={() => setFilterValue(option.value)} style={styles.filterValue}><Text numberOfLines={1} ellipsizeMode="tail" style={[styles.filterValueText, { color: readingTheme.text }, pendingFilters[filterKind as ActiveFilterKind] === option.value && styles.filterValueTextActive]}>{option.label}</Text>{pendingFilters[filterKind as ActiveFilterKind] === option.value ? <Text style={styles.filterValueCheck}>✓</Text> : null}</Pressable>)}
-            {!visibleValueOptions.length ? <Text style={[styles.filterEmpty, { color: readingTheme.secondary }]}>{filterSearch.trim() ? '没有找到相关内容' : '还没有可筛选的内容'}</Text> : null}
-          </ScrollView>
-        </View></View>
-        <View style={[styles.filterActions, { borderTopColor: readingTheme.border }]}><Pressable accessibilityRole="button" accessibilityHint="清空面板内尚未应用的全部筛选条件" onPress={resetFilters} style={[styles.filterReset, { borderColor: readingTheme.border }]}><Text style={[styles.filterResetText, { color: readingTheme.text }]}>重置</Text></Pressable><Pressable accessibilityRole="button" onPress={applyFilters} style={styles.filterApply}><Text style={styles.filterApplyText}>{pendingFilterCount === null ? '正在统计…' : pendingFilterCount === 'error' ? (pendingActiveFilterCount ? '查看筛选结果' : '查看全部记录') : pendingActiveFilterCount ? `查看 ${pendingFilterCount} 条记录` : '查看全部记录'}</Text></Pressable></View>
-      </Pressable></Pressable>
-    </Modal>
-    <Modal visible={timeIndexVisible} transparent animationType="fade" onRequestClose={() => setTimeIndexVisible(false)}>
-      <Pressable accessibilityLabel="关闭时间索引" onPress={() => setTimeIndexVisible(false)} style={styles.timeIndexOverlay}>
-        <Pressable onPress={(event) => event.stopPropagation()} style={[styles.timeIndexSheet, { backgroundColor: readingTheme.background, height: 324 + insets.bottom, paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
-          <View style={[styles.timeIndexHeader, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => setTimeIndexVisible(false)}><Text style={[styles.timeIndexHeaderAction, { color: readingTheme.secondary }]}>取消</Text></Pressable><Text style={[styles.timeIndexTitle, { color: readingTheme.text }]}>选择日期</Text><Pressable hitSlop={12} onPress={() => void jumpToTimelineDate()}><Text style={styles.timeIndexHeaderAction}>确定</Text></Pressable></View>
-          <View style={styles.timeWheel}><View pointerEvents="none" style={[styles.timeWheelSelection, { borderColor: readingTheme.border }]} /><NumberWheelColumn values={years} selected={pickerYear} suffix="年" onPreview={(value) => { pickerYearRef.current = value; }} onSelect={selectTimelinePickerYear} /><NumberWheelColumn values={pickerMonths} selected={pickerMonth} suffix="月" onPreview={(value) => { pickerMonthRef.current = value; }} onSelect={selectTimelinePickerMonth} /><NumberWheelColumn values={pickerDays} selected={pickerDay} suffix="日" onPreview={(value) => { pickerDayRef.current = value; }} onSelect={selectTimelinePickerDay} /></View>
-          <Text style={[styles.timeIndexSummary, { color: readingTheme.secondary }]}>{pickerDayCount === null ? '正在统计当天记录…' : pickerDayCount > 0 ? `当天有 ${pickerDayCount} 条记录` : '当天没有记录'}</Text>
-          <View style={styles.timeIndexActions}><Pressable disabled={!monthIndex.length} onPress={() => { const earliest = monthIndex.at(-1); if (!earliest) return; const [year, month] = earliest.key.split('-').map(Number); void jumpToTimelineDate(year, month, 1); }}><Text style={[styles.timeIndexAction, !monthIndex.length && styles.timeIndexActionDisabled]}>最早记录</Text></Pressable><Pressable onPress={jumpToToday}><Text style={styles.timeIndexAction}>今天</Text></Pressable></View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    {filterPickerVisible ? <TimelineFilterSheet filters={filters} onClose={() => setFilterPickerVisible(false)} onApply={applyFilterSelection} /> : null}
+    <BottomSheet visible={timeIndexVisible} onClose={() => setTimeIndexVisible(false)} backgroundColor={readingTheme.background} contentHeight={324} scrollable>
+      <View style={[styles.timeIndexHeader, { borderBottomColor: readingTheme.border }]}><Pressable hitSlop={12} onPress={() => setTimeIndexVisible(false)}><Text style={[styles.timeIndexHeaderAction, { color: readingTheme.secondary }]}>取消</Text></Pressable><Text style={[styles.timeIndexTitle, { color: readingTheme.text }]}>选择日期</Text><Pressable hitSlop={12} onPress={() => void jumpToTimelineDate()}><Text style={styles.timeIndexHeaderAction}>确定</Text></Pressable></View>
+      <View style={styles.timeWheel}><View pointerEvents="none" style={[styles.timeWheelSelection, { borderColor: readingTheme.border }]} /><NumberWheelColumn values={years} selected={pickerYear} suffix="年" onPreview={(value) => { pickerYearRef.current = value; }} onSelect={selectTimelinePickerYear} /><NumberWheelColumn values={pickerMonths} selected={pickerMonth} suffix="月" onPreview={(value) => { pickerMonthRef.current = value; }} onSelect={selectTimelinePickerMonth} /><NumberWheelColumn values={pickerDays} selected={pickerDay} suffix="日" onPreview={(value) => { pickerDayRef.current = value; }} onSelect={selectTimelinePickerDay} /></View>
+      <Text style={[styles.timeIndexSummary, { color: readingTheme.secondary }]}>{pickerDayCount === null ? '正在统计当天记录…' : pickerDayCount > 0 ? `当天有 ${pickerDayCount} 条记录` : '当天没有记录'}</Text>
+      <View style={styles.timeIndexActions}><Pressable disabled={!monthIndex.length} onPress={() => { const earliest = monthIndex.at(-1); if (!earliest) return; const [year, month] = earliest.key.split('-').map(Number); void jumpToTimelineDate(year, month, 1); }}><Text style={[styles.timeIndexAction, !monthIndex.length && styles.timeIndexActionDisabled]}>最早记录</Text></Pressable><Pressable onPress={jumpToToday}><Text style={styles.timeIndexAction}>今天</Text></Pressable></View>
+    </BottomSheet>
   </View>;
 }
 
@@ -594,6 +496,14 @@ function entryCursor(entry: Entry): EntryPageCursor {
 
 function daysInMonth(year: number, month: number) {
   return new Date(year, month, 0).getDate();
+}
+
+function sameEntryFilters(left: EntryListFilters, right: EntryListFilters) {
+  return left.time === right.time
+    && left.location === right.location
+    && left.tag === right.tag
+    && left.mood === right.mood
+    && left.weather === right.weather;
 }
 
 function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, onOpen, onLongPress }: { refreshKey: number; entryRefresh: { id: string; revision: number } | null; selected: string; onSelect: (date: string) => void; onOpen: (entry: Entry) => void; onLongPress: (entry: Entry) => void }) {
@@ -748,7 +658,17 @@ function CalendarViewComponent({ refreshKey, entryRefresh, selected, onSelect, o
     maxToRenderPerBatch={4}
     windowSize={5}
     removeClippedSubviews={Platform.OS === 'android'}
-  /><Modal visible={monthPickerVisible} transparent animationType="fade" onRequestClose={() => setMonthPickerVisible(false)} onShow={() => { const index = pickerYear - (now.getFullYear() - 50); requestAnimationFrame(() => monthPickerYearsRef.current?.scrollTo({ x: Math.max(0, index * 66), animated: false })); }}><Pressable accessibilityLabel="关闭年月选择" onPress={() => setMonthPickerVisible(false)} style={styles.monthPickerOverlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.monthPicker, { backgroundColor: readingTheme.background }]}><Text style={[styles.monthPickerTitle, { color: readingTheme.text }]}>跳转到年月</Text><ScrollView ref={monthPickerYearsRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.monthPickerYears}>{Array.from({ length: 51 }, (_, index) => now.getFullYear() - 50 + index).map((itemYear) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: pickerYear === itemYear }} key={itemYear} onPress={() => setPickerYear(itemYear)} style={[styles.monthPickerYear, { backgroundColor: readingTheme.surface }, pickerYear === itemYear && styles.monthPickerYearActive]}><Text style={[styles.monthPickerYearText, { color: readingTheme.secondary }, pickerYear === itemYear && styles.monthPickerYearTextActive]}>{itemYear}</Text></Pressable>)}</ScrollView><View style={styles.monthPickerGrid}>{Array.from({ length: 12 }, (_, index) => <Pressable accessibilityLabel={`${pickerYear} 年 ${index + 1} 月`} key={index} onPress={() => jumpToMonth(pickerYear, index)} style={[styles.monthPickerMonth, { backgroundColor: readingTheme.surface }, pickerYear === year && index === monthIndex && styles.monthPickerMonthActive]}><Text style={[styles.monthPickerMonthText, { color: readingTheme.text }, pickerYear === year && index === monthIndex && styles.monthPickerMonthTextActive]}>{index + 1} 月</Text></Pressable>)}</View><View style={styles.monthPickerActions}><Pressable onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); setMonthPickerVisible(false); }}><Text style={styles.monthPickerToday}>回到今天</Text></Pressable><Pressable onPress={() => setMonthPickerVisible(false)}><Text style={[styles.monthPickerCancel, { color: readingTheme.secondary }]}>取消</Text></Pressable></View></Pressable></Pressable></Modal></>;
+  /><BottomSheet
+    visible={monthPickerVisible}
+    onClose={() => setMonthPickerVisible(false)}
+    backgroundColor={readingTheme.background}
+    contentHeight={330}
+    scrollable
+    onShow={() => {
+      const index = pickerYear - (now.getFullYear() - 50);
+      requestAnimationFrame(() => monthPickerYearsRef.current?.scrollTo({ x: Math.max(0, index * 66), animated: false }));
+    }}
+  ><View style={styles.monthPicker}><Text style={[styles.monthPickerTitle, { color: readingTheme.text }]}>跳转到年月</Text><ScrollView ref={monthPickerYearsRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.monthPickerYears}>{Array.from({ length: 51 }, (_, index) => now.getFullYear() - 50 + index).map((itemYear) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: pickerYear === itemYear }} key={itemYear} onPress={() => setPickerYear(itemYear)} style={[styles.monthPickerYear, { backgroundColor: readingTheme.surface }, pickerYear === itemYear && styles.monthPickerYearActive]}><Text style={[styles.monthPickerYearText, { color: readingTheme.secondary }, pickerYear === itemYear && styles.monthPickerYearTextActive]}>{itemYear}</Text></Pressable>)}</ScrollView><View style={styles.monthPickerGrid}>{Array.from({ length: 12 }, (_, index) => <Pressable accessibilityLabel={`${pickerYear} 年 ${index + 1} 月`} key={index} onPress={() => jumpToMonth(pickerYear, index)} style={[styles.monthPickerMonth, { backgroundColor: readingTheme.surface }, pickerYear === year && index === monthIndex && styles.monthPickerMonthActive]}><Text style={[styles.monthPickerMonthText, { color: readingTheme.text }, pickerYear === year && index === monthIndex && styles.monthPickerMonthTextActive]}>{index + 1} 月</Text></Pressable>)}</View><View style={styles.monthPickerActions}><Pressable onPress={() => { setMonthOffset(0); onSelect(dateKey(now.toISOString())); setMonthPickerVisible(false); }}><Text style={styles.monthPickerToday}>回到今天</Text></Pressable><Pressable onPress={() => setMonthPickerVisible(false)}><Text style={[styles.monthPickerCancel, { color: readingTheme.secondary }]}>取消</Text></Pressable></View></View></BottomSheet></>;
 }
 
 const CalendarView = memo(CalendarViewComponent);
@@ -760,7 +680,6 @@ const styles = StyleSheet.create({
   brand: { color: colors.text, fontFamily: fonts.serif, fontSize: 24, lineHeight: 29, fontWeight: '600', includeFontPadding: false },
   subtitle: { marginTop: 5, color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 11, lineHeight: 14, letterSpacing: 0.4, includeFontPadding: false },
   headerActions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  searchButton: { width: 32, height: 32, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceMuted },
   draftDot: { position: 'absolute', top: 5, right: 5, width: 6, height: 6, borderRadius: 3, backgroundColor: '#C06C58' },
   profileButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary },
   profileImage: { width: 36, height: 36, borderRadius: 18 },
@@ -771,9 +690,8 @@ const styles = StyleSheet.create({
   timelineContainer: { flex: 1 }, timeline: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl },
   backToLatest: { position: 'absolute', zIndex: 15, right: spacing.xl, bottom: spacing.lg, minHeight: 36, justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.pill, elevation: 4, shadowColor: '#000000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }, backToLatestText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   timelineNotice: { position: 'absolute', zIndex: 20, top: 46, alignSelf: 'center', paddingHorizontal: spacing.md, paddingVertical: 7, borderRadius: radii.pill, backgroundColor: '#25302CEB' }, timelineNoticeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '600' },
-  timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xl, gap: spacing.sm }, timelineToolSpacer: { flex: 1 }, memoryShortcut: { height: 28, flexShrink: 0, justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { height: 28, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: spacing.md, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuTextActive: { color: '#FFFFFF' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, filterChevronActive: { borderColor: '#FFFFFF' }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] },
-  filterOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, filterPicker: { height: '72%', maxHeight: 620, overflow: 'hidden', borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, elevation: 12, shadowColor: '#000000', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: -5 } }, filterHandle: { width: 36, height: 4, alignSelf: 'center', marginTop: spacing.sm, borderRadius: 2, backgroundColor: colors.border }, filterHeader: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, filterTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, filterClose: { fontSize: 25, lineHeight: 30, fontWeight: '300' }, filterBody: { minHeight: 0, flex: 1, flexDirection: 'row' }, filterKinds: { width: 106, paddingTop: spacing.xs }, filterKind: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg }, filterKindTitle: { flexShrink: 1, color: colors.text, fontSize: 11, fontWeight: '600' }, filterSelectedDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary }, filterPressed: { opacity: 0.62 }, filterValues: { minWidth: 0, flex: 1, paddingTop: spacing.sm }, filterValueHeading: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, fontSize: 10, fontWeight: '600' }, filterSearchBox: { height: 38, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: spacing.sm, marginVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radii.sm }, filterSearchInput: { flex: 1, height: 38, paddingVertical: 0, fontSize: 12 }, filterValueScroll: { flex: 1 }, filterValueList: { paddingHorizontal: spacing.sm, paddingBottom: spacing.sm }, filterValue: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, paddingHorizontal: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }, filterValueText: { flex: 1, fontSize: 11, lineHeight: 16 }, filterValueTextActive: { color: colors.primary, fontWeight: '700' }, filterValueCheck: { color: colors.primary, fontSize: 13, fontWeight: '700' }, filterEmpty: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xl, fontSize: 10, lineHeight: 16, textAlign: 'center' }, filterActions: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth }, filterReset: { width: 86, height: 42, alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.pill }, filterResetText: { fontSize: 11, fontWeight: '700' }, filterApply: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary }, filterApplyText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
-  timeIndexOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }, timeIndexSheet: { height: 324, paddingBottom: spacing.lg, borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg }, timeIndexHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, timeIndexHeaderAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, timeWheel: { height: 176, overflow: 'hidden', flexDirection: 'row', marginTop: spacing.md, paddingHorizontal: spacing.lg }, timeWheelSelection: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: 66, height: NUMBER_WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexSummary: { marginTop: spacing.md, fontSize: 10, lineHeight: 14, textAlign: 'center' }, timeIndexActions: { minHeight: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xs, paddingHorizontal: spacing.xxl }, timeIndexAction: { color: colors.primary, fontSize: 12, fontWeight: '700' }, timeIndexActionDisabled: { opacity: 0.35 },
+  timelineTools: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.xl, gap: spacing.sm }, timelineToolSpacer: { flex: 1 }, memoryShortcut: { flexShrink: 0, backgroundColor: colors.primarySoft }, memoryShortcutText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuButton: { gap: 6, backgroundColor: colors.surfaceMuted }, filterMenuText: { color: colors.primary, fontSize: 10, lineHeight: 14, fontWeight: '700' }, filterMenuTextActive: { color: '#FFFFFF' }, filterChevron: { width: 6, height: 6, marginTop: -2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, filterChevronActive: { borderColor: '#FFFFFF' }, filterChevronOpen: { marginTop: 3, transform: [{ rotate: '-135deg' }] },
+  timeIndexHeader: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexTitle: { fontFamily: fonts.serif, fontSize: 16, fontWeight: '700' }, timeIndexHeaderAction: { minWidth: 44, color: colors.primary, fontSize: 14, fontWeight: '600' }, timeWheel: { height: 176, overflow: 'hidden', flexDirection: 'row', marginTop: spacing.md, paddingHorizontal: spacing.lg }, timeWheelSelection: { position: 'absolute', left: spacing.lg, right: spacing.lg, top: 66, height: NUMBER_WHEEL_ITEM_HEIGHT, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth }, timeIndexSummary: { marginTop: spacing.md, fontSize: 10, lineHeight: 14, textAlign: 'center' }, timeIndexActions: { minHeight: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xs, paddingHorizontal: spacing.xxl }, timeIndexAction: { color: colors.primary, fontSize: 12, fontWeight: '700' }, timeIndexActionDisabled: { opacity: 0.35 },
   dayHeader: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginHorizontal: -spacing.xs, paddingHorizontal: spacing.xs, paddingTop: 3, paddingBottom: 3, borderRadius: radii.sm }, dayHeaderPressed: { opacity: 0.58 },
   dayTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 23, fontWeight: '600', includeFontPadding: false },
   weekday: { color: colors.textFaint, fontFamily: fonts.sans, fontSize: 9, lineHeight: 14, includeFontPadding: false },
@@ -798,5 +716,5 @@ const styles = StyleSheet.create({
   calendarOrderButton: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radii.pill, backgroundColor: colors.surfaceMuted },
   calendarOrderText: { color: colors.primary, fontSize: 10, lineHeight: 14 },
   calendarOrderChevron: { width: 5, height: 5, marginTop: -2, borderRightWidth: 1.25, borderBottomWidth: 1.25, borderColor: colors.primary, transform: [{ rotate: '45deg' }] },
-  monthPickerOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, monthPicker: { width: '100%', maxWidth: 340, padding: spacing.xl, borderRadius: radii.lg }, monthPickerTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, monthPickerYears: { gap: spacing.xs, paddingVertical: spacing.lg }, monthPickerYear: { minWidth: 58, minHeight: 34, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radii.pill }, monthPickerYearActive: { backgroundColor: colors.primary }, monthPickerYearText: { fontSize: 11 }, monthPickerYearTextActive: { color: '#FFFFFF', fontWeight: '700' }, monthPickerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }, monthPickerMonth: { width: '22%', minHeight: 42, flexGrow: 1, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md }, monthPickerMonthActive: { backgroundColor: colors.primary }, monthPickerMonthText: { fontSize: 12 }, monthPickerMonthTextActive: { color: '#FFFFFF', fontWeight: '700' }, monthPickerActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.xl, paddingHorizontal: spacing.sm }, monthPickerToday: { color: colors.primary, fontSize: 12, fontWeight: '700' }, monthPickerCancel: { fontSize: 12 },
+  monthPicker: { width: '100%', maxWidth: 380, alignSelf: 'center', paddingHorizontal: spacing.xl, paddingTop: spacing.xl }, monthPickerTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, monthPickerYears: { gap: spacing.xs, paddingVertical: spacing.lg }, monthPickerYear: { minWidth: 58, minHeight: 34, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radii.pill }, monthPickerYearActive: { backgroundColor: colors.primary }, monthPickerYearText: { fontSize: 11 }, monthPickerYearTextActive: { color: '#FFFFFF', fontWeight: '700' }, monthPickerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }, monthPickerMonth: { width: '22%', minHeight: 42, flexGrow: 1, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md }, monthPickerMonthActive: { backgroundColor: colors.primary }, monthPickerMonthText: { fontSize: 12 }, monthPickerMonthTextActive: { color: '#FFFFFF', fontWeight: '700' }, monthPickerActions: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.md, paddingHorizontal: spacing.sm }, monthPickerToday: { color: colors.primary, fontSize: 12, fontWeight: '700' }, monthPickerCancel: { fontSize: 12 },
 });

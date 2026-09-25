@@ -7,14 +7,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSQLiteContext } from 'expo-sqlite';
 
 import { AppDialog } from '@/components/app-dialog';
+import { BottomSheet } from '@/components/ui/bottom-sheet';
+import { ButtonLabel, PrimaryButton, SecondaryButton } from '@/components/ui/buttons';
 import { GaodeMapPrivacyGate } from '@/components/gaode-map-privacy-gate';
-import { applyCoordinatesToLocation, getFootprintViewPreferences, listFootprintEntries, listLocationDuplicateSuggestions, listLocationMapPreferences, saveFootprintViewPreferences, type LocationMapPreference } from '@/database/journal-repository';
+import { applyCoordinatesToLocations, getFootprintViewPreferences, listFootprintEntries, listLocationDuplicateSuggestions, listLocationMapPreferences, saveFootprintViewPreferences, type LocationMapPreference } from '@/database/journal-repository';
 import type { FootprintEntry, PendingFootprintEntry, PendingLocationGroup } from '@/domain/journal';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { clusterFootprintPlaces, groupFootprintPlaces, initialFootprintCamera, type FootprintCluster } from '@/utils/footprint';
 import { applyLocationPrivacy, type CoordinatePrivacyChoice } from '@/utils/location-privacy';
 import { wgs84ToGcj02 } from '@/utils/china-coordinates';
+import { useJournalDataRevision } from '@/hooks/use-journal-data-revision';
 
 function shortDate(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric' }).format(new Date(value));
@@ -35,6 +38,8 @@ export default function FootprintMapScreen() {
   const mapRef = useRef<MapViewRef>(null);
   const skipInitialFitRef = useRef(false);
   const lastRegionPressRef = useRef<{ id: string; at: number } | null>(null);
+  const loadedRef = useRef(false);
+  const loadRequestRef = useRef(0);
   const [entries, setEntries] = useState<FootprintEntry[]>([]);
   const [missingCoordinates, setMissingCoordinates] = useState(0);
   const [pendingEntries, setPendingEntries] = useState<PendingFootprintEntry[]>([]);
@@ -64,30 +69,42 @@ export default function FootprintMapScreen() {
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
   const [backfillConfirmationVisible, setBackfillConfirmationVisible] = useState(false);
   const [backfillPrivacyVisible, setBackfillPrivacyVisible] = useState(false);
+  const footprintRevision = useJournalDataRevision(['entries', 'metadata']);
 
   const load = useCallback(async () => {
-    setLoading(true); setLoadError(false);
+    void footprintRevision;
+    const currentRequest = ++loadRequestRef.current;
+    const firstLoad = !loadedRef.current;
+    if (firstLoad) setLoading(true);
+    setLoadError(false);
     try {
       const [result, preferences, viewPreferences] = await Promise.all([
         listFootprintEntries(db), listLocationMapPreferences(db), getFootprintViewPreferences(db),
       ]);
+      if (currentRequest !== loadRequestRef.current) return;
       setEntries(result.entries); setMissingCoordinates(result.missingCoordinates); setPendingEntries(result.pendingEntries); setPendingGroups(result.pendingGroups); setLocationPreferences(preferences);
-      setPlaceSort(viewPreferences.sort);
-      setViewMode(viewPreferences.viewMode);
-      setMapCamera(viewPreferences.camera);
-      skipInitialFitRef.current = Boolean(viewPreferences.camera);
-      setViewPreferencesLoaded(true);
-    } catch { setLoadError(true); }
-    finally { setLoading(false); }
-  }, [db]);
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+      setSelectedRegion(null);
+      if (firstLoad) {
+        setPlaceSort(viewPreferences.sort);
+        setViewMode(viewPreferences.viewMode);
+        setMapCamera(viewPreferences.camera);
+        skipInitialFitRef.current = Boolean(viewPreferences.camera);
+        setViewPreferencesLoaded(true);
+      }
+      loadedRef.current = true;
+    } catch { if (currentRequest === loadRequestRef.current && !loadedRef.current) setLoadError(true); }
+    finally { if (currentRequest === loadRequestRef.current) setLoading(false); }
+  }, [db, footprintRevision]);
+  useFocusEffect(useCallback(() => { if (!backfilling) void load(); }, [backfilling, load]));
   useFocusEffect(useCallback(() => {
+    void footprintRevision;
+    if (backfilling) return undefined;
     let active = true;
     const task = InteractionManager.runAfterInteractions(() => {
       void listLocationDuplicateSuggestions(db).then((items) => { if (active) setDuplicateCount(items.length); }).catch(() => undefined);
     });
     return () => { active = false; task.cancel(); };
-  }, [db]));
+  }, [backfilling, db, footprintRevision]));
 
   useEffect(() => {
     if (!viewPreferencesLoaded) return;
@@ -243,6 +260,7 @@ export default function FootprintMapScreen() {
       }
       let completed = 0;
       const failed: string[] = [];
+      const coordinateUpdates: { locationName: string; latitude: number; longitude: number }[] = [];
       for (const group of pendingGroups) {
         try {
           const result = (await Location.geocodeAsync(group.locationName))[0];
@@ -252,14 +270,19 @@ export default function FootprintMapScreen() {
               result.latitude, result.longitude, preferences.locationPrivacyMode, privacyChoice,
             );
             if (privateCoordinates.latitude == null || privateCoordinates.longitude == null) continue;
-            await applyCoordinatesToLocation(db, group.locationName, privateCoordinates.latitude, privateCoordinates.longitude);
+            coordinateUpdates.push({ locationName: group.locationName, latitude: privateCoordinates.latitude, longitude: privateCoordinates.longitude });
             completed += group.count;
           }
         } catch {
           failed.push(group.locationName);
         }
       }
-      await load();
+      try {
+        await applyCoordinatesToLocations(db, coordinateUpdates);
+      } catch {
+        setNotice({ title: '补点失败', message: '地点坐标没有写入数据库，请稍后重试。' });
+        return;
+      }
       setNotice({
         title: '补点完成',
         message: failed.length
@@ -377,8 +400,8 @@ export default function FootprintMapScreen() {
           <Text style={styles.mapLoadingTitle}>地图暂时没有加载出来</Text>
           <Text style={styles.mapLoadingText}>可以重新加载，或先使用地点列表查看已经保存的足迹。技术信息可在“关于拾时”中导出诊断。</Text>
           <View style={styles.mapFailureActions}>
-            <Pressable onPress={retryMap} style={styles.retryButton}><Text style={styles.retryText}>重新加载</Text></Pressable>
-            <Pressable onPress={() => setViewMode('list')} style={[styles.listFallbackButton, { backgroundColor: readingTheme.background }]}><Text style={styles.listFallbackText}>切换地点列表</Text></Pressable>
+            <PrimaryButton onPress={retryMap} style={styles.retryButton}><ButtonLabel>重新加载</ButtonLabel></PrimaryButton>
+            <SecondaryButton onPress={() => setViewMode('list')} style={[styles.listFallbackButton, { backgroundColor: readingTheme.background }]}><ButtonLabel tone="secondary">切换地点列表</ButtonLabel></SecondaryButton>
           </View>
         </> : <>
           <ActivityIndicator color={colors.primary} />
@@ -428,8 +451,8 @@ export default function FootprintMapScreen() {
         {missingCoordinates > pendingEntries.length ? <Text style={[styles.pendingMore, { color: readingTheme.secondary }]}>先显示最近 {pendingEntries.length} 条</Text> : null}
       </View> : null}
     </View> : null}
-    <Modal visible={rangePickerVisible} transparent animationType="fade" onRequestClose={() => setRangePickerVisible(false)}>
-      <Pressable onPress={() => setRangePickerVisible(false)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.rangePicker, { backgroundColor: readingTheme.background }]}>
+    <BottomSheet visible={rangePickerVisible} onClose={() => setRangePickerVisible(false)} backgroundColor={readingTheme.background} contentHeight={300}>
+      <ScrollView bounces={false} style={styles.rangePickerScroll} contentContainerStyle={styles.rangePicker} showsVerticalScrollIndicator={false}>
         <Text style={[styles.rangeTitle, { color: readingTheme.text }]}>查看哪段时光？</Text>
         <View style={styles.rangeChoices}>
           <Pressable onPress={() => chooseYear(null)} style={[styles.rangeChoice, !selectedYear && !selectedMonth && !customRange && styles.rangeChoiceActive, { borderBottomColor: readingTheme.border }]}><Text style={[styles.rangeChoiceText, { color: readingTheme.text }]}>全部时间</Text><Text style={styles.rangeChoiceMark}>{!selectedYear && !selectedMonth && !customRange ? '✓' : ''}</Text></Pressable>
@@ -437,8 +460,8 @@ export default function FootprintMapScreen() {
           <Pressable onPress={() => chooseMonth(localDateKey(new Date().toISOString()).slice(0, 7))} style={[styles.rangeChoice, selectedMonth === localDateKey(new Date().toISOString()).slice(0, 7) && styles.rangeChoiceActive, { borderBottomColor: readingTheme.border }]}><Text style={[styles.rangeChoiceText, { color: readingTheme.text }]}>本月</Text><Text style={styles.rangeChoiceMark}>{selectedMonth === localDateKey(new Date().toISOString()).slice(0, 7) ? '✓' : ''}</Text></Pressable>
           <Pressable onPress={() => { setRangePickerVisible(false); setRangeStart(customRange?.start ?? ''); setRangeEnd(customRange?.end ?? ''); setRangeEditorVisible(true); }} style={[styles.rangeChoice, styles.rangeChoiceLast]}><Text style={[styles.rangeChoiceText, { color: readingTheme.text }]}>自定义日期</Text><View style={styles.rangeChoiceChevron} /></Pressable>
         </View>
-      </Pressable></Pressable>
-    </Modal>
+      </ScrollView>
+    </BottomSheet>
     <Modal visible={rangeEditorVisible} transparent animationType="fade" onRequestClose={() => setRangeEditorVisible(false)}>
       <Pressable onPress={() => setRangeEditorVisible(false)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.rangeEditor, { backgroundColor: readingTheme.background }]}>
         <Text style={[styles.rangeTitle, { color: readingTheme.text }]}>自定义足迹时间</Text>
@@ -478,9 +501,8 @@ const styles = StyleSheet.create({
   mapLoadingTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 17, textAlign: 'center' },
   mapLoadingText: { marginTop: spacing.sm, color: colors.textSecondary, fontSize: 11, lineHeight: 18, textAlign: 'center' },
   mapFailureActions: { width: '100%', maxWidth: 250, gap: spacing.sm, marginTop: spacing.lg },
-  retryButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary },
-  retryText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
-  listFallbackButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill }, listFallbackText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
+  retryButton: { minHeight: 44 },
+  listFallbackButton: { minHeight: 44 },
   memoryMarker: { alignItems: 'center', justifyContent: 'center', borderRadius: 24, backgroundColor: '#FFFFFFB8', elevation: 2 },
   memoryMarkerActive: { backgroundColor: '#FFFFFFF2', elevation: 4 },
   memoryLeaf: { overflow: 'hidden', borderTopLeftRadius: 3, borderTopRightRadius: 24, borderBottomRightRadius: 3, borderBottomLeftRadius: 24, backgroundColor: '#7FA593', transform: [{ rotate: '-28deg' }] },
@@ -506,7 +528,7 @@ const styles = StyleSheet.create({
   pendingRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth },
   pendingCopy: { flex: 1, paddingRight: spacing.md }, pendingLocation: { fontSize: 12, fontWeight: '600' }, pendingContent: { marginTop: 2, fontSize: 11 },
   pendingAction: { color: colors.primary, fontSize: 11, fontWeight: '700' }, pendingMore: { paddingVertical: spacing.md, fontSize: 11, textAlign: 'center' },
-  overlay: { flex: 1, justifyContent: 'center', padding: spacing.xl, backgroundColor: '#00000055' }, rangePicker: { paddingHorizontal: spacing.xl, paddingTop: spacing.xl, paddingBottom: spacing.sm, borderRadius: radii.lg }, rangeEditor: { padding: spacing.xl, borderRadius: radii.lg },
+  overlay: { flex: 1, justifyContent: 'center', padding: spacing.xl, backgroundColor: '#00000055' }, rangePickerScroll: { flex: 1 }, rangePicker: { paddingHorizontal: spacing.xl, paddingTop: spacing.xxl, paddingBottom: spacing.sm }, rangeEditor: { padding: spacing.xl, borderRadius: radii.lg },
   rangeTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, rangeHint: { marginTop: spacing.xs, fontSize: 11 },
   rangeChoices: { marginTop: spacing.md }, rangeChoice: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth }, rangeChoiceLast: { borderBottomWidth: 0 }, rangeChoiceActive: { opacity: 1 }, rangeChoiceText: { fontSize: 13 }, rangeChoiceMark: { color: colors.primary, fontSize: 15, fontWeight: '700' },
   rangeChoiceChevron: { width: 7, height: 7, marginRight: 3, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '-45deg' }] },

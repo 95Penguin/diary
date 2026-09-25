@@ -1,5 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
+import { publishJournalDataChange } from '../utils/journal-data-events.ts';
+
 type DraftImage = { uri?: unknown };
 
 export async function cleanupOrphanMediaMetadata(db: SQLiteDatabase) {
@@ -44,11 +46,13 @@ export async function removeMissingLibraryMediaReference(db: SQLiteDatabase, sou
   if (!row) return [];
   await db.runAsync(`DELETE FROM ${table} WHERE id = ?`, id);
   await cleanupOrphanMediaMetadata(db).catch(() => undefined);
+  publishJournalDataChange('entries', 'media');
   return [row.uri, row.paired_video_uri, row.thumbnail_uri].filter((uri): uri is string => Boolean(uri));
 }
 
 export async function updateLibraryMediaThumbnail(db: SQLiteDatabase, source: 'entry' | 'followUp', id: string, thumbnailUri: string | null) {
   const table = source === 'entry' ? 'entry_images' : 'follow_up_images';
   const result = await db.runAsync(`UPDATE ${table} SET thumbnail_uri = ? WHERE id = ?`, thumbnailUri, id);
+  if (result.changes) publishJournalDataChange('media');
   return result.changes > 0;
 }
