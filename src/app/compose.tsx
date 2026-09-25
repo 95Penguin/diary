@@ -18,7 +18,6 @@ import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 import { normalizeTag } from '@/utils/tags';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { AppDialog } from '@/components/app-dialog';
-import { BottomSheet } from '@/components/ui/bottom-sheet';
 import { showAppDialog } from '@/components/app-dialog-host';
 import { DraggableMediaItem } from '@/components/draggable-media-item';
 import { MediaThumbnail, MediaViewer } from '@/components/media-view';
@@ -669,7 +668,9 @@ export default function ComposeScreen() {
     <AppDialog visible={exitConfirmationVisible} title="退出编辑？" message="尚未保存的修改会丢失。" onClose={() => setExitConfirmationVisible(false)} actions={[{ label: '继续编辑', onPress: () => setExitConfirmationVisible(false) }, { label: '退出', tone: 'danger', onPress: () => { setExitConfirmationVisible(false); images.filter((image) => image.draftOwned).forEach((image) => { deleteJournalImage(image.uri); if (image.pairedVideoUri) deleteJournalImage(image.pairedVideoUri); }); leaveComposer(); } }]} />
     <AppDialog visible={Boolean(locationDialog)} title={locationDialog?.title ?? ''} message={locationDialog?.message} onClose={() => setLocationDialog(null)} actions={locationDialog?.settings ? [{ label: '稍后处理', onPress: () => setLocationDialog(null) }, { label: '打开设置', tone: 'primary', onPress: () => { setLocationDialog(null); void Linking.openSettings(); } }] : [{ label: '知道了', tone: 'primary', onPress: () => setLocationDialog(null) }]} />
     {locationPickerVisible ? <LocationPickerModal visible name={locationName} latitude={latitude} longitude={longitude} accuracy={locationAccuracy} onClose={() => setLocationPickerVisible(false)} onApply={(value) => { setLocationName(value.name); setLocationAddress(value.address); setLatitude(value.latitude); setLongitude(value.longitude); setLocationAccuracy(null); setLocationCoordinateChanged(true); setLocationPickerVisible(false); }} /> : null}
-    <BottomSheet visible={templatePickerVisible} onClose={() => setTemplatePickerVisible(false)} backgroundColor={readingTheme.background} contentHeight={520} sheetStyle={styles.templateCard}>
+    <Modal visible={templatePickerVisible} transparent animationType="fade" onRequestClose={() => setTemplatePickerVisible(false)}>
+      <Pressable accessibilityRole="button" accessibilityLabel="关闭写作模板选择" onPress={() => setTemplatePickerVisible(false)} style={styles.templateOverlay}>
+        <Pressable accessibilityRole="none" onPress={(event) => event.stopPropagation()} style={[styles.templateModal, { backgroundColor: readingTheme.background }]}>
           <Text style={[styles.templateTitle, { color: readingTheme.text }]}>选择一个写作模板</Text>
           <Text style={[styles.templateHint, { color: readingTheme.secondary }]}>{content.trim() ? '模板会追加在已有正文后，不会覆盖现在的内容。' : '选好后仍可以自由修改所有文字。'}</Text>
           <ScrollView style={styles.templateList} showsVerticalScrollIndicator={false}>
@@ -680,7 +681,9 @@ export default function ComposeScreen() {
             </Pressable>)}
           </ScrollView>
           <Pressable onPress={() => setTemplatePickerVisible(false)} style={styles.templateCancel}><Text style={[styles.templateCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable>
-    </BottomSheet>
+        </Pressable>
+      </Pressable>
+    </Modal>
   </SafeAreaView>;
 }
 
@@ -718,10 +721,11 @@ const styles = StyleSheet.create({
   addImage: { width: 64, height: 64, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.border, borderRadius: radii.sm }, addImageIcon: { color: colors.primary, fontSize: 24, lineHeight: 28 },
   editor: { minHeight: 150, paddingTop: spacing.lg, color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 25, includeFontPadding: false }, editorMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing.md }, draft: { color: colors.textFaint, fontSize: 11 }, counter: { color: colors.textFaint, fontSize: 11 },
   quickHidden: { display: 'none' }, expandQuick: { alignSelf: 'flex-start', minHeight: 30, justifyContent: 'center', marginTop: spacing.sm, paddingHorizontal: spacing.sm, borderRadius: radii.pill }, expandQuickText: { color: colors.primary, fontSize: 10, fontWeight: '700' },
-  templateCard: { paddingHorizontal: spacing.xl, paddingTop: spacing.xxl },
+  templateOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, backgroundColor: colors.overlay },
+  templateModal: { width: '100%', maxWidth: 360, maxHeight: 560, paddingHorizontal: spacing.xl, paddingTop: spacing.xxl, paddingBottom: spacing.sm, borderRadius: radii.lg },
   templateTitle: { fontFamily: fonts.serif, fontSize: 19, fontWeight: '600', textAlign: 'center' },
   templateHint: { marginTop: spacing.sm, fontSize: 12, lineHeight: 18, textAlign: 'center' },
-  templateList: { flex: 1, marginTop: spacing.lg },
+  templateList: { maxHeight: 360, marginTop: spacing.lg },
   templateItem: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.sm, paddingHorizontal: spacing.md, borderRadius: radii.md },
   templateLeaf: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: colors.primarySoft },
   templateLeafText: { color: colors.primary, fontSize: 19 },
