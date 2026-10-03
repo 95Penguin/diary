@@ -4,6 +4,11 @@ import test from 'node:test';
 import {
   addMetadataItem,
   applyCoordinatesToLocation,
+  batchAddEntryTag,
+  batchDeleteEntries,
+  batchRemoveEntryTag,
+  batchSetEntryFavorite,
+  batchSetEntryLocation,
   cleanupExpiredTrash,
   createFollowUpWithImages,
   createEntry,
@@ -149,6 +154,41 @@ test('fresh baseline reaches the current schema and is idempotent', async (t) =>
   assert.ok(indexes.some((index) => index.name === 'idx_time_capsules_open_at'));
   assert.ok(indexes.some((index) => index.name === 'idx_time_capsule_replies_capsule_id'));
   assert.ok(indexes.some((index) => index.name === 'idx_time_capsule_images_capsule_id'));
+  assert.ok(indexes.some((index) => index.name === 'idx_time_pixel_categories_kind'));
+  assert.ok(indexes.some((index) => index.name === 'idx_time_pixel_ranges_kind_dates'));
+  assert.ok(indexes.some((index) => index.name === 'idx_time_pixel_ranges_category'));
+});
+
+test('batch management updates selected records and rolls back an incomplete deletion', async (t) => {
+  const db = await setup();
+  t.after(() => db.close());
+  const first = await createEntry(db, { content: '第一条', occurredAt: '2026-08-01T12:00:00.000Z', locationName: '旧地点' });
+  const second = await createEntry(db, { content: '第二条', occurredAt: '2026-08-02T12:00:00.000Z' });
+
+  await batchSetEntryFavorite(db, [first, second], true);
+  await batchAddEntryTag(db, [first, second], '共同标签');
+  await batchSetEntryLocation(db, [first, second], '新地点', 'nameOnly');
+  assert.deepEqual((await getEntry(db, first)).tags, ['共同标签']);
+  assert.equal((await getEntry(db, first)).favoritedAt !== null, true);
+  assert.equal((await getEntry(db, second)).locationName, '新地点');
+
+  await batchRemoveEntryTag(db, [first], '共同标签');
+  assert.deepEqual((await getEntry(db, first)).tags, []);
+  assert.deepEqual((await getEntry(db, second)).tags, ['共同标签']);
+
+  const run = db.runAsync;
+  db.runAsync = async (sql, ...args) => {
+    if (sql.startsWith('UPDATE follow_ups SET deleted_at')) throw new Error('simulated-delete-failure');
+    return run(sql, ...args);
+  };
+  await assert.rejects(batchDeleteEntries(db, [first, second]), /simulated-delete-failure/);
+  db.runAsync = run;
+  assert.ok(await getEntry(db, first));
+  assert.ok(await getEntry(db, second));
+
+  await batchDeleteEntries(db, [first, second]);
+  assert.equal(await getEntry(db, first), null);
+  assert.equal(await getEntry(db, second), null);
 });
 
 test('memory entry and tag indexes stay lightweight and can load independently', async (t) => {
@@ -320,7 +360,7 @@ test('current backup preserves location details and portable app preferences', a
   await saveJournalTemplate(sourceDb, null, { title: '周复盘', description: '每周使用', content: '本周：' });
 
   const backup = await createJournalExport(sourceDb);
-  assert.equal(backup.version, 14);
+  assert.equal(backup.version, 15);
   assert.equal(backup.appPreferences.nickname, '小拾');
   assert.equal(backup.appPreferences.avatarLocalUri, 'file:///avatar.png');
   assert.equal(backup.appPreferences.readingTheme, 'green');

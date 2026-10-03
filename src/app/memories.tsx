@@ -282,6 +282,18 @@ export default function MemoriesScreen() {
         </View>
         <SymbolView name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }} size={18} tintColor={colors.primary} />
       </Pressable>
+      <Pressable
+        accessibilityLabel="打开时光像素"
+        onPress={() => router.push('/time-pixels' as Href)}
+        style={({ pressed }) => [styles.summaryLink, { backgroundColor: readingTheme.surface }, pressed && styles.summaryLinkPressed]}
+      >
+        <View style={styles.summaryIcon}><SymbolView name={{ ios: 'square.grid.3x3', android: 'grid_view', web: 'grid_view' }} size={18} tintColor={colors.primary} /></View>
+        <View style={styles.summaryCopy}>
+          <Text style={styles.summaryLinkTitle}>时光像素</Text>
+          <Text style={[styles.summaryLinkDescription, { color: readingTheme.secondary }]}>按地点或人生阶段看看日子去了哪里</Text>
+        </View>
+        <SymbolView name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }} size={18} tintColor={colors.primary} />
+      </Pressable>
       <View style={styles.footprintYearHeader}>
         <Pressable accessibilityLabel={previousYear ? `查看 ${previousYear} 年足迹` : '已经是最早年份'} disabled={!previousYear} onPress={() => previousYear && setSelectedYear(previousYear)} style={[styles.yearButton, { backgroundColor: readingTheme.surface }, !previousYear && styles.yearButtonDisabled]}><SymbolView name={{ ios: 'chevron.left', android: 'chevron_left', web: 'chevron_left' }} size={19} tintColor={colors.primary} /></Pressable>
         <Pressable accessibilityLabel={`选择足迹年份，当前 ${footprintYear} 年`} onPress={() => setYearPickerVisible(true)} style={styles.footprintYearTitle}><View style={styles.yearTitleRow}><Text style={[styles.sectionTitle, styles.footprintSectionTitle, { color: readingTheme.text }]}>{footprintYear} 年足迹</Text><SymbolView name={{ ios: 'chevron.down', android: 'keyboard_arrow_down', web: 'keyboard_arrow_down' }} size={15} tintColor={colors.primary} /></View><Text style={[styles.yearHint, { color: readingTheme.secondary }]}>{footprintYear === now.getFullYear() ? '今年 · 点击选择年份' : `${footprintYearData.counts.get(footprintYear) ?? 0} 条记录 · 点击选择年份`}</Text></Pressable>
@@ -320,7 +332,7 @@ function MemoryInsightsPlaceholder() {
   return <View accessibilityLabel="正在整理近况" style={styles.placeholderSection}>
     <Text style={[styles.sectionTitle, { color: readingTheme.text }]}>近况回顾</Text>
     <View style={[styles.placeholderReview, { backgroundColor: readingTheme.surface }]}><View style={[styles.placeholderMetric, { backgroundColor: readingTheme.border }]} /><View style={[styles.placeholderDivider, { backgroundColor: readingTheme.border }]} /><View style={[styles.placeholderMetric, { backgroundColor: readingTheme.border }]} /></View>
-    {[0, 1, 2].map((item) => <View key={item} style={[styles.placeholderLink, { backgroundColor: readingTheme.surface }]}><View style={[styles.placeholderIcon, { backgroundColor: readingTheme.border }]} /><View style={styles.placeholderCopy}><View style={[styles.placeholderLine, { backgroundColor: readingTheme.border }]} /><View style={[styles.placeholderLineShort, { backgroundColor: readingTheme.border }]} /></View></View>)}
+    {[0, 1, 2, 3].map((item) => <View key={item} style={[styles.placeholderLink, { backgroundColor: readingTheme.surface }]}><View style={[styles.placeholderIcon, { backgroundColor: readingTheme.border }]} /><View style={styles.placeholderCopy}><View style={[styles.placeholderLine, { backgroundColor: readingTheme.border }]} /><View style={[styles.placeholderLineShort, { backgroundColor: readingTheme.border }]} /></View></View>)}
     <View style={styles.placeholderYear}><View style={[styles.placeholderYearButton, { backgroundColor: readingTheme.surface }]} /><View style={[styles.placeholderYearTitle, { backgroundColor: readingTheme.border }]} /><View style={[styles.placeholderYearButton, { backgroundColor: readingTheme.surface }]} /></View>
     <View style={[styles.placeholderHeatmap, { backgroundColor: readingTheme.surface }]} />
   </View>;

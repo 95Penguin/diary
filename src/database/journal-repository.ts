@@ -1,12 +1,14 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-import { parseEntryDateRange, parseLocalDateKey } from '../utils/entry-time-range.ts';
+import { localDateKey, parseEntryDateRange, parseLocalDateKey } from '../utils/entry-time-range.ts';
 import type { DeletedEntry, Draft, DraftImage, Entry, EntryImage, EntryInput, EntryVersion, FollowUp, FollowUpImage, FootprintEntry, ImportResult, JournalBackup, JournalMediaType, JournalStats, LibraryMedia, MemoryEntryIndex, PendingFootprintEntry, PendingLocationGroup, SearchResult, SearchResultSummary } from '@/domain/journal';
 import { getJournalTemplateSettings, saveJournalTemplateSettings } from './template-repository.ts';
 import { mergeJournalTemplateSettings } from '../utils/journal-templates.ts';
 import { findLocationDuplicates, type LocationDuplicateSuggestion } from '../utils/location-duplicates.ts';
 import { cleanupOrphanMediaMetadata, deleteMediaMetadataForUris } from './media-maintenance.ts';
 import { publishJournalDataChange } from '../utils/journal-data-events.ts';
+import { mergeRestoredTimePixelRanges, type TimePixelRange } from './time-pixel-repository.ts';
+import { normalizeTimePixelSettings } from '../utils/time-pixels.ts';
 
 type EntryRow = { id: string; content: string; occurred_at: string; created_at: string; updated_at: string; mood: string | null; weather: string | null; favorited_at: string | null; location_name: string | null; latitude: number | null; longitude: number | null };
 type FollowUpRow = { id: string; entry_id: string; content: string; created_at: string; updated_at: string };
@@ -1562,6 +1564,9 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
   const capsules = await db.getAllAsync<{ id: string; title: string; content: string; open_at: string; opened_at: string | null; created_at: string; updated_at: string; deleted_at: string | null; notification_enabled: number }>('SELECT id, title, content, open_at, opened_at, created_at, updated_at, deleted_at, notification_enabled FROM time_capsules ORDER BY created_at ASC');
   const capsuleReplies = await db.getAllAsync<{ id: string; capsule_id: string; content: string; created_at: string; updated_at: string }>('SELECT id, capsule_id, content, created_at, updated_at FROM time_capsule_replies ORDER BY created_at ASC');
   const capsuleImages = await db.getAllAsync<{ id: string; capsule_id: string; uri: string; width: number; height: number; sort_order: number; created_at: string; media_type: JournalMediaType; paired_video_uri: string | null; duration: number | null; thumbnail_uri: string | null }>('SELECT id, capsule_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri FROM time_capsule_images ORDER BY capsule_id, sort_order ASC');
+  const timePixelSettings = await db.getFirstAsync<{ origin_date: string; range_mode: 'all' | 'year'; selected_year: number | null; unit: 'year' | 'month' | 'day'; color_mode: 'location' | 'stage'; updated_at: string }>('SELECT origin_date, range_mode, selected_year, unit, color_mode, updated_at FROM time_pixel_settings WHERE id = 1');
+  const timePixelCategories = await db.getAllAsync<{ id: string; kind: 'location' | 'stage'; name: string; color_token: string; created_at: string; updated_at: string }>('SELECT id, kind, name, color_token, created_at, updated_at FROM time_pixel_categories ORDER BY kind, created_at ASC');
+  const timePixelRanges = await db.getAllAsync<{ id: string; kind: 'location' | 'stage'; category_id: string; start_date: string; end_date: string; note: string | null; created_at: string; updated_at: string }>('SELECT id, kind, category_id, start_date, end_date, note, created_at, updated_at FROM time_pixel_ranges ORDER BY start_date, created_at ASC');
   const mediaMetadata = await db.getAllAsync<{ id: string; source: 'entry' | 'followUp' | 'timeCapsule'; captured_at: string | null; mime_type: string | null; original_filename: string | null }>(`
     SELECT i.id, 'entry' AS source, m.captured_at, m.mime_type, m.original_filename FROM entry_images i INNER JOIN media_metadata m ON m.uri = i.uri
     UNION ALL SELECT i.id, 'followUp' AS source, m.captured_at, m.mime_type, m.original_filename FROM follow_up_images i INNER JOIN media_metadata m ON m.uri = i.uri
@@ -1595,7 +1600,7 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
   }
   return {
     format: 'shishi-journal',
-    version: 14,
+    version: 15,
     exportedAt: new Date().toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     entries: entries.map((entry) => ({
@@ -1626,6 +1631,9 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
     timeCapsules: capsules.map((item) => ({ id: item.id, title: item.title, content: item.content, openAt: item.open_at, openedAt: item.opened_at, createdAt: item.created_at, updatedAt: item.updated_at, deletedAt: item.deleted_at, notificationEnabled: item.notification_enabled === 1 })),
     timeCapsuleReplies: capsuleReplies.map((item) => ({ id: item.id, capsuleId: item.capsule_id, content: item.content, createdAt: item.created_at, updatedAt: item.updated_at })),
     timeCapsuleImages: capsuleImages.map((item) => ({ id: item.id, capsuleId: item.capsule_id, localUri: item.uri, width: item.width, height: item.height, sortOrder: item.sort_order, createdAt: item.created_at, mediaType: item.media_type, pairedVideoLocalUri: item.paired_video_uri, duration: item.duration, thumbnailLocalUri: null })),
+    timePixelSettings: timePixelSettings ? normalizeTimePixelSettings({ originDate: timePixelSettings.origin_date, rangeMode: timePixelSettings.range_mode, selectedYear: timePixelSettings.selected_year, unit: timePixelSettings.unit, colorMode: timePixelSettings.color_mode, updatedAt: timePixelSettings.updated_at }, localDateKey(new Date())) : undefined,
+    timePixelCategories: timePixelCategories.map((item) => ({ id: item.id, kind: item.kind, name: item.name, colorToken: item.color_token, createdAt: item.created_at, updatedAt: item.updated_at })),
+    timePixelRanges: timePixelRanges.map((item) => ({ id: item.id, kind: item.kind, categoryId: item.category_id, startDate: item.start_date, endDate: item.end_date, note: item.note, createdAt: item.created_at, updatedAt: item.updated_at })),
     metadataCatalog,
     journalTemplates,
     appPreferences,
@@ -1765,6 +1773,59 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
       if (!parent || !image.localUri) continue;
       await txn.runAsync(`INSERT INTO time_capsule_images (id, capsule_id, uri, width, height, sort_order, created_at, media_type, paired_video_uri, duration, thumbnail_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET uri = excluded.uri, width = excluded.width, height = excluded.height, sort_order = excluded.sort_order, media_type = excluded.media_type, paired_video_uri = excluded.paired_video_uri, duration = excluded.duration, thumbnail_uri = excluded.thumbnail_uri`, image.id, image.capsuleId, image.localUri, image.width, image.height, image.sortOrder, image.createdAt, image.mediaType ?? 'image', image.pairedVideoLocalUri ?? null, image.duration ?? null, image.thumbnailLocalUri ?? null);
+    }
+    const restoredTimePixelCategoryIds = new Map<string, string>();
+    for (const category of backup.timePixelCategories ?? []) {
+      const existing = await txn.getFirstAsync<{ updated_at: string; kind: string; name: string }>('SELECT updated_at, kind, name FROM time_pixel_categories WHERE id = ?', category.id);
+      if (existing) {
+        if (existing.kind !== category.kind) throw new Error('invalid-time-pixel-category-kind');
+        restoredTimePixelCategoryIds.set(category.id, category.id);
+        if (category.updatedAt > existing.updated_at) {
+          const nameConflict = await txn.getFirstAsync<{ id: string }>(
+            'SELECT id FROM time_pixel_categories WHERE kind = ? AND lower(name) = lower(?) AND id != ?', category.kind, category.name, category.id,
+          );
+          // A conflicting rename keeps the local name so the next export remains valid.
+          await txn.runAsync(
+            'UPDATE time_pixel_categories SET name = ?, color_token = ?, updated_at = ? WHERE id = ?',
+            nameConflict ? existing.name : category.name, category.colorToken, category.updatedAt, category.id,
+          );
+        }
+        continue;
+      }
+      const sameName = await txn.getFirstAsync<{ id: string; updated_at: string }>(
+        'SELECT id, updated_at FROM time_pixel_categories WHERE kind = ? AND lower(name) = lower(?)', category.kind, category.name,
+      );
+      if (sameName) {
+        restoredTimePixelCategoryIds.set(category.id, sameName.id);
+        if (category.updatedAt > sameName.updated_at) await txn.runAsync(
+          'UPDATE time_pixel_categories SET name = ?, color_token = ?, updated_at = ? WHERE id = ?',
+          category.name, category.colorToken, category.updatedAt, sameName.id,
+        );
+      } else {
+        restoredTimePixelCategoryIds.set(category.id, category.id);
+        await txn.runAsync(
+          'INSERT INTO time_pixel_categories (id, kind, name, color_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          category.id, category.kind, category.name, category.colorToken, category.createdAt, category.updatedAt,
+        );
+      }
+    }
+    const restoredTimePixelRanges: TimePixelRange[] = [];
+    for (const range of backup.timePixelRanges ?? []) {
+      const categoryId = restoredTimePixelCategoryIds.get(range.categoryId) ?? range.categoryId;
+      const parent = await txn.getFirstAsync<{ kind: 'location' | 'stage' }>('SELECT kind FROM time_pixel_categories WHERE id = ?', categoryId);
+      if (!parent || parent.kind !== range.kind) continue;
+      restoredTimePixelRanges.push({ ...range, categoryId });
+    }
+    if (backup.timePixelRanges !== undefined) await mergeRestoredTimePixelRanges(txn, restoredTimePixelRanges);
+    if (backup.timePixelSettings) {
+      const restoredSettings = normalizeTimePixelSettings(backup.timePixelSettings, localDateKey(new Date()));
+      const existing = await txn.getFirstAsync<{ updated_at: string }>('SELECT updated_at FROM time_pixel_settings WHERE id = 1');
+      if (!existing || backup.timePixelSettings.updatedAt > existing.updated_at) await txn.runAsync(
+        `INSERT INTO time_pixel_settings (id, origin_date, range_mode, selected_year, unit, color_mode, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET origin_date = excluded.origin_date, range_mode = excluded.range_mode, selected_year = excluded.selected_year, unit = excluded.unit, color_mode = excluded.color_mode, updated_at = excluded.updated_at`,
+        restoredSettings.originDate, restoredSettings.rangeMode, restoredSettings.selectedYear, restoredSettings.unit, restoredSettings.colorMode, restoredSettings.updatedAt,
+      );
     }
     for (const metadata of backup.mediaMetadata ?? []) {
       const table = metadata.source === 'entry' ? 'entry_images' : metadata.source === 'followUp' ? 'follow_up_images' : 'time_capsule_images';

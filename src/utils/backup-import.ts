@@ -1,5 +1,6 @@
 import type { JournalBackup } from '@/domain/journal';
 import { parseJournalTemplateSettings } from './journal-templates.ts';
+import { isTimePixelDate } from './time-pixels.ts';
 
 function isString(value: unknown): value is string { return typeof value === 'string'; }
 function isNullableString(value: unknown): value is string | null { return value === null || isString(value); }
@@ -11,6 +12,11 @@ function isOptionalNullableNumber(value: unknown): value is number | null | unde
 }
 function isMediaType(value: unknown) {
   return value === undefined || value === 'image' || value === 'video' || value === 'livePhoto';
+}
+function isDateKey(value: unknown): value is string {
+  if (!isString(value) || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 function isMetadataCatalog(value: unknown) {
   if (value === undefined) return true;
@@ -39,7 +45,7 @@ export function parseJournalBackup(contents: string): JournalBackup {
   try { value = JSON.parse(contents); } catch { throw new Error('invalid-json'); }
   if (!value || typeof value !== 'object') throw new Error('invalid-backup');
   const backup = value as Partial<JournalBackup>;
-  if (backup.format !== 'shishi-journal' || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].some((version) => backup.version === version)) throw new Error('unsupported-backup');
+  if (backup.format !== 'shishi-journal' || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].some((version) => backup.version === version)) throw new Error('unsupported-backup');
   if (!Array.isArray(backup.entries) || !Array.isArray(backup.followUps) || !Array.isArray(backup.tags) || !Array.isArray(backup.images)) throw new Error('invalid-backup');
   const validEntries = backup.entries.every((item) => item && isString(item.id) && isString(item.content) && isString(item.occurredAt) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt));
   const validFollowUps = backup.followUps.every((item) => item && isString(item.id) && isString(item.entryId) && isString(item.content) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt));
@@ -52,6 +58,35 @@ export function parseJournalBackup(contents: string): JournalBackup {
   const validCapsules = backup.timeCapsules === undefined || (Array.isArray(backup.timeCapsules) && backup.timeCapsules.every((item) => item && isString(item.id) && isString(item.title) && isString(item.content) && isString(item.openAt) && isNullableString(item.openedAt) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt) && typeof item.notificationEnabled === 'boolean'));
   const validCapsuleReplies = backup.timeCapsuleReplies === undefined || (Array.isArray(backup.timeCapsuleReplies) && backup.timeCapsuleReplies.every((item) => item && isString(item.id) && isString(item.capsuleId) && isString(item.content) && isString(item.createdAt) && isString(item.updatedAt)));
   const validCapsuleImages = backup.timeCapsuleImages === undefined || (Array.isArray(backup.timeCapsuleImages) && backup.timeCapsuleImages.every((item) => item && isString(item.id) && isString(item.capsuleId) && isString(item.localUri) && typeof item.width === 'number' && Number.isFinite(item.width) && typeof item.height === 'number' && Number.isFinite(item.height) && typeof item.sortOrder === 'number' && Number.isFinite(item.sortOrder) && isString(item.createdAt) && isMediaType(item.mediaType) && isOptionalNullableString(item.pairedVideoLocalUri) && isOptionalNullableNumber(item.duration) && isOptionalNullableString(item.thumbnailLocalUri) && isOptionalNullableString(item.dataBase64) && isOptionalNullableString(item.mimeType) && isOptionalNullableString(item.pairedVideoDataBase64) && isOptionalNullableString(item.pairedVideoMimeType) && isOptionalNullableString(item.thumbnailDataBase64) && isOptionalNullableString(item.thumbnailMimeType)));
+  const validTimePixelSettings = backup.timePixelSettings === undefined || (backup.timePixelSettings !== null && typeof backup.timePixelSettings === 'object'
+    &&
+    isTimePixelDate(backup.timePixelSettings.originDate)
+    && (backup.timePixelSettings.rangeMode === 'all' || backup.timePixelSettings.rangeMode === 'year')
+    && (backup.timePixelSettings.rangeMode === 'all' ? backup.timePixelSettings.selectedYear === null
+      : Number.isInteger(backup.timePixelSettings.selectedYear) && backup.timePixelSettings.selectedYear !== null
+        && backup.timePixelSettings.selectedYear >= Number(backup.timePixelSettings.originDate.slice(0, 4))
+        && backup.timePixelSettings.selectedYear <= 9999)
+    && (backup.timePixelSettings.unit === 'year' || backup.timePixelSettings.unit === 'month' || backup.timePixelSettings.unit === 'day')
+    && (backup.timePixelSettings.colorMode === 'location' || backup.timePixelSettings.colorMode === 'stage')
+    && isString(backup.timePixelSettings.updatedAt)
+  );
+  const validTimePixelCategories = backup.timePixelCategories === undefined || (Array.isArray(backup.timePixelCategories) && backup.timePixelCategories.every((item) => item
+    && isString(item.id)
+    && (item.kind === 'location' || item.kind === 'stage')
+    && isString(item.name) && item.name.trim().length > 0
+    && isString(item.colorToken) && item.colorToken.length > 0
+    && isString(item.createdAt)
+    && isString(item.updatedAt)));
+  const validTimePixelRanges = backup.timePixelRanges === undefined || (Array.isArray(backup.timePixelRanges) && backup.timePixelRanges.every((item) => item
+    && isString(item.id)
+    && (item.kind === 'location' || item.kind === 'stage')
+    && isString(item.categoryId)
+    && isDateKey(item.startDate)
+    && isDateKey(item.endDate)
+    && item.startDate <= item.endDate
+    && isNullableString(item.note)
+    && isString(item.createdAt)
+    && isString(item.updatedAt)));
   const validMetadataCatalog = isMetadataCatalog(backup.metadataCatalog);
   const validJournalTemplates = backup.journalTemplates === undefined || (() => {
     const parsed = parseJournalTemplateSettings(backup.journalTemplates);
@@ -78,7 +113,7 @@ export function parseJournalBackup(contents: string): JournalBackup {
     && (preferences.locationPrivacyMode === undefined || ['precise', 'approximate', 'nameOnly', 'ask'].includes(preferences.locationPrivacyMode))
     && (preferences.exportLocationMode === undefined || ['include', 'hidden'].includes(preferences.exportLocationMode))
   );
-  if (!validEntries || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validMediaMetadata || !validCapsules || !validCapsuleReplies || !validCapsuleImages || !validMetadataCatalog || !validJournalTemplates || !validAppPreferences) throw new Error('invalid-backup');
+  if (!validEntries || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validMediaMetadata || !validCapsules || !validCapsuleReplies || !validCapsuleImages || !validTimePixelSettings || !validTimePixelCategories || !validTimePixelRanges || !validMetadataCatalog || !validJournalTemplates || !validAppPreferences) throw new Error('invalid-backup');
 
   const entries = backup.entries as JournalBackup['entries'];
   const followUps = backup.followUps as JournalBackup['followUps'];
@@ -88,15 +123,20 @@ export function parseJournalBackup(contents: string): JournalBackup {
   const capsules = backup.timeCapsules ?? [];
   const capsuleReplies = backup.timeCapsuleReplies ?? [];
   const capsuleImages = backup.timeCapsuleImages ?? [];
-  if (!hasUniqueIds(entries) || !hasUniqueIds(followUps) || !hasUniqueIds(images) || !hasUniqueIds(followUpImages) || !hasUniqueIds(versions) || !hasUniqueIds(capsules) || !hasUniqueIds(capsuleReplies) || !hasUniqueIds(capsuleImages)) {
+  const timePixelCategories = backup.timePixelCategories ?? [];
+  const timePixelRanges = backup.timePixelRanges ?? [];
+  const timePixelCategoryNames = timePixelCategories.map((item) => `${item.kind}\0${item.name.trim().toLocaleLowerCase()}`);
+  if (!hasUniqueIds(entries) || !hasUniqueIds(followUps) || !hasUniqueIds(images) || !hasUniqueIds(followUpImages) || !hasUniqueIds(versions) || !hasUniqueIds(capsules) || !hasUniqueIds(capsuleReplies) || !hasUniqueIds(capsuleImages) || !hasUniqueIds(timePixelCategories) || !hasUniqueIds(timePixelRanges)) {
     throw new Error('invalid-backup');
   }
+  if (new Set(timePixelCategoryNames).size !== timePixelCategoryNames.length) throw new Error('invalid-backup');
   const entryIds = new Set(entries.map((item) => item.id));
   const followUpIds = new Set(followUps.map((item) => item.id));
   const capsuleIds = new Set(capsules.map((item) => item.id));
   const imageIds = new Set(images.map((item) => item.id));
   const followUpImageIds = new Set(followUpImages.map((item) => item.id));
   const capsuleImageIds = new Set(capsuleImages.map((item) => item.id));
+  const timePixelCategoryById = new Map(timePixelCategories.map((item) => [item.id, item]));
   if (
     followUps.some((item) => !entryIds.has(item.entryId))
     || images.some((item) => !entryIds.has(item.entryId))
@@ -106,6 +146,7 @@ export function parseJournalBackup(contents: string): JournalBackup {
     || (backup.suppressedMemoryEntryIds ?? []).some((id) => !entryIds.has(id))
     || capsuleReplies.some((item) => !capsuleIds.has(item.capsuleId))
     || capsuleImages.some((item) => !capsuleIds.has(item.capsuleId))
+    || timePixelRanges.some((item) => timePixelCategoryById.get(item.categoryId)?.kind !== item.kind)
     || (backup.mediaMetadata ?? []).some((item) => item.source === 'entry' ? !imageIds.has(item.id) : item.source === 'followUp' ? !followUpImageIds.has(item.id) : !capsuleImageIds.has(item.id))
   ) {
     throw new Error('invalid-backup');

@@ -7,7 +7,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
  * migrated in production: data from those builds must first be exported by the
  * old build and restored through the validated ZIP backup flow.
  */
-export const DATABASE_VERSION = 19;
+export const DATABASE_VERSION = 20;
 export const DATABASE_BASELINE_VERSION = 13;
 
 const SEARCH_INDEX_SCHEMA = `
@@ -218,6 +218,38 @@ const BASELINE_SCHEMA = `
     original_filename TEXT
   );
 
+  CREATE TABLE time_pixel_categories (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('location', 'stage')),
+    name TEXT NOT NULL,
+    color_token TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE time_pixel_ranges (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('location', 'stage')),
+    category_id TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (start_date <= end_date),
+    FOREIGN KEY (category_id) REFERENCES time_pixel_categories(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE time_pixel_settings (
+    id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+    origin_date TEXT NOT NULL,
+    range_mode TEXT NOT NULL DEFAULT 'all',
+    selected_year INTEGER,
+    unit TEXT NOT NULL DEFAULT 'month' CHECK (unit IN ('year', 'month', 'day')),
+    color_mode TEXT NOT NULL DEFAULT 'location' CHECK (color_mode IN ('location', 'stage')),
+    updated_at TEXT NOT NULL
+  );
+
   CREATE INDEX idx_entries_occurred_at
     ON entries(occurred_at DESC) WHERE deleted_at IS NULL;
   CREATE INDEX idx_follow_ups_entry_id
@@ -258,6 +290,12 @@ const BASELINE_SCHEMA = `
     ON time_capsule_replies(capsule_id, created_at ASC);
   CREATE INDEX idx_time_capsule_images_capsule_id
     ON time_capsule_images(capsule_id, sort_order ASC);
+  CREATE INDEX idx_time_pixel_categories_kind
+    ON time_pixel_categories(kind, created_at ASC);
+  CREATE INDEX idx_time_pixel_ranges_kind_dates
+    ON time_pixel_ranges(kind, start_date ASC, end_date ASC);
+  CREATE INDEX idx_time_pixel_ranges_category
+    ON time_pixel_ranges(category_id, start_date ASC);
   ${SEARCH_INDEX_SCHEMA}
 `;
 
@@ -335,6 +373,44 @@ const MIGRATION_18_TO_19 = `
     FROM entries e;
 `;
 
+const MIGRATION_19_TO_20 = `
+  CREATE TABLE time_pixel_categories (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('location', 'stage')),
+    name TEXT NOT NULL,
+    color_token TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE time_pixel_ranges (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('location', 'stage')),
+    category_id TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (start_date <= end_date),
+    FOREIGN KEY (category_id) REFERENCES time_pixel_categories(id) ON DELETE CASCADE
+  );
+  CREATE TABLE time_pixel_settings (
+    id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+    origin_date TEXT NOT NULL,
+    range_mode TEXT NOT NULL DEFAULT 'all',
+    selected_year INTEGER,
+    unit TEXT NOT NULL DEFAULT 'month' CHECK (unit IN ('year', 'month', 'day')),
+    color_mode TEXT NOT NULL DEFAULT 'location' CHECK (color_mode IN ('location', 'stage')),
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_time_pixel_categories_kind
+    ON time_pixel_categories(kind, created_at ASC);
+  CREATE INDEX idx_time_pixel_ranges_kind_dates
+    ON time_pixel_ranges(kind, start_date ASC, end_date ASC);
+  CREATE INDEX idx_time_pixel_ranges_category
+    ON time_pixel_ranges(category_id, start_date ASC);
+`;
+
 export async function migrateDatabase(db: SQLiteDatabase) {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
@@ -354,13 +430,14 @@ export async function migrateDatabase(db: SQLiteDatabase) {
   try {
     if (currentVersion === 0) {
       await db.execAsync(BASELINE_SCHEMA);
-    } else if (currentVersion >= 13 && currentVersion <= 18) {
+    } else if (currentVersion >= 13 && currentVersion <= 19) {
       if (currentVersion === 13) await db.execAsync(MIGRATION_13_TO_14);
       if (currentVersion <= 14) await db.execAsync(MIGRATION_14_TO_15);
       if (currentVersion <= 15) await db.execAsync(MIGRATION_15_TO_16);
       if (currentVersion <= 16) await db.execAsync(MIGRATION_16_TO_17);
       if (currentVersion <= 17) await db.execAsync(MIGRATION_17_TO_18);
-      await db.execAsync(MIGRATION_18_TO_19);
+      if (currentVersion <= 18) await db.execAsync(MIGRATION_18_TO_19);
+      await db.execAsync(MIGRATION_19_TO_20);
     } else {
       throw new Error(`没有可用的数据库迁移路径：${currentVersion} → ${DATABASE_VERSION}`);
     }

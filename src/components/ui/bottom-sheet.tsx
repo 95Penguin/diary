@@ -11,6 +11,7 @@ type BottomSheetProps = {
   backgroundColor: string;
   contentHeight?: number;
   scrollable?: boolean;
+  scrollResetKey?: string;
   contentContainerStyle?: StyleProp<ViewStyle>;
   onShow?: () => void;
   sheetStyle?: StyleProp<ViewStyle>;
@@ -23,6 +24,7 @@ export function BottomSheet({
   backgroundColor,
   contentHeight,
   scrollable = false,
+  scrollResetKey,
   contentContainerStyle,
   onShow,
   sheetStyle,
@@ -48,6 +50,7 @@ export function BottomSheet({
       >
         <View pointerEvents="none" style={styles.handleSlot}><View style={styles.handle} /></View>
         {scrollable ? <ScrollView
+          key={scrollResetKey}
           bounces={false}
           nestedScrollEnabled
           keyboardShouldPersistTaps="handled"
