@@ -1,10 +1,10 @@
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { TimePixelCategory, TimePixelKind } from '@/database/time-pixel-repository';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, radii, spacing } from '@/theme/tokens';
-import { timePixelColor, timePixelColorChoices } from '@/utils/time-pixel-colors';
+import { TIME_PIXEL_COLOR_FAMILIES, timePixelColor, timePixelColorChoices, type TimePixelColorFamily } from '@/utils/time-pixel-colors';
 
 type Props = {
   value: string;
@@ -18,9 +18,12 @@ type Props = {
 
 export function TimePixelColorPicker({ value, onChange, categories, kind, categoryId, name, collapsible = false }: Props) {
   const { readingTheme: theme } = useAppPreferences();
-  const [expanded, setExpanded] = useState(false);
   const choices = timePixelColorChoices(categories, kind, categoryId);
   const selected = choices.find((item) => item.token === value) ?? choices[0];
+  const [expanded, setExpanded] = useState(false);
+  const [family, setFamily] = useState<TimePixelColorFamily>(selected.family);
+  const familyScrollRef = useRef<ScrollView>(null);
+  const visibleChoices = choices.filter((item) => item.family === family);
   const peers = categories.filter((item) => item.kind === kind && item.id !== categoryId).slice(0, 2);
   const preview = [
     { key: 'current', name: name.trim() || (kind === 'location' ? '新地点' : '新阶段'), color: selected.color },
@@ -36,8 +39,23 @@ export function TimePixelColorPicker({ value, onChange, categories, kind, catego
       <Text style={styles.toggle}>{expanded ? '收起' : '换色'}</Text>
     </Pressable> : null}
     {!collapsible || expanded ? <>
+    <ScrollView ref={familyScrollRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.familyRow} accessibilityRole="radiogroup" accessibilityLabel="颜色分类">
+      {TIME_PIXEL_COLOR_FAMILIES.map((item) => <Pressable
+        key={item.key}
+        accessibilityRole="radio"
+        accessibilityState={{ checked: family === item.key }}
+        onPress={() => setFamily(item.key)}
+        onLayout={(event) => {
+          if (family === item.key) familyScrollRef.current?.scrollTo({ x: Math.max(0, event.nativeEvent.layout.x - spacing.md), animated: false });
+        }}
+        style={[styles.familyChoice, { backgroundColor: family === item.key ? colors.primarySoft : theme.surface, borderColor: family === item.key ? colors.primary : 'transparent' }]}
+      >
+        <View style={[styles.familySwatch, { backgroundColor: item.color }]} />
+        <Text style={[styles.familyText, { color: family === item.key ? colors.primary : theme.secondary }, family === item.key && styles.familyTextActive]}>{item.label}</Text>
+      </Pressable>)}
+    </ScrollView>
     <View accessibilityRole="radiogroup" accessibilityLabel="预设颜色" style={styles.palette}>
-      {choices.map((item) => {
+      {visibleChoices.map((item) => {
         const checked = selected.token === item.token;
         const usage = item.usedBy.length ? `${item.usedBy.length}项已用` : '无其他项使用';
         return <Pressable
@@ -51,8 +69,7 @@ export function TimePixelColorPicker({ value, onChange, categories, kind, catego
         >
           <View style={[styles.choice, { borderColor: checked ? colors.primary : 'transparent', backgroundColor: theme.surface }]}>
             <View style={[styles.swatch, { backgroundColor: item.color }]} />
-            <Text style={[styles.choiceName, { color: theme.text }]}>{item.label}{checked ? ' ✓' : ''}</Text>
-            <Text style={[styles.usage, { color: theme.secondary }]}>{item.usedBy.length ? `${item.usedBy.length}项已用` : categoryId ? '无其他项' : '未占用'}</Text>
+            <Text numberOfLines={1} style={[styles.choiceName, { color: theme.text }]}>{item.label}{checked ? ' ✓' : ''}</Text>
           </View>
         </Pressable>;
       })}
@@ -85,12 +102,16 @@ const styles = StyleSheet.create({
   compactName: { flex: 1, fontSize: 11 },
   toggle: { color: colors.primary, fontSize: 11 },
   label: { marginTop: spacing.md, marginBottom: spacing.sm, fontSize: 10 },
-  palette: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -3 },
-  choiceSlot: { width: '25%', padding: 3 },
-  choice: { minHeight: 88, alignItems: 'center', paddingVertical: spacing.sm, paddingHorizontal: 2, borderWidth: 2, borderRadius: radii.md },
-  swatch: { width: 28, height: 28, borderRadius: radii.sm },
-  choiceName: { fontSize: 11, marginTop: 5, textAlign: 'center' },
-  usage: { fontSize: 9, marginTop: 3, textAlign: 'center' },
+  familyRow: { minHeight: 72, alignItems: 'center', gap: spacing.xs, paddingBottom: spacing.xs },
+  familyChoice: { width: 56, minHeight: 64, alignItems: 'center', justifyContent: 'center', gap: 5, borderWidth: 2, borderRadius: radii.md },
+  familySwatch: { width: 28, height: 28, borderRadius: radii.sm },
+  familyText: { fontSize: 10 },
+  familyTextActive: { fontWeight: '700' },
+  palette: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -2 },
+  choiceSlot: { width: '25%', padding: 2 },
+  choice: { minHeight: 72, alignItems: 'center', justifyContent: 'center', paddingVertical: 6, paddingHorizontal: 2, borderWidth: 2, borderRadius: radii.md },
+  swatch: { width: 32, height: 32, borderRadius: radii.sm },
+  choiceName: { maxWidth: '100%', fontSize: 10, marginTop: 5, textAlign: 'center' },
   hint: { marginTop: spacing.sm, fontSize: 10, lineHeight: 17 },
   preview: { marginTop: spacing.md, padding: spacing.md, borderRadius: radii.md },
   previewTitle: { fontSize: 10, lineHeight: 16 },

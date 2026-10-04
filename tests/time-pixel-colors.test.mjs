@@ -4,39 +4,51 @@ import test from 'node:test';
 import { createJournalExport } from '../src/database/journal-repository.ts';
 import { migrateDatabase } from '../src/database/migrate.ts';
 import { createTimePixelCategory, getTimePixelSnapshot, initializeTimePixels, saveTimePixelRange, updateTimePixelCategory } from '../src/database/time-pixel-repository.ts';
-import { TIME_PIXEL_PALETTE, suggestedTimePixelColor, timePixelColor, timePixelColorChoices } from '../src/utils/time-pixel-colors.ts';
+import { TIME_PIXEL_LEGACY_PALETTE, TIME_PIXEL_PALETTE, suggestedTimePixelColor, timePixelColor, timePixelColorChoices } from '../src/utils/time-pixel-colors.ts';
 import { createTestDatabase } from './sqlite-test-adapter.mjs';
 
 const category = (id, kind, colorToken) => ({ id, kind, colorToken, name: id, createdAt: '', updatedAt: '' });
 
-test('preset palette preserves all sixteen saved colors and unknown-token fallback', () => {
-  assert.deepEqual(TIME_PIXEL_PALETTE.map(({ token, color }) => [token, color]), [
+test('new palette has seven balanced families while preserving every v1.0.10 saved color', () => {
+  assert.deepEqual(TIME_PIXEL_LEGACY_PALETTE.map(({ token, color }) => [token, color]), [
     ['fern', '#5B8C72'], ['mist', '#7E9FB8'], ['lavender', '#9A86B8'], ['amber', '#C69A4B'],
     ['rose', '#B8757C'], ['teal', '#4F9290'], ['slate', '#7C8793'], ['clay', '#A67C68'],
     ['pine', '#346B63'], ['sky', '#5F86C2'], ['indigo', '#686AA8'], ['plum', '#9B5F8B'],
     ['coral', '#C76F5B'], ['orange', '#C9823F'], ['olive', '#7E8C4B'], ['sand', '#B39A70'],
   ]);
+  assert.equal(TIME_PIXEL_PALETTE.length, 28);
+  assert.deepEqual([...new Set(TIME_PIXEL_PALETTE.map((item) => item.family))].sort(), ['blue', 'green', 'indigo', 'orange', 'purple', 'red', 'yellow']);
+  assert.equal([...new Set(TIME_PIXEL_PALETTE.map((item) => item.family))].every((family) => TIME_PIXEL_PALETTE.filter((item) => item.family === family).length === 4), true);
   for (const item of TIME_PIXEL_PALETTE) assert.equal(timePixelColor(item.token), item.color);
+  for (const item of TIME_PIXEL_LEGACY_PALETTE) assert.equal(timePixelColor(item.token), item.color);
   assert.equal(timePixelColor('unknown-backup-token'), TIME_PIXEL_PALETTE[0].color);
 });
 
 test('color usage counts same-layer peers, excluding the edited category', () => {
-  const categories = [category('home', 'location', 'fern'), category('dorm', 'location', 'fern'), category('school', 'stage', 'fern')];
+  const categories = [category('home', 'location', 'spring-green'), category('dorm', 'location', 'spring-green'), category('school', 'stage', 'spring-green')];
   assert.deepEqual(timePixelColorChoices(categories, 'location')[0].usedBy.map((item) => item.id), ['home', 'dorm']);
   assert.deepEqual(timePixelColorChoices(categories, 'location', 'home')[0].usedBy.map((item) => item.id), ['dorm']);
   assert.deepEqual(timePixelColorChoices(categories, 'stage', 'school')[0].usedBy, []);
-  assert.equal(timePixelColorChoices(categories, 'location').length, 16);
+  assert.equal(timePixelColorChoices(categories, 'location').length, 28);
   assert.equal(categories.length, 3);
 });
 
+test('a legacy color stays available only while editing the category that uses it', () => {
+  const categories = [category('home', 'location', 'fern'), category('dorm', 'location', 'fern')];
+  assert.equal(timePixelColorChoices(categories, 'location').some((item) => item.token === 'fern'), false);
+  const editingChoices = timePixelColorChoices(categories, 'location', 'home');
+  assert.equal(editingChoices.length, 29);
+  assert.deepEqual(editingChoices.find((item) => item.token === 'fern').usedBy.map((item) => item.id), ['dorm']);
+});
+
 test('new categories suggest an unused color in their own layer and permit a full palette', () => {
-  assert.equal(suggestedTimePixelColor([], 'location'), 'fern');
-  assert.equal(suggestedTimePixelColor([category('school', 'stage', 'fern')], 'location'), 'fern');
-  assert.equal(suggestedTimePixelColor([category('home', 'location', 'fern')], 'location'), 'mist');
+  assert.equal(suggestedTimePixelColor([], 'location'), 'spring-green');
+  assert.equal(suggestedTimePixelColor([category('school', 'stage', 'spring-green')], 'location'), 'spring-green');
+  assert.equal(suggestedTimePixelColor([category('home', 'location', 'spring-green')], 'location'), 'mint-green');
   const occupied = TIME_PIXEL_PALETTE.map((item) => category(item.token, 'location', item.token));
-  assert.equal(suggestedTimePixelColor(occupied, 'location'), 'fern');
+  assert.equal(suggestedTimePixelColor(occupied, 'location'), 'spring-green');
   assert.equal(timePixelColorChoices(occupied, 'location').every((item) => item.usedBy.length === 1), true);
-  assert.equal(suggestedTimePixelColor([category('old-import', 'location', 'unknown-token')], 'location'), 'mist');
+  assert.equal(suggestedTimePixelColor([category('old-import', 'location', 'unknown-token')], 'location'), 'mint-green');
 });
 
 test('recoloring updates all historical ranges by category without changing dates or notes; duplicates remain valid', async (t) => {
