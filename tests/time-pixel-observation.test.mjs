@@ -34,7 +34,7 @@ test('month sections retain year labels and year view retains compact multi-year
   assert.throws(() => buildPixelSections([], 'day', 0));
 });
 
-test('note markers span their full range in either layer and remain independent of stage-start dots', () => {
+test('note presence spans its full range in either layer and remains independent of stage-start dots', () => {
   const ranges = [range('home', '2023-12-30', '2024-01-01', { note: '回家' }), range('stage', '2024-01-01', '2024-01-03', { kind: 'stage', note: '上学' })];
   for (const colorMode of ['location', 'stage']) {
     const built = buildPixelGroups(snapshot(ranges), { ...settings, colorMode }, '2024-01-04');
@@ -57,7 +57,7 @@ test('stage markers represent category transitions rather than stored range frag
   assert.deepEqual(clipped.groups.filter((item) => item.hasStageStart).map((item) => item.key), ['2024-01-25']);
 });
 
-test('coarse note markers aggregate only visible elapsed days, including leap day', () => {
+test('coarse note presence aggregates only visible elapsed days, including leap day', () => {
   const ranges = [range('note', '2024-02-29', '2024-02-29', { note: '闰日' }), range('blank', '2024-01-01', '2024-01-31', { note: '  ' }), range('future', '2024-04-01', '2024-04-02', { kind: 'stage', note: '尚未发生' })];
   const selected = { ...settings, rangeMode: 'year', selectedYear: 2024, unit: 'month' };
   const built = buildPixelGroups(snapshot(ranges), selected, '2024-03-01');

@@ -10,6 +10,14 @@ export const TIME_PIXEL_PALETTE = [
   { token: 'teal', label: '青绿', color: '#4F9290' },
   { token: 'slate', label: '岩灰', color: '#7C8793' },
   { token: 'clay', label: '陶棕', color: '#A67C68' },
+  { token: 'pine', label: '深松', color: '#346B63' },
+  { token: 'sky', label: '天蓝', color: '#5F86C2' },
+  { token: 'indigo', label: '靛蓝', color: '#686AA8' },
+  { token: 'plum', label: '梅紫', color: '#9B5F8B' },
+  { token: 'coral', label: '珊瑚', color: '#C76F5B' },
+  { token: 'orange', label: '橙褐', color: '#C9823F' },
+  { token: 'olive', label: '橄榄', color: '#7E8C4B' },
+  { token: 'sand', label: '沙金', color: '#B39A70' },
 ] as const;
 
 export function timePixelColor(token: string) {

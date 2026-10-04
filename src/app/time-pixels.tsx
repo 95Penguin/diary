@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, SectionList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, InteractionManager, Keyboard, KeyboardAvoidingView, Modal, SectionList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router, useFocusEffect } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
@@ -8,8 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { TimePixelColorPicker } from '@/components/time-pixel-color-picker';
 import { showAppDialog } from '@/components/app-dialog-host';
-import { BottomSheet } from '@/components/ui/bottom-sheet';
-import { ButtonLabel, PrimaryButton } from '@/components/ui/buttons';
+import { ButtonLabel, PrimaryButton, buttonMetrics } from '@/components/ui/buttons';
 import {
   createTimePixelCategory,
   deleteTimePixelRange,
@@ -37,6 +36,10 @@ type EditorState = { kind: TimePixelKind; range: TimePixelRange | null } | null;
 type ReturnView = Pick<TimePixelSettings, 'rangeMode' | 'selectedYear' | 'unit'> & { scrollOffset: number };
 type InlineNotice = { title: string; message: string };
 
+const RECENT_YEAR_WINDOW = 50;
+const LIFETIME_YEAR_WINDOW = 100;
+const YEAR_WHEEL_ITEM_HEIGHT = 48;
+
 function todayKey() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -52,11 +55,14 @@ export default function TimePixelsScreen() {
   const { readingTheme } = useAppPreferences();
   const { width } = useWindowDimensions();
   const today = todayKey();
+  const currentYear = Number(today.slice(0, 4));
   const [snapshot, setSnapshot] = useState<TimePixelSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [originDraft, setOriginDraft] = useState(`${new Date().getFullYear()}-01-01`);
-  const [rangeSheet, setRangeSheet] = useState(false);
+  const [rangeVisible, setRangeVisible] = useState(false);
+  const [rangeYearDraft, setRangeYearDraft] = useState(currentYear);
+  const [rangeYearsExpanded, setRangeYearsExpanded] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [detail, setDetail] = useState<PixelGroup | null>(null);
   const [managerVisible, setManagerVisible] = useState(false);
@@ -158,6 +164,56 @@ export default function TimePixelsScreen() {
     const saved = await updatePreferences(savedView.rangeMode === 'year' && !valid ? { ...savedView, rangeMode: 'all', selectedYear: null } : savedView);
     if (saved) setReturnView(null);
     else setRestoreOffset(null);
+  }
+
+  function openRangePicker() {
+    if (!settings) return;
+    const selectedYear = settings.rangeMode === 'year' && settings.selectedYear !== null ? settings.selectedYear : currentYear;
+    setRangeYearDraft(selectedYear);
+    setRangeYearsExpanded(selectedYear < currentYear - RECENT_YEAR_WINDOW);
+    setRangeVisible(true);
+  }
+
+  function openManagerSettings() {
+    if (!settings || saving) return;
+    setManagerOrigin(settings.originDate);
+    setManagerCategory(null);
+    setManagerNotice(null);
+    setManagerVisible(true);
+  }
+
+  function openManagerFromRange() {
+    if (saving) return;
+    setRangeVisible(false);
+    InteractionManager.runAfterInteractions(openManagerSettings);
+  }
+
+  async function applyRangeYear() {
+    if (!settings || saving) return;
+    setSaving(true);
+    const desiredOrigin = `${rangeYearDraft}-01-01`;
+    const pending = preferenceQueue.current.then(async () => {
+      if (desiredOrigin < settings.originDate) await initializeTimePixels(db, desiredOrigin);
+      await saveTimePixelPreferences(db, { rangeMode: 'year', selectedYear: rangeYearDraft });
+    });
+    preferenceQueue.current = pending.catch(() => undefined);
+    try {
+      await pending;
+      await load();
+      setRangeVisible(false);
+      setPageNotice(null);
+    } catch {
+      await load();
+      setPageNotice('年份没有切换，请稍后重试。');
+    } finally { setSaving(false); }
+  }
+
+  async function applyAllRange() {
+    if (saving) return;
+    setSaving(true);
+    const saved = await updatePreferences({ rangeMode: 'all', selectedYear: null });
+    if (saved) setRangeVisible(false);
+    setSaving(false);
   }
 
   function openCreate(kind: TimePixelKind) {
@@ -283,18 +339,22 @@ export default function TimePixelsScreen() {
 
   const recorded = focusedCategory ? built?.totals.get(focusedCategory.id) ?? 0 : built?.recordedDays ?? 0;
   const ratio = focusedCategory && built?.recordedDays ? recorded / built.recordedDays : 0;
-  const years = Array.from({ length: Number(today.slice(0, 4)) - Number(settings.originDate.slice(0, 4)) + 1 }, (_, index) => Number(today.slice(0, 4)) - index);
   const selectedLabel = settings.rangeMode === 'all' ? '起点至今' : `${settings.selectedYear}年`;
+  const originYear = Number(settings.originDate.slice(0, 4));
+  const earliestRecordedYear = snapshot.ranges.reduce((earliest, range) => Math.min(earliest, Number(range.startDate.slice(0, 4))), currentYear);
+  const recentMinimumYear = Math.min(currentYear - RECENT_YEAR_WINDOW, rangeYearDraft);
+  const expandedMinimumYear = Math.min(currentYear - LIFETIME_YEAR_WINDOW, originYear, earliestRecordedYear, rangeYearDraft);
+  const wheelMinimumYear = rangeYearsExpanded ? expandedMinimumYear : recentMinimumYear;
   const detailRanges = detail ? snapshot.ranges.filter((range) => range.startDate <= detail.endDate && range.endDate >= detail.startDate).sort((a, b) => a.kind.localeCompare(b.kind) || a.startDate.localeCompare(b.startDate)) : [];
 
   const listHeader = <>
     {returnView ? <Pressable onPress={() => void restoreView()} style={styles.returnButton}><Text style={styles.returnText}>‹ 返回展开前视图</Text></Pressable> : null}
     <View style={styles.controlsRow}>
-      <Pressable accessibilityLabel={`观察范围，${selectedLabel}`} onPress={() => setRangeSheet(true)} style={[styles.rangeButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.rangeButtonText}>{selectedLabel}</Text><Text style={styles.chevron}>⌄</Text></Pressable>
+      <Pressable accessibilityLabel={`观察范围，${selectedLabel}`} onPress={openRangePicker} style={[styles.rangeButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.rangeButtonText}>{selectedLabel}</Text><View style={styles.chevron} /></Pressable>
       <View accessibilityRole="radiogroup" style={[styles.segmented, { backgroundColor: readingTheme.surface }]}>{(['year', 'month', 'day'] as TimePixelUnit[]).map((unit) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: settings.unit === unit }} key={unit} onPress={() => void updatePreferences({ unit })} style={[styles.segment, settings.unit === unit && styles.segmentActive]}><Text style={[styles.segmentText, settings.unit === unit && styles.segmentTextActive]}>{unitLabel(unit)}</Text></Pressable>)}</View>
     </View>
     <View accessibilityRole="radiogroup" style={styles.modeRow}>{(['location', 'stage'] as TimePixelKind[]).map((kind) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: settings.colorMode === kind }} key={kind} onPress={() => void updatePreferences({ colorMode: kind })} style={[styles.modeButton, { borderBottomColor: settings.colorMode === kind ? colors.primary : 'transparent' }]}><Text style={[styles.modeText, { color: settings.colorMode === kind ? colors.primary : readingTheme.secondary }]}>{kind === 'location' ? '按地点着色' : '按阶段着色'}</Text></Pressable>)}</View>
-    <View style={styles.filterLine}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}><Pressable onPress={() => setFocusedCategoryId(null)} style={[styles.filterChip, { backgroundColor: focusedCategoryId ? readingTheme.surface : colors.primarySoft }]}><Text style={[styles.filterText, !focusedCategoryId && styles.filterTextActive]}>全部</Text></Pressable>{activeCategories.map((category) => <Pressable key={category.id} onPress={() => setFocusedCategoryId(category.id)} style={[styles.filterChip, { backgroundColor: focusedCategoryId === category.id ? colors.primarySoft : readingTheme.surface }]}><View style={[styles.swatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text numberOfLines={1} style={[styles.filterText, focusedCategoryId === category.id && styles.filterTextActive]}>{category.name}</Text></Pressable>)}</ScrollView><Pressable accessibilityLabel="管理名称、颜色与观察起点" onPress={() => { setManagerCategory(null); setManagerNotice(null); setManagerVisible(true); }} style={[styles.manageButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'slider.horizontal.3', android: 'tune', web: 'tune' }} size={16} tintColor={colors.primary} /></Pressable></View>
+    <View style={styles.filterLine}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}><Pressable onPress={() => setFocusedCategoryId(null)} style={[styles.filterChip, { backgroundColor: focusedCategoryId ? readingTheme.surface : colors.primarySoft }]}><Text style={[styles.filterText, !focusedCategoryId && styles.filterTextActive]}>全部</Text></Pressable>{activeCategories.map((category) => <Pressable key={category.id} onPress={() => setFocusedCategoryId(category.id)} style={[styles.filterChip, { backgroundColor: focusedCategoryId === category.id ? colors.primarySoft : readingTheme.surface }]}><View style={[styles.swatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text numberOfLines={1} style={[styles.filterText, focusedCategoryId === category.id && styles.filterTextActive]}>{category.name}</Text></Pressable>)}</ScrollView><Pressable accessibilityLabel="管理名称、颜色与观察起点" onPress={openManagerSettings} style={[styles.manageButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'slider.horizontal.3', android: 'tune', web: 'tune' }} size={16} tintColor={colors.primary} /></Pressable></View>
     <View style={[styles.pixelCard, { backgroundColor: readingTheme.surface }]}>
       <View style={styles.summaryRow}><View><Text style={[styles.summaryLabel, { color: readingTheme.secondary }]}>{focusedCategory ? `在${focusedCategory.name}度过` : `已记录${settings.colorMode === 'location' ? '地点' : '阶段'}的日子`}</Text><View style={styles.summaryValue}><Text style={[styles.summaryNumber, { color: readingTheme.text }]}>{recorded}</Text><Text style={[styles.summaryUnit, { color: readingTheme.text }]}>天</Text></View></View><View style={styles.summaryMeta}><Text style={[styles.summaryMetaText, { color: readingTheme.secondary }]}>{focusedCategory ? `占已记录日子的 ${(ratio * 100).toFixed(1)}%` : `所选时段已过 ${built?.elapsedDays ?? 0} 天`}</Text><Text style={[styles.summaryMetaText, { color: readingTheme.secondary }]}>{built?.groups.length ?? 0}格 · 每格一{unitLabel(settings.unit)}</Text></View></View>
     </View>
@@ -303,13 +363,13 @@ export default function TimePixelsScreen() {
   const listFooter = <>
     <View style={[styles.axis, { paddingHorizontal: spacing.md, backgroundColor: readingTheme.surface }]}><Text style={[styles.axisText, { color: readingTheme.secondary }]}>{built ? formatDate(built.bounds.start) : ''}</Text><Text style={[styles.axisText, { color: readingTheme.secondary }]}>{built ? formatDate(built.bounds.end) : ''}</Text></View>
     <View style={[styles.legend, { paddingHorizontal: spacing.md }]}>{activeCategories.map((category) => <View key={category.id} style={styles.legendItem}><View style={[styles.swatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text style={[styles.legendText, { color: readingTheme.secondary }]}>{category.name}</Text></View>)}<View style={styles.legendItem}><View style={[styles.swatch, { backgroundColor: readingTheme.border }]} /><Text style={[styles.legendText, { color: readingTheme.secondary }]}>未记录</Text></View></View>
-    <Text style={[styles.observationNote, { color: readingTheme.secondary }]}>小圆点表示阶段起点，底部短线表示包含备注（地点或阶段）。点击格子查看详情，年格可按月／天展开。</Text>
+    <Text style={[styles.observationNote, { color: readingTheme.secondary }]}>小圆点表示阶段起点。点击格子查看地点、阶段和备注详情，年格可按月／天展开。</Text>
     <PrimaryButton onPress={() => openCreate(settings.colorMode)} style={styles.addButton}><ButtonLabel>＋ {settings.colorMode === 'location' ? '记录所在地点' : '添加人生阶段'}</ButtonLabel></PrimaryButton>
     <Text style={[styles.originText, { color: readingTheme.secondary }]}>观察起点 {formatDate(settings.originDate)} · 自动记住当前范围与粒度</Text>
   </>;
 
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}> 
-    <PageHeader title="时光像素" right={<Pressable accessibilityLabel="时光像素设置" hitSlop={12} onPress={() => { setManagerCategory(null); setManagerNotice(null); setManagerVisible(true); }}><SymbolView name={{ ios: 'slider.horizontal.3', android: 'tune', web: 'tune' }} size={19} tintColor={colors.primary} /></Pressable>} />
+    <PageHeader title="时光像素" right={<Pressable accessibilityLabel="时光像素设置" hitSlop={12} onPress={openManagerSettings}><SymbolView name={{ ios: 'slider.horizontal.3', android: 'tune', web: 'tune' }} size={19} tintColor={colors.primary} /></Pressable>} />
     {pageNotice ? <View accessibilityRole="alert" style={[styles.pageNotice, { backgroundColor: readingTheme.surface }]}><Text style={[styles.pageNoticeText, { color: readingTheme.text }]}>{pageNotice}</Text><Pressable onPress={() => setPageNotice(null)} hitSlop={10}><Text style={styles.pageNoticeAction}>知道了</Text></Pressable></View> : null}
     <SectionList
       key={`${settings.rangeMode}-${settings.selectedYear}-${settings.unit}-${settings.originDate}`}
@@ -332,11 +392,15 @@ export default function TimePixelsScreen() {
       showsVerticalScrollIndicator={false}
     />
 
-    <BottomSheet visible={rangeSheet} onClose={() => setRangeSheet(false)} backgroundColor={readingTheme.background} contentHeight={Math.min(520, 80 + years.length * 52)} scrollable contentContainerStyle={styles.sheetContent}>
-      <Text style={[styles.sheetTitle, { color: readingTheme.text }]}>观察范围</Text>
-      <SheetChoice label="起点至今" detail={formatRange(settings.originDate, today)} selected={settings.rangeMode === 'all'} onPress={() => { setRangeSheet(false); void updatePreferences({ rangeMode: 'all', selectedYear: null }); }} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} borderColor={readingTheme.border} />
-      {years.map((year) => <SheetChoice key={year} label={`${year}年`} detail={year === Number(today.slice(0, 4)) ? '今年' : undefined} selected={settings.rangeMode === 'year' && settings.selectedYear === year} onPress={() => { setRangeSheet(false); void updatePreferences({ rangeMode: 'year', selectedYear: year }); }} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} borderColor={readingTheme.border} />)}
-    </BottomSheet>
+    <CenteredPanel resetKey={`range-${settings.rangeMode}-${settings.selectedYear ?? 'all'}-${settings.originDate}`} visible={rangeVisible} onClose={() => { if (!saving) setRangeVisible(false); }} backgroundColor={readingTheme.background} closeColor={readingTheme.secondary} contentContainerStyle={styles.rangeDialogContent} scrollEnabled={false}>
+      <Text style={[styles.sheetTitle, { color: readingTheme.text }]}>选择年份</Text>
+      <Text style={[styles.rangeHint, { color: readingTheme.secondary }]}>{rangeYearDraft < originYear ? `选择后会将观察起点扩展到 ${rangeYearDraft} 年 1 月 1 日` : `上下滚动选择年份 · ${wheelMinimumYear}—${currentYear}`}</Text>
+      <YearWheelPicker key={`wheel-${rangeVisible}-${settings.rangeMode}-${settings.selectedYear ?? 'all'}-${wheelMinimumYear}`} value={rangeYearDraft} onChange={setRangeYearDraft} minimumYear={wheelMinimumYear} maximumYear={currentYear} surfaceColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} />
+      {!rangeYearsExpanded && expandedMinimumYear < recentMinimumYear ? <Pressable disabled={saving} onPress={() => setRangeYearsExpanded(true)} style={styles.earlierYears}><Text style={[styles.sheetCancelText, { color: colors.primary }]}>需要更早年份？显示至 {expandedMinimumYear} 年</Text></Pressable> : null}
+      <PrimaryButton disabled={saving} onPress={() => void applyRangeYear()} style={styles.rangeApply}><ButtonLabel>{saving ? '正在切换…' : `查看 ${rangeYearDraft} 年`}</ButtonLabel></PrimaryButton>
+      <Pressable disabled={saving} onPress={() => void applyAllRange()} style={styles.sheetCancel}><Text style={[styles.sheetCancelText, { color: readingTheme.secondary }]}>查看起点至今</Text></Pressable>
+      <Pressable disabled={saving} onPress={openManagerFromRange} style={styles.modifyOrigin}><Text style={[styles.sheetCancelText, { color: readingTheme.secondary }]}>修改观察起点</Text></Pressable>
+    </CenteredPanel>
 
     <CenteredPanel resetKey={editor ? (confirmation ? 'confirm' : 'form') : deleteCandidate ? 'delete' : `detail-${detail?.key ?? ''}`} visible={Boolean(detail || editor)} onClose={() => { if (saveLock.current) return; setEditor(null); setConfirmation(null); setEditorNotice(null); setDeleteCandidate(null); setDeleteNotice(null); setDetail(null); }} backgroundColor={readingTheme.background} closeColor={readingTheme.secondary} contentContainerStyle={styles.dialogContent}>
       <View pointerEvents={saving ? 'none' : 'auto'}>
@@ -344,11 +408,11 @@ export default function TimePixelsScreen() {
       </View>
     </CenteredPanel>
 
-    <BottomSheet visible={managerVisible} onClose={() => { setManagerVisible(false); setManagerCategory(null); setManagerNotice(null); }} backgroundColor={readingTheme.background} contentHeight={600} scrollable contentContainerStyle={styles.sheetContent}>
+    <CenteredPanel resetKey={managerCategory ? `manager-${managerCategory.id}` : `manager-settings-${settings.originDate}`} visible={managerVisible} onClose={() => { if (saving) return; setManagerVisible(false); setManagerCategory(null); setManagerNotice(null); setManagerOrigin(settings.originDate); }} backgroundColor={readingTheme.background} closeColor={readingTheme.secondary} contentContainerStyle={styles.dialogContent}>
       <Text style={[styles.sheetTitle, { color: readingTheme.text }]}>{managerCategory ? `编辑${kindLabel(managerCategory.kind)}` : '时光像素设置'}</Text>
       {managerNotice ? <InlineNoticeCard notice={managerNotice} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /> : null}
       {managerCategory ? <><Text style={[styles.formLabel, { color: readingTheme.secondary }]}>名称</Text><TextInput value={managerName} onChangeText={setManagerName} maxLength={30} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><TimePixelColorPicker value={managerColor} onChange={setManagerColor} categories={snapshot.categories} kind={managerCategory.kind} categoryId={managerCategory.id} name={managerName} /><PrimaryButton disabled={saving} onPress={() => void saveManager()} style={styles.sheetPrimary}><ButtonLabel>保存名称和颜色</ButtonLabel></PrimaryButton><Pressable onPress={() => { setManagerCategory(null); setManagerNotice(null); }} style={styles.sheetCancel}><Text style={[styles.sheetCancelText, { color: readingTheme.secondary }]}>返回设置</Text></Pressable></> : <><Text style={[styles.formLabel, { color: readingTheme.secondary }]}>观察起点</Text><DateField label="" value={managerOrigin} onChange={setManagerOrigin} maximumDate={today} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /><Pressable disabled={managerOrigin === settings.originDate || saving} onPress={() => void saveManager()} style={styles.saveOrigin}><Text style={[styles.saveOriginText, managerOrigin === settings.originDate && styles.disabledText]}>保存观察起点</Text></Pressable><Text style={[styles.managerHint, { color: readingTheme.secondary }]}>向后移动起点只会隐藏更早的像素，不会删除原有记录。</Text>{(['location', 'stage'] as TimePixelKind[]).map((kind) => <View key={kind}><Text style={[styles.managerSection, { color: readingTheme.text }]}>{kind === 'location' ? '地点颜色' : '人生阶段颜色'}</Text>{snapshot.categories.filter((item) => item.kind === kind).length ? snapshot.categories.filter((item) => item.kind === kind).map((category) => <Pressable key={category.id} onPress={() => openManagerCategory(category)} style={[styles.managerRow, { borderBottomColor: readingTheme.border }]}><View style={[styles.managerSwatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text style={[styles.managerName, { color: readingTheme.text }]}>{category.name}</Text><Text style={[styles.managerAction, { color: readingTheme.secondary }]}>编辑 ›</Text></Pressable>) : <Text style={[styles.managerEmpty, { color: readingTheme.secondary }]}>还没有记录</Text>}</View>)}</>}
-    </BottomSheet>
+    </CenteredPanel>
   </SafeAreaView>;
 }
 
@@ -357,14 +421,14 @@ function PageHeader({ title, right }: { title: string; right?: ReactNode }) {
   return <View style={[styles.header, { borderBottomColor: readingTheme.border }]}><Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable><Text style={[styles.headerTitle, { color: readingTheme.text }]}>{title}</Text><View style={styles.headerRight}>{right}</View></View>;
 }
 
-function CenteredPanel({ visible, onClose, backgroundColor, closeColor, resetKey, contentContainerStyle, children }: { visible: boolean; onClose: () => void; backgroundColor: string; closeColor: string; resetKey: string; contentContainerStyle?: StyleProp<ViewStyle>; children: ReactNode }) {
+function CenteredPanel({ visible, onClose, backgroundColor, closeColor, resetKey, contentContainerStyle, scrollEnabled = true, children }: { visible: boolean; onClose: () => void; backgroundColor: string; closeColor: string; resetKey: string; contentContainerStyle?: StyleProp<ViewStyle>; scrollEnabled?: boolean; children: ReactNode }) {
   const { height } = useWindowDimensions();
   return <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.dialogKeyboard}>
       <Pressable accessible={false} onPress={onClose} style={styles.dialogOverlay}>
         <Pressable accessibilityViewIsModal onPress={(event) => event.stopPropagation()} style={[styles.dialogCard, { backgroundColor, maxHeight: Math.max(1, Math.min(680, height - spacing.xxl * 2)) }]}>
           <Pressable accessibilityLabel="关闭弹窗" hitSlop={10} onPress={onClose} style={styles.dialogClose}><Text style={[styles.dialogCloseText, { color: closeColor }]}>×</Text></Pressable>
-          <ScrollView key={resetKey} bounces={false} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={contentContainerStyle}>{children}</ScrollView>
+          <ScrollView key={resetKey} bounces={false} keyboardShouldPersistTaps="handled" scrollEnabled={scrollEnabled} showsVerticalScrollIndicator={false} contentContainerStyle={contentContainerStyle}>{children}</ScrollView>
         </Pressable>
       </Pressable>
     </KeyboardAvoidingView>
@@ -384,8 +448,35 @@ function DateField({ label, value, onChange, minimumDate, maximumDate, backgroun
   return <View style={styles.dateField}>{label ? <Text style={[styles.formLabel, { color: secondaryColor }]}>{label}</Text> : null}{Platform.OS === 'web' ? <TextInput value={value} onChangeText={onChange} placeholder="YYYY-MM-DD" placeholderTextColor={secondaryColor} style={[styles.input, { backgroundColor, color: textColor }]} /> : <><Pressable onPress={() => setVisible(true)} style={[styles.dateButton, { backgroundColor }]}><Text style={[styles.dateButtonText, { color: textColor }]}>{formatDate(value)}</Text><Text style={styles.dateButtonAction}>选择</Text></Pressable>{visible ? <DateTimePicker value={new Date(`${value}T12:00:00`)} mode="date" minimumDate={minimumDate ? new Date(`${minimumDate}T12:00:00`) : undefined} maximumDate={maximumDate ? new Date(`${maximumDate}T12:00:00`) : undefined} onChange={changed} /> : null}</>}</View>;
 }
 
-function SheetChoice({ label, detail, selected, onPress, textColor, secondaryColor, borderColor }: { label: string; detail?: string; selected: boolean; onPress: () => void; textColor: string; secondaryColor: string; borderColor: string }) {
-  return <Pressable accessibilityRole="radio" accessibilityState={{ checked: selected }} onPress={onPress} style={[styles.sheetChoice, { borderBottomColor: borderColor }]}><View><Text style={[styles.sheetChoiceLabel, { color: selected ? colors.primary : textColor }]}>{label}</Text>{detail ? <Text style={[styles.sheetChoiceDetail, { color: secondaryColor }]}>{detail}</Text> : null}</View>{selected ? <Text style={styles.check}>✓</Text> : null}</Pressable>;
+function YearWheelPicker({ value, onChange, minimumYear, maximumYear, surfaceColor, textColor, secondaryColor }: { value: number; onChange: (year: number) => void; minimumYear: number; maximumYear: number; surfaceColor: string; textColor: string; secondaryColor: string }) {
+  const scrollRef = useRef<ScrollView>(null);
+  const positioned = useRef(false);
+  const years = useMemo(() => Array.from({ length: maximumYear - minimumYear + 1 }, (_, index) => maximumYear - index), [maximumYear, minimumYear]);
+  const selectedIndex = Math.max(0, years.indexOf(value));
+  function scrollToIndex(index: number, animated: boolean) {
+    scrollRef.current?.scrollTo({ y: index * YEAR_WHEEL_ITEM_HEIGHT, animated });
+  }
+  function updateFromOffset(offset: number) {
+    const index = Math.max(0, Math.min(years.length - 1, Math.round(offset / YEAR_WHEEL_ITEM_HEIGHT)));
+    if (years[index] !== value) onChange(years[index]);
+  }
+  return <View style={[styles.yearWheel, { backgroundColor: surfaceColor }]}>
+    <View pointerEvents="none" style={styles.yearWheelSelection} />
+    <ScrollView
+      ref={scrollRef}
+      nestedScrollEnabled
+      bounces={false}
+      decelerationRate="fast"
+      snapToInterval={YEAR_WHEEL_ITEM_HEIGHT}
+      showsVerticalScrollIndicator={false}
+      scrollEventThrottle={16}
+      onLayout={() => { if (!positioned.current) requestAnimationFrame(() => { scrollToIndex(selectedIndex, false); positioned.current = true; }); }}
+      onScroll={(event) => { if (positioned.current) updateFromOffset(event.nativeEvent.contentOffset.y); }}
+      contentContainerStyle={styles.yearWheelContent}
+    >
+      {years.map((year, index) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: value === year }} key={year} onPress={() => scrollToIndex(index, true)} style={styles.yearWheelItem}><Text style={[styles.yearWheelText, { color: value === year ? textColor : secondaryColor }, value === year && styles.yearWheelTextActive]}>{year}年{year === maximumYear ? ' · 今年' : ''}</Text></Pressable>)}
+    </ScrollView>
+  </View>;
 }
 
 function InlineNoticeCard({ notice, backgroundColor, textColor, secondaryColor }: { notice: InlineNotice; backgroundColor: string; textColor: string; secondaryColor: string }) {
@@ -403,7 +494,6 @@ function PixelCell({ group, unit, categories, focusedCategory, readingBorder, su
       {focusedCategory && focused ? <View style={styles.pixelSegments}>{focused.elapsedDays ? <View style={{ flex: focused.elapsedDays, backgroundColor: categoryColor(focusedCategory.colorToken), opacity: focused.opacity }} /> : null}{focused.futureDays ? <View style={{ flex: focused.futureDays, backgroundColor: surfaceMuted }} /> : null}</View> : <View style={styles.pixelSegments}>{knownCounts.map(({ category, count }) => <View key={category.id} style={{ flex: count, backgroundColor: categoryColor(category.colorToken) }} />)}{unknown ? <View style={{ flex: unknown, backgroundColor: readingBorder }} /> : null}{future ? <View style={{ flex: future, backgroundColor: surfaceMuted }} /> : null}</View>}
       {label ? <Text style={styles.pixelLabel}>{label}</Text> : null}
       {group.hasStageStart ? <View style={styles.stageMarker} /> : null}
-      {group.hasNote ? <View style={styles.noteMarker} /> : null}
     </View>
   </Pressable>;
 }
@@ -420,18 +510,16 @@ const styles = StyleSheet.create({
   returnText: { fontSize: 11, color: colors.primary, fontWeight: '600' },
   drillRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
   drillButton: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md },
-  noteMarker: { position: 'absolute', bottom: 1, left: 2, right: 2, height: 2, maxWidth: 12, backgroundColor: '#FFFFFF', borderRadius: 1, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.primary },
-
   safe: { flex: 1 }, loader: { marginTop: 120 },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, headerTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerRight: { width: 42, alignItems: 'flex-end' },
   failure: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl }, failureTitle: { fontFamily: fonts.serif, fontSize: 17 }, failureText: { fontSize: 11, lineHeight: 18, textAlign: 'center' },
   setup: { padding: spacing.xl, paddingTop: 56, paddingBottom: 60 }, motif: { width: 140, flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: spacing.xxxl }, motifCell: { width: 12, height: 12, borderRadius: 3 }, setupTitle: { fontFamily: fonts.serif, fontSize: 24, fontWeight: '600' }, setupCopy: { marginTop: spacing.md, marginBottom: spacing.xxl, fontSize: 12, lineHeight: 21 }, setupHint: { marginTop: spacing.md, fontSize: 10, lineHeight: 17 }, setupButton: { marginTop: spacing.xxl },
-  list: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: 44 }, controlsRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: spacing.md }, rangeButton: { minHeight: 42, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md }, rangeButtonText: { color: colors.primary, fontSize: 12, fontWeight: '700' }, chevron: { color: colors.primary, fontSize: 13 }, segmented: { flexDirection: 'row', padding: 3, borderRadius: radii.md }, segment: { minWidth: 38, minHeight: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm }, segmentActive: { backgroundColor: colors.primarySoft }, segmentText: { color: colors.textSecondary, fontSize: 11 }, segmentTextActive: { color: colors.primary, fontWeight: '700' },
-  modeRow: { flexDirection: 'row', marginTop: spacing.lg }, modeButton: { flex: 1, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2 }, modeText: { fontSize: 12, fontWeight: '700' }, filterLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginVertical: spacing.md }, filterRow: { gap: spacing.xs }, filterChip: { minHeight: 34, maxWidth: 150, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: spacing.md, borderRadius: radii.pill }, filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: colors.primary, fontWeight: '700' }, swatch: { width: 9, height: 9, borderRadius: 3 }, manageButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill },
+  list: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: 44 }, controlsRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: spacing.md }, rangeButton: { minHeight: 42, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md }, rangeButtonText: { color: colors.primary, fontSize: 12, fontWeight: '700' }, chevron: { width: 7, height: 7, marginTop: -3, marginRight: 2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, segmented: { flexDirection: 'row', padding: 3, borderRadius: radii.md }, segment: { minWidth: 38, minHeight: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm }, segmentActive: { backgroundColor: colors.primarySoft }, segmentText: { color: colors.textSecondary, fontSize: 11 }, segmentTextActive: { color: colors.primary, fontWeight: '700' },
+  modeRow: { flexDirection: 'row', marginTop: spacing.lg }, modeButton: { flex: 1, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2 }, modeText: { fontSize: 12, fontWeight: '700' }, filterLine: { height: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginVertical: spacing.xs }, filterRow: { alignItems: 'center', gap: spacing.xs }, filterChip: { height: buttonMetrics.compactHeight, maxWidth: 150, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: spacing.md, borderRadius: radii.pill }, filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: colors.primary, fontWeight: '700' }, swatch: { width: 9, height: 9, borderRadius: 3 }, manageButton: { width: buttonMetrics.iconSize, height: buttonMetrics.iconSize, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill },
   pixelCard: { borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, padding: spacing.md, paddingBottom: spacing.xl }, summaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md }, summaryLabel: { fontSize: 10 }, summaryValue: { flexDirection: 'row', alignItems: 'baseline', gap: 5, marginTop: 2 }, summaryNumber: { fontFamily: fonts.serif, fontSize: 29, fontWeight: '600' }, summaryUnit: { fontSize: 11 }, summaryMeta: { alignItems: 'flex-end', gap: 4, maxWidth: 156 }, summaryMetaText: { fontSize: 9, textAlign: 'right' },
   pixelRow: { flexDirection: 'row', paddingHorizontal: spacing.md, backgroundColor: colors.surface }, pixelPressable: { paddingBottom: 3 }, pixel: { position: 'relative', overflow: 'hidden', borderRadius: 3 }, absoluteFill: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }, pixelSegments: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, flexDirection: 'row' }, pixelLabel: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, color: '#FFFFFF', fontSize: 10, fontWeight: '700', textAlign: 'center', textAlignVertical: 'center', textShadowColor: '#00000070', textShadowRadius: 3 }, stageMarker: { position: 'absolute', top: 2, right: 2, width: 5, height: 5, borderRadius: 3, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.primary }, pixelSelected: { opacity: 0.56 },
   axis: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: spacing.sm, backgroundColor: colors.surface, borderBottomLeftRadius: radii.lg, borderBottomRightRadius: radii.lg }, axisText: { fontSize: 8 }, legend: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.lg }, legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 }, legendText: { fontSize: 9 }, observationNote: { marginTop: spacing.md, fontSize: 10, lineHeight: 17 }, addButton: { marginTop: spacing.lg }, originText: { marginTop: spacing.md, fontSize: 9, textAlign: 'center' }, emptyPixels: { padding: spacing.xl },
-  sheetContent: { paddingHorizontal: spacing.xl, paddingTop: spacing.xxl, paddingBottom: spacing.xl }, sheetTitle: { marginBottom: spacing.lg, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, sheetChoice: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth }, sheetChoiceLabel: { fontSize: 13, fontWeight: '600' }, sheetChoiceDetail: { marginTop: 2, fontSize: 9 }, check: { color: colors.primary, fontSize: 13, fontWeight: '700' },
+  sheetTitle: { marginBottom: spacing.lg, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, rangeDialogContent: { paddingHorizontal: spacing.xl, paddingTop: spacing.xxl, paddingBottom: spacing.xl }, rangeHint: { minHeight: 16, marginTop: -spacing.sm, marginBottom: spacing.md, fontSize: 10, lineHeight: 16, textAlign: 'center' }, yearWheel: { height: YEAR_WHEEL_ITEM_HEIGHT * 5, overflow: 'hidden', borderRadius: radii.md }, yearWheelContent: { paddingVertical: YEAR_WHEEL_ITEM_HEIGHT * 2 }, yearWheelSelection: { position: 'absolute', zIndex: 0, top: YEAR_WHEEL_ITEM_HEIGHT * 2, left: spacing.sm, right: spacing.sm, height: YEAR_WHEEL_ITEM_HEIGHT, borderRadius: radii.md, backgroundColor: colors.primarySoft }, yearWheelItem: { zIndex: 1, height: YEAR_WHEEL_ITEM_HEIGHT, alignItems: 'center', justifyContent: 'center' }, yearWheelText: { fontSize: 12 }, yearWheelTextActive: { color: colors.primary, fontSize: 16, fontWeight: '700' }, earlierYears: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm }, rangeApply: { marginTop: spacing.sm }, modifyOrigin: { minHeight: 44, alignItems: 'center', justifyContent: 'center', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }, check: { color: colors.primary, fontSize: 13, fontWeight: '700' },
   detailRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.sm, padding: spacing.md, borderRadius: radii.md }, detailBar: { width: 4, borderRadius: 2 }, detailCopy: { flex: 1 }, detailKind: { fontSize: 9 }, detailName: { marginTop: 2, fontSize: 13, fontWeight: '700' }, detailDates: { marginTop: 3, fontSize: 9 }, detailNote: { marginTop: spacing.sm, fontSize: 11, lineHeight: 17 }, detailActions: { justifyContent: 'space-between', alignItems: 'flex-end' }, detailEdit: { color: colors.primary, fontSize: 10, fontWeight: '700' }, detailDelete: { color: colors.danger, fontSize: 10 }, emptyDetail: { paddingVertical: spacing.xxl, fontSize: 11, textAlign: 'center' },
   formLabel: { marginTop: spacing.md, marginBottom: spacing.sm, fontSize: 10 }, categoryRow: { gap: spacing.xs, paddingBottom: spacing.xs }, categoryChoice: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: spacing.md, borderRadius: radii.pill }, categoryChoiceText: { fontSize: 11 }, newChoiceText: { color: colors.primary, fontSize: 11, fontWeight: '700' }, input: { minHeight: 46, paddingHorizontal: spacing.md, borderRadius: radii.md, fontSize: 13 }, noteInput: { minHeight: 92, paddingTop: spacing.md }, dateRow: { flexDirection: 'row', gap: spacing.md }, dateField: { flex: 1 }, dateButton: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md }, dateButtonText: { fontSize: 11 }, dateButtonAction: { color: colors.primary, fontSize: 9, fontWeight: '700' }, overwriteHint: { marginTop: spacing.md, fontSize: 9, lineHeight: 15 }, sheetPrimary: { marginTop: spacing.xl }, sheetCancel: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm }, sheetCancelText: { fontSize: 11 },
   saveOrigin: { alignSelf: 'flex-end', minHeight: 38, justifyContent: 'center' }, saveOriginText: { color: colors.primary, fontSize: 10, fontWeight: '700' }, disabledText: { opacity: 0.32 }, managerHint: { fontSize: 9, lineHeight: 15 }, managerSection: { marginTop: spacing.xl, marginBottom: spacing.xs, fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' }, managerRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth }, managerSwatch: { width: 18, height: 18, borderRadius: 6 }, managerName: { flex: 1, marginLeft: spacing.md, fontSize: 12 }, managerAction: { fontSize: 10 }, managerEmpty: { paddingVertical: spacing.md, fontSize: 10 },

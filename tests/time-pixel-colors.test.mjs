@@ -9,10 +9,12 @@ import { createTestDatabase } from './sqlite-test-adapter.mjs';
 
 const category = (id, kind, colorToken) => ({ id, kind, colorToken, name: id, createdAt: '', updatedAt: '' });
 
-test('preset palette preserves all eight saved colors and unknown-token fallback', () => {
+test('preset palette preserves all sixteen saved colors and unknown-token fallback', () => {
   assert.deepEqual(TIME_PIXEL_PALETTE.map(({ token, color }) => [token, color]), [
     ['fern', '#5B8C72'], ['mist', '#7E9FB8'], ['lavender', '#9A86B8'], ['amber', '#C69A4B'],
     ['rose', '#B8757C'], ['teal', '#4F9290'], ['slate', '#7C8793'], ['clay', '#A67C68'],
+    ['pine', '#346B63'], ['sky', '#5F86C2'], ['indigo', '#686AA8'], ['plum', '#9B5F8B'],
+    ['coral', '#C76F5B'], ['orange', '#C9823F'], ['olive', '#7E8C4B'], ['sand', '#B39A70'],
   ]);
   for (const item of TIME_PIXEL_PALETTE) assert.equal(timePixelColor(item.token), item.color);
   assert.equal(timePixelColor('unknown-backup-token'), TIME_PIXEL_PALETTE[0].color);
@@ -23,7 +25,7 @@ test('color usage counts same-layer peers, excluding the edited category', () =>
   assert.deepEqual(timePixelColorChoices(categories, 'location')[0].usedBy.map((item) => item.id), ['home', 'dorm']);
   assert.deepEqual(timePixelColorChoices(categories, 'location', 'home')[0].usedBy.map((item) => item.id), ['dorm']);
   assert.deepEqual(timePixelColorChoices(categories, 'stage', 'school')[0].usedBy, []);
-  assert.equal(timePixelColorChoices(categories, 'location').length, 8);
+  assert.equal(timePixelColorChoices(categories, 'location').length, 16);
   assert.equal(categories.length, 3);
 });
 
