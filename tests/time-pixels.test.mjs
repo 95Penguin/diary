@@ -13,7 +13,7 @@ import {
   updateTimePixelCategory,
 } from '../src/database/time-pixel-repository.ts';
 import { parseJournalBackup } from '../src/utils/backup-import.ts';
-import { mergeTimePixelRanges } from '../src/utils/time-pixels.ts';
+import { mergeTimePixelRanges, normalizeTimePixelSettings } from '../src/utils/time-pixels.ts';
 import { createTestDatabase } from './sqlite-test-adapter.mjs';
 
 async function setup() {
@@ -119,7 +119,7 @@ test('observation start uses the local date near midnight in both timezone direc
   }
 });
 
-test('moving the observation start resets an excluded year without deleting records or other preferences', async (t) => {
+test('a single-year view stays independent from the observation start', async (t) => {
   const db = await setup();
   t.after(() => db.close());
   await initializeTimePixels(db, '2018-01-01');
@@ -128,15 +128,17 @@ test('moving the observation start resets an excluded year without deleting reco
   await saveTimePixelPreferences(db, { rangeMode: 'year', selectedYear: 2020, unit: 'day', colorMode: 'stage' });
   await initializeTimePixels(db, '2022-01-01');
   const snapshot = await getTimePixelSnapshot(db);
-  assert.equal(snapshot.settings.rangeMode, 'all');
-  assert.equal(snapshot.settings.selectedYear, null);
+  assert.equal(snapshot.settings.rangeMode, 'year');
+  assert.equal(snapshot.settings.selectedYear, 2020);
   assert.equal(snapshot.settings.unit, 'day');
   assert.equal(snapshot.settings.colorMode, 'stage');
   assert.equal(snapshot.ranges[0].startDate, '2018-01-01');
   await saveTimePixelPreferences(db, { rangeMode: 'year', selectedYear: 2024 });
   await initializeTimePixels(db, '2023-01-01');
   assert.equal((await getTimePixelSnapshot(db)).settings.selectedYear, 2024);
-  await assert.rejects(saveTimePixelPreferences(db, { rangeMode: 'year', selectedYear: 2020 }), /invalid-time-pixel-preferences/);
+  await saveTimePixelPreferences(db, { rangeMode: 'year', selectedYear: 2020 });
+  assert.equal((await getTimePixelSnapshot(db)).settings.selectedYear, 2020);
+  await assert.rejects(saveTimePixelPreferences(db, { rangeMode: 'year', selectedYear: 1899 }), /invalid-selected-year/);
 });
 
 test('independent preference updates preserve each other under rapid changes', async (t) => {
@@ -196,17 +198,21 @@ test('range merge keeps local ties, notes, and leap-day boundaries', () => {
   assert.deepEqual(mergeTimePixelRanges(merged, incoming), merged);
 });
 
-test('backup validation rejects inconsistent year settings', async (t) => {
+test('backup validation keeps single-year views independent from the observation start', async (t) => {
   const db = await setup();
   t.after(() => db.close());
   await initializeTimePixels(db, '2020-01-01');
   const backup = await createJournalExport(db);
-  for (const selectedYear of [null, 2019, 2020.5]) {
+  for (const selectedYear of [null, 1899, 2020.5]) {
     backup.timePixelSettings = { ...backup.timePixelSettings, rangeMode: 'year', selectedYear };
     assert.throws(() => parseJournalBackup(JSON.stringify(backup)), /invalid-backup/);
   }
-  backup.timePixelSettings.selectedYear = 2020;
+  backup.timePixelSettings.selectedYear = 2019;
   assert.doesNotThrow(() => parseJournalBackup(JSON.stringify(backup)));
+  backup.timePixelSettings.selectedYear = 1948;
+  const legacy = parseJournalBackup(JSON.stringify(backup)).timePixelSettings;
+  assert.equal(legacy.rangeMode, 'year');
+  assert.deepEqual(normalizeTimePixelSettings(legacy, '2026-10-04'), legacy);
   backup.timePixelSettings.rangeMode = 'all';
   assert.throws(() => parseJournalBackup(JSON.stringify(backup)), /invalid-backup/);
 });

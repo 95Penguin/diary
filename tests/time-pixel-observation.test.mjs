@@ -34,6 +34,13 @@ test('month sections retain year labels and year view retains compact multi-year
   assert.throws(() => buildPixelSections([], 'day', 0));
 });
 
+test('a selected year remains visible before the observation start', () => {
+  const early = range('school', '2015-09-01', '2015-09-02');
+  const built = buildPixelGroups(snapshot([early]), { ...settings, originDate: '2020-01-01', rangeMode: 'year', selectedYear: 2015, unit: 'month' }, '2026-10-04');
+  assert.deepEqual(built.bounds, { start: '2015-01-01', end: '2015-12-31' });
+  assert.equal(built.recordedDays, 2);
+});
+
 test('note presence spans its full range in either layer and remains independent of stage-start dots', () => {
   const ranges = [range('home', '2023-12-30', '2024-01-01', { note: '回家' }), range('stage', '2024-01-01', '2024-01-03', { kind: 'stage', note: '上学' })];
   for (const colorMode of ['location', 'stage']) {
@@ -67,8 +74,8 @@ test('coarse note presence aggregates only visible elapsed days, including leap 
   assert.equal(built.futureDays, 305);
   const years = buildPixelGroups(snapshot(ranges), { ...selected, unit: 'year' }, '2024-03-01');
   assert.equal(years.groups[0].hasNote, true);
-  const clipped = buildPixelGroups(snapshot(ranges), { ...selected, originDate: '2024-03-01' }, '2024-03-01');
-  assert.equal(clipped.groups.some((item) => item.hasNote), false);
+  const independent = buildPixelGroups(snapshot(ranges), { ...selected, originDate: '2024-03-01' }, '2024-03-01');
+  assert.equal(independent.groups.some((item) => item.hasNote), true);
 });
 
 test('focused category fill keeps future days blank in the current month and year', () => {

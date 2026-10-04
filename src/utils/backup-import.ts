@@ -1,6 +1,6 @@
 import type { JournalBackup } from '@/domain/journal';
 import { parseJournalTemplateSettings } from './journal-templates.ts';
-import { isTimePixelDate } from './time-pixels.ts';
+import { EARLIEST_TIME_PIXEL_YEAR, isTimePixelDate } from './time-pixels.ts';
 
 function isString(value: unknown): value is string { return typeof value === 'string'; }
 function isNullableString(value: unknown): value is string | null { return value === null || isString(value); }
@@ -64,7 +64,7 @@ export function parseJournalBackup(contents: string): JournalBackup {
     && (backup.timePixelSettings.rangeMode === 'all' || backup.timePixelSettings.rangeMode === 'year')
     && (backup.timePixelSettings.rangeMode === 'all' ? backup.timePixelSettings.selectedYear === null
       : Number.isInteger(backup.timePixelSettings.selectedYear) && backup.timePixelSettings.selectedYear !== null
-        && backup.timePixelSettings.selectedYear >= Number(backup.timePixelSettings.originDate.slice(0, 4))
+        && backup.timePixelSettings.selectedYear >= EARLIEST_TIME_PIXEL_YEAR
         && backup.timePixelSettings.selectedYear <= 9999)
     && (backup.timePixelSettings.unit === 'year' || backup.timePixelSettings.unit === 'month' || backup.timePixelSettings.unit === 'day')
     && (backup.timePixelSettings.colorMode === 'location' || backup.timePixelSettings.colorMode === 'stage')

@@ -16,8 +16,7 @@ function nextDate(value: string) { return new Date(utcTime(value) + 86_400_000).
 
 function rangeBounds(settings: TimePixelSettings, today: string) {
   if (settings.rangeMode === 'year' && settings.selectedYear) {
-    const start = `${settings.selectedYear}-01-01`;
-    return { start: settings.originDate > start ? settings.originDate : start, end: `${settings.selectedYear}-12-31` };
+    return { start: `${settings.selectedYear}-01-01`, end: `${settings.selectedYear}-12-31` };
   }
   return { start: settings.originDate, end: today };
 }

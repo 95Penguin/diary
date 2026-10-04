@@ -1,14 +1,17 @@
 import type { TimePixelRange, TimePixelSettings } from '../database/time-pixel-repository.ts';
 
+export const EARLIEST_TIME_PIXEL_YEAR = 1900;
+export const EARLIEST_TIME_PIXEL_DATE = `${EARLIEST_TIME_PIXEL_YEAR}-01-01`;
+
 export function isTimePixelDate(value: unknown): value is string {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value < '1900-01-01') return false;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value < EARLIEST_TIME_PIXEL_DATE) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 export function normalizeTimePixelSettings(settings: TimePixelSettings, today: string): TimePixelSettings {
   if (settings.rangeMode !== 'year' || !Number.isInteger(settings.selectedYear)
-    || settings.selectedYear! < Number(settings.originDate.slice(0, 4))
+    || settings.selectedYear! < EARLIEST_TIME_PIXEL_YEAR
     || settings.selectedYear! > Number(today.slice(0, 4))) {
     return { ...settings, rangeMode: 'all', selectedYear: null };
   }

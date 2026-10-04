@@ -1,7 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { localDateKey } from '../utils/entry-time-range.ts';
 import { timePixelSaveImpact } from '../utils/time-pixel-impact.ts';
-import { isTimePixelDate, mergeTimePixelRanges, normalizeTimePixelSettings } from '../utils/time-pixels.ts';
+import { EARLIEST_TIME_PIXEL_YEAR, isTimePixelDate, mergeTimePixelRanges, normalizeTimePixelSettings } from '../utils/time-pixels.ts';
 
 export type TimePixelKind = 'location' | 'stage';
 export type TimePixelUnit = 'year' | 'month' | 'day';
@@ -94,9 +94,7 @@ export async function initializeTimePixels(db: SQLiteDatabase, originDate: strin
   await db.runAsync(
     `INSERT INTO time_pixel_settings (id, origin_date, range_mode, selected_year, unit, color_mode, updated_at)
      VALUES (1, ?, 'all', NULL, 'month', 'location', ?)
-     ON CONFLICT(id) DO UPDATE SET origin_date = excluded.origin_date, updated_at = excluded.updated_at,
-       range_mode = CASE WHEN selected_year < CAST(substr(excluded.origin_date, 1, 4) AS INTEGER) THEN 'all' ELSE range_mode END,
-       selected_year = CASE WHEN selected_year < CAST(substr(excluded.origin_date, 1, 4) AS INTEGER) THEN NULL ELSE selected_year END`,
+     ON CONFLICT(id) DO UPDATE SET origin_date = excluded.origin_date, updated_at = excluded.updated_at`,
     originDate, updatedAt,
   );
 }
@@ -107,7 +105,7 @@ export async function saveTimePixelPreferences(
   now = new Date(),
 ) {
   if ((input.rangeMode !== undefined && !['all', 'year'].includes(input.rangeMode)) || (input.unit !== undefined && !['year', 'month', 'day'].includes(input.unit)) || (input.colorMode !== undefined && !['location', 'stage'].includes(input.colorMode))) throw new Error('invalid-time-pixel-preferences');
-  if (input.rangeMode === 'year' && (!Number.isInteger(input.selectedYear) || (input.selectedYear ?? 0) < 1900 || (input.selectedYear ?? 0) > now.getFullYear())) throw new Error('invalid-selected-year');
+  if (input.rangeMode === 'year' && (!Number.isInteger(input.selectedYear) || (input.selectedYear ?? 0) < EARLIEST_TIME_PIXEL_YEAR || (input.selectedYear ?? 0) > now.getFullYear())) throw new Error('invalid-selected-year');
   if (input.selectedYear !== undefined && input.rangeMode === undefined) throw new Error('invalid-selected-year');
   const fields: string[] = [];
   const values: (string | number | null)[] = [];
@@ -118,11 +116,9 @@ export async function saveTimePixelPreferences(
     values.push(input.rangeMode, input.rangeMode === 'year' ? input.selectedYear! : null);
   }
   if (!fields.length) return;
-  const selectedYear = input.rangeMode === 'year' ? input.selectedYear! : null;
   const result = await db.runAsync(
-    `UPDATE time_pixel_settings SET ${fields.join(', ')}, updated_at = ? WHERE id = 1
-     AND (? IS NULL OR ? >= CAST(substr(origin_date, 1, 4) AS INTEGER))`,
-    ...values, now.toISOString(), selectedYear, selectedYear,
+    `UPDATE time_pixel_settings SET ${fields.join(', ')}, updated_at = ? WHERE id = 1`,
+    ...values, now.toISOString(),
   );
   if (!result.changes) throw new Error('invalid-time-pixel-preferences');
 }
