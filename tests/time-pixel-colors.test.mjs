@@ -4,7 +4,7 @@ import test from 'node:test';
 import { createJournalExport } from '../src/database/journal-repository.ts';
 import { migrateDatabase } from '../src/database/migrate.ts';
 import { createTimePixelCategory, getTimePixelSnapshot, initializeTimePixels, saveTimePixelRange, updateTimePixelCategory } from '../src/database/time-pixel-repository.ts';
-import { TIME_PIXEL_LEGACY_PALETTE, TIME_PIXEL_PALETTE, suggestedTimePixelColor, timePixelColor, timePixelColorChoices } from '../src/utils/time-pixel-colors.ts';
+import { TIME_PIXEL_LEGACY_PALETTE, TIME_PIXEL_PALETTE, suggestedTimePixelColor, timePixelColor, timePixelColorChoices, timePixelTextColor } from '../src/utils/time-pixel-colors.ts';
 import { createTestDatabase } from './sqlite-test-adapter.mjs';
 
 const category = (id, kind, colorToken) => ({ id, kind, colorToken, name: id, createdAt: '', updatedAt: '' });
@@ -22,6 +22,21 @@ test('new palette has seven balanced families while preserving every v1.0.10 sav
   for (const item of TIME_PIXEL_PALETTE) assert.equal(timePixelColor(item.token), item.color);
   for (const item of TIME_PIXEL_LEGACY_PALETTE) assert.equal(timePixelColor(item.token), item.color);
   assert.equal(timePixelColor('unknown-backup-token'), TIME_PIXEL_PALETTE[0].color);
+});
+
+test('pixel labels choose readable text without adding a background', () => {
+  const luminance = (color) => color.slice(1).match(/.{2}/g)
+    .map((channel) => Number.parseInt(channel, 16) / 255)
+    .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+    .reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0);
+  const contrast = (first, second) => {
+    const values = [luminance(first), luminance(second)].sort((a, b) => b - a);
+    return (values[0] + 0.05) / (values[1] + 0.05);
+  };
+  for (const item of [...TIME_PIXEL_PALETTE, ...TIME_PIXEL_LEGACY_PALETTE]) {
+    const text = timePixelTextColor(item.token);
+    assert.ok(contrast(item.color, text) >= 4.5, `${item.label}的文字对比度不足`);
+  }
 });
 
 test('color usage counts same-layer peers, excluding the edited category', () => {

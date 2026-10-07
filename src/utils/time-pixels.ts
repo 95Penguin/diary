@@ -10,6 +10,9 @@ export function isTimePixelDate(value: unknown): value is string {
 }
 
 export function normalizeTimePixelSettings(settings: TimePixelSettings, today: string): TimePixelSettings {
+  if (settings.endYear != null && (!Number.isInteger(settings.endYear)
+    || settings.endYear < Number(settings.originDate.slice(0, 4))
+    || settings.endYear > Number(today.slice(0, 4)))) settings = { ...settings, endYear: null };
   if (settings.rangeMode !== 'year' || !Number.isInteger(settings.selectedYear)
     || settings.selectedYear! < EARLIEST_TIME_PIXEL_YEAR
     || settings.selectedYear! > Number(today.slice(0, 4))) {

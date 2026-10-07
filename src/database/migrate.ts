@@ -7,7 +7,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
  * migrated in production: data from those builds must first be exported by the
  * old build and restored through the validated ZIP backup flow.
  */
-export const DATABASE_VERSION = 20;
+export const DATABASE_VERSION = 21;
 export const DATABASE_BASELINE_VERSION = 13;
 
 const SEARCH_INDEX_SCHEMA = `
@@ -411,6 +411,12 @@ const MIGRATION_19_TO_20 = `
     ON time_pixel_ranges(category_id, start_date ASC);
 `;
 
+const MIGRATION_20_TO_21 = `
+  ALTER TABLE time_pixel_settings ADD COLUMN end_year INTEGER;
+  ALTER TABLE time_pixel_settings ADD COLUMN unit_customized INTEGER NOT NULL DEFAULT 0;
+  UPDATE time_pixel_settings SET origin_date = substr(origin_date, 1, 4) || '-01-01', unit_customized = 1;
+`;
+
 export async function migrateDatabase(db: SQLiteDatabase) {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
@@ -430,17 +436,18 @@ export async function migrateDatabase(db: SQLiteDatabase) {
   try {
     if (currentVersion === 0) {
       await db.execAsync(BASELINE_SCHEMA);
-    } else if (currentVersion >= 13 && currentVersion <= 19) {
+    } else if (currentVersion >= 13 && currentVersion <= 20) {
       if (currentVersion === 13) await db.execAsync(MIGRATION_13_TO_14);
       if (currentVersion <= 14) await db.execAsync(MIGRATION_14_TO_15);
       if (currentVersion <= 15) await db.execAsync(MIGRATION_15_TO_16);
       if (currentVersion <= 16) await db.execAsync(MIGRATION_16_TO_17);
       if (currentVersion <= 17) await db.execAsync(MIGRATION_17_TO_18);
       if (currentVersion <= 18) await db.execAsync(MIGRATION_18_TO_19);
-      await db.execAsync(MIGRATION_19_TO_20);
+      if (currentVersion <= 19) await db.execAsync(MIGRATION_19_TO_20);
     } else {
       throw new Error(`没有可用的数据库迁移路径：${currentVersion} → ${DATABASE_VERSION}`);
     }
+    await db.execAsync(MIGRATION_20_TO_21);
     await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION}; COMMIT`);
   } catch (error) {
     try {

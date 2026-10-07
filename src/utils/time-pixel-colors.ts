@@ -72,6 +72,23 @@ export function timePixelColor(token: string) {
   return ALL_TIME_PIXEL_COLORS.find((item) => item.token === token)?.color ?? TIME_PIXEL_PALETTE[0].color;
 }
 
+function relativeLuminance(color: string) {
+  const channels = [1, 3, 5].map((index) => Number.parseInt(color.slice(index, index + 2), 16) / 255)
+    .map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function contrastRatio(first: string, second: string) {
+  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+export function timePixelTextColor(token: string) {
+  const background = timePixelColor(token);
+  return contrastRatio(background, '#000000') >= contrastRatio(background, '#FFFFFF') ? '#000000' : '#FFFFFF';
+}
+
 export function timePixelColorChoices(categories: TimePixelCategory[], kind: TimePixelKind, excludeId?: string) {
   const others = categories.filter((category) => category.kind === kind && category.id !== excludeId);
   const currentToken = excludeId ? categories.find((category) => category.id === excludeId)?.colorToken : undefined;

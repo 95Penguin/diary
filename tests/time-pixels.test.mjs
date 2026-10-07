@@ -68,6 +68,8 @@ test('time pixel names, colors and last-used view preferences persist', async (t
   assert.equal(snapshot.categories[0].colorToken, 'rose');
   assert.deepEqual(snapshot.settings, {
     originDate: '2018-09-01',
+    endYear: null,
+    unitCustomized: false,
     rangeMode: 'year',
     selectedYear: 2024,
     unit: 'day',

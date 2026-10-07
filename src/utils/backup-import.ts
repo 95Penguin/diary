@@ -61,6 +61,10 @@ export function parseJournalBackup(contents: string): JournalBackup {
   const validTimePixelSettings = backup.timePixelSettings === undefined || (backup.timePixelSettings !== null && typeof backup.timePixelSettings === 'object'
     &&
     isTimePixelDate(backup.timePixelSettings.originDate)
+    && (backup.timePixelSettings.endYear == null || (Number.isInteger(backup.timePixelSettings.endYear)
+      && backup.timePixelSettings.endYear >= Number(backup.timePixelSettings.originDate.slice(0, 4))
+      && backup.timePixelSettings.endYear <= 9999))
+    && (backup.timePixelSettings.unitCustomized === undefined || typeof backup.timePixelSettings.unitCustomized === 'boolean')
     && (backup.timePixelSettings.rangeMode === 'all' || backup.timePixelSettings.rangeMode === 'year')
     && (backup.timePixelSettings.rangeMode === 'all' ? backup.timePixelSettings.selectedYear === null
       : Number.isInteger(backup.timePixelSettings.selectedYear) && backup.timePixelSettings.selectedYear !== null

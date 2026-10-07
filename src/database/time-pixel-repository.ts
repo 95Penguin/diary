@@ -28,9 +28,12 @@ export type TimePixelRange = {
 };
 
 export type TimePixelSettings = {
+  // Keep legacy field names for backups: 'all' now means the saved multi-year range.
   originDate: string;
   rangeMode: TimePixelRangeMode;
   selectedYear: number | null;
+  endYear?: number | null; // null follows today; a number ends on December 31.
+  unitCustomized?: boolean;
   unit: TimePixelUnit;
   colorMode: TimePixelKind;
   updatedAt: string;
@@ -44,7 +47,7 @@ export type TimePixelSnapshot = {
 
 type CategoryRow = { id: string; kind: TimePixelKind; name: string; color_token: string; created_at: string; updated_at: string };
 type RangeRow = { id: string; kind: TimePixelKind; category_id: string; start_date: string; end_date: string; note: string | null; created_at: string; updated_at: string };
-type SettingsRow = { origin_date: string; range_mode: TimePixelRangeMode; selected_year: number | null; unit: TimePixelUnit; color_mode: TimePixelKind; updated_at: string };
+type SettingsRow = { origin_date: string; range_mode: TimePixelRangeMode; selected_year: number | null; end_year: number | null; unit_customized: number; unit: TimePixelUnit; color_mode: TimePixelKind; updated_at: string };
 
 function createId(prefix: string) { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; }
 function shiftedDate(value: string, days: number) {
@@ -72,12 +75,12 @@ function rangeFromRow(row: RangeRow): TimePixelRange {
   return { id: row.id, kind: row.kind, categoryId: row.category_id, startDate: row.start_date, endDate: row.end_date, note: row.note, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 function settingsFromRow(row: SettingsRow): TimePixelSettings {
-  return { originDate: row.origin_date, rangeMode: row.range_mode, selectedYear: row.selected_year, unit: row.unit, colorMode: row.color_mode, updatedAt: row.updated_at };
+  return { originDate: row.origin_date, rangeMode: row.range_mode, selectedYear: row.selected_year, endYear: row.end_year, unitCustomized: Boolean(row.unit_customized), unit: row.unit, colorMode: row.color_mode, updatedAt: row.updated_at };
 }
 
 export async function getTimePixelSnapshot(db: SQLiteDatabase): Promise<TimePixelSnapshot> {
   const [settings, categoryRows, rangeRows] = await Promise.all([
-    db.getFirstAsync<SettingsRow>('SELECT origin_date, range_mode, selected_year, unit, color_mode, updated_at FROM time_pixel_settings WHERE id = 1'),
+    db.getFirstAsync<SettingsRow>('SELECT * FROM time_pixel_settings WHERE id = 1'),
     db.getAllAsync<CategoryRow>('SELECT id, kind, name, color_token, created_at, updated_at FROM time_pixel_categories ORDER BY kind, created_at, name'),
     db.getAllAsync<RangeRow>('SELECT id, kind, category_id, start_date, end_date, note, created_at, updated_at FROM time_pixel_ranges ORDER BY start_date, end_date, created_at'),
   ]);
@@ -101,14 +104,26 @@ export async function initializeTimePixels(db: SQLiteDatabase, originDate: strin
 
 export async function saveTimePixelPreferences(
   db: SQLiteDatabase,
-  input: Partial<Pick<TimePixelSettings, 'rangeMode' | 'selectedYear' | 'unit' | 'colorMode'>>,
+  input: Partial<Pick<TimePixelSettings, 'originDate' | 'endYear' | 'unitCustomized' | 'rangeMode' | 'selectedYear' | 'unit' | 'colorMode'>>,
   now = new Date(),
 ) {
   if ((input.rangeMode !== undefined && !['all', 'year'].includes(input.rangeMode)) || (input.unit !== undefined && !['year', 'month', 'day'].includes(input.unit)) || (input.colorMode !== undefined && !['location', 'stage'].includes(input.colorMode))) throw new Error('invalid-time-pixel-preferences');
   if (input.rangeMode === 'year' && (!Number.isInteger(input.selectedYear) || (input.selectedYear ?? 0) < EARLIEST_TIME_PIXEL_YEAR || (input.selectedYear ?? 0) > now.getFullYear())) throw new Error('invalid-selected-year');
   if (input.selectedYear !== undefined && input.rangeMode === undefined) throw new Error('invalid-selected-year');
+  if (input.originDate !== undefined && (!isTimePixelDate(input.originDate) || !input.originDate.endsWith('-01-01') || input.originDate > localDateKey(now))) throw new Error('invalid-origin-date');
+  if (input.endYear !== undefined && input.endYear !== null && (!Number.isInteger(input.endYear) || input.endYear < EARLIEST_TIME_PIXEL_YEAR || input.endYear > now.getFullYear())) throw new Error('invalid-end-year');
+  if (input.originDate !== undefined || input.endYear !== undefined) {
+    const current = await db.getFirstAsync<SettingsRow>('SELECT * FROM time_pixel_settings WHERE id = 1');
+    const start = Number((input.originDate ?? current?.origin_date ?? '').slice(0, 4));
+    const end = input.endYear === undefined ? current?.end_year : input.endYear;
+    if (!start || (end != null && start > end)) throw new Error('invalid-date-range');
+  }
+  if (input.unitCustomized !== undefined && typeof input.unitCustomized !== 'boolean') throw new Error('invalid-time-pixel-preferences');
   const fields: string[] = [];
   const values: (string | number | null)[] = [];
+  if (input.originDate !== undefined) { fields.push('origin_date = ?'); values.push(input.originDate); }
+  if (input.endYear !== undefined) { fields.push('end_year = ?'); values.push(input.endYear); }
+  if (input.unitCustomized !== undefined) { fields.push('unit_customized = ?'); values.push(Number(input.unitCustomized)); }
   if (input.unit !== undefined) { fields.push('unit = ?'); values.push(input.unit); }
   if (input.colorMode !== undefined) { fields.push('color_mode = ?'); values.push(input.colorMode); }
   if (input.rangeMode !== undefined) {

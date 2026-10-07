@@ -7,7 +7,6 @@ export type PixelGroup = {
   counts: Map<string, number>;
   elapsedDays: number;
   totalDays: number;
-  hasStageStart: boolean;
   hasNote: boolean;
 };
 
@@ -18,7 +17,7 @@ function rangeBounds(settings: TimePixelSettings, today: string) {
   if (settings.rangeMode === 'year' && settings.selectedYear) {
     return { start: `${settings.selectedYear}-01-01`, end: `${settings.selectedYear}-12-31` };
   }
-  return { start: settings.originDate, end: today };
+  return { start: settings.originDate, end: settings.endYear ? `${settings.endYear}-12-31` : today };
 }
 
 export function buildPixelGroups(snapshot: TimePixelSnapshot, settings: TimePixelSettings, today: string) {
@@ -33,19 +32,6 @@ export function buildPixelGroups(snapshot: TimePixelSnapshot, settings: TimePixe
     if (first > last) continue;
     for (let value = first; value <= last; value = nextDate(value)) assignments.set(value, range);
   }
-  // Range rows can be split when a note or overlap is edited. A stage marker is
-  // a real category transition, not merely the start of one of those fragments.
-  const stageAssignments = new Map<string, TimePixelRange>();
-  const dayBeforeStart = new Date(utcTime(start) - 86_400_000).toISOString().slice(0, 10);
-  const stages = snapshot.ranges
-    .filter((range) => range.kind === 'stage')
-    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.createdAt.localeCompare(b.createdAt));
-  for (const range of stages) {
-    const first = range.startDate > dayBeforeStart ? range.startDate : dayBeforeStart;
-    const last = range.endDate < end ? range.endDate : end;
-    if (first > last) continue;
-    for (let value = first; value <= last; value = nextDate(value)) stageAssignments.set(value, range);
-  }
   // Notes belong to whole ranges; mark every intersecting day, in either layer.
   const notedDays = new Set<string>();
   for (const range of snapshot.ranges.filter((item) => item.note?.trim())) {
@@ -58,11 +44,9 @@ export function buildPixelGroups(snapshot: TimePixelSnapshot, settings: TimePixe
   let recordedDays = 0;
   let elapsedDays = 0;
   let futureDays = 0;
-  let previousStageId = stageAssignments.get(dayBeforeStart)?.categoryId ?? null;
   for (let value = start; value <= end; value = nextDate(value)) {
     const future = value > today;
     const range = future ? null : assignments.get(value) ?? null;
-    const stageId = future ? null : stageAssignments.get(value)?.categoryId ?? null;
     const categoryId = future ? '__future' : range?.categoryId ?? '__unknown';
     if (future) futureDays += 1;
     else {
@@ -70,17 +54,25 @@ export function buildPixelGroups(snapshot: TimePixelSnapshot, settings: TimePixe
       if (range) { recordedDays += 1; totals.set(range.categoryId, (totals.get(range.categoryId) ?? 0) + 1); }
     }
     const key = settings.unit === 'day' ? value : settings.unit === 'month' ? value.slice(0, 7) : value.slice(0, 4);
-    const existing = groups.get(key) ?? { key, startDate: value, endDate: value, counts: new Map(), elapsedDays: 0, totalDays: 0, hasStageStart: false, hasNote: false };
+    const existing = groups.get(key) ?? { key, startDate: value, endDate: value, counts: new Map(), elapsedDays: 0, totalDays: 0, hasNote: false };
     existing.endDate = value;
     existing.totalDays += 1;
     if (!future) existing.elapsedDays += 1;
     existing.counts.set(categoryId, (existing.counts.get(categoryId) ?? 0) + 1);
-    existing.hasStageStart ||= !future && stageId !== null && stageId !== previousStageId;
     existing.hasNote ||= notedDays.has(value);
     groups.set(key, existing);
-    previousStageId = stageId;
   }
   return { groups: [...groups.values()], totals, recordedDays, elapsedDays, futureDays, bounds: { start, end } };
+}
+
+export function labelForPixelGroup(group: Pick<PixelGroup, 'key' | 'startDate'>, unit: TimePixelUnit) {
+  if (unit === 'year') return group.key;
+  if (unit === 'month') return `${Number(group.key.slice(5))}月`;
+  return group.startDate.endsWith('-01') ? `${Number(group.startDate.slice(5, 7))}` : '';
+}
+
+export function hasTimePixelRangeOnDate(ranges: TimePixelRange[], kind: TimePixelRange['kind'], date: string) {
+  return ranges.some((range) => range.kind === kind && range.startDate <= date && range.endDate >= date);
 }
 
 export function buildPixelSections(groups: PixelGroup[], unit: TimePixelUnit, columns: number) {
@@ -98,13 +90,4 @@ export function buildPixelSections(groups: PixelGroup[], unit: TimePixelUnit, co
     title: key === 'overview' ? '年份总览' : `${key}年`,
     data: Array.from({ length: Math.ceil(items.length / columns) }, (_, index) => items.slice(index * columns, (index + 1) * columns)),
   }));
-}
-
-export function focusedPixelFill(group: PixelGroup, categoryId: string) {
-  const focusedDays = group.counts.get(categoryId) ?? 0;
-  return {
-    elapsedDays: group.elapsedDays,
-    futureDays: Math.max(0, group.totalDays - group.elapsedDays),
-    opacity: focusedDays && group.elapsedDays ? 0.12 + 0.88 * focusedDays / group.elapsedDays : 0,
-  };
 }

@@ -45,6 +45,8 @@ export type JournalBackup = {
     originDate: string;
     rangeMode: 'all' | 'year';
     selectedYear: number | null;
+    endYear?: number | null;
+    unitCustomized?: boolean;
     unit: 'year' | 'month' | 'day';
     colorMode: 'location' | 'stage';
     updatedAt: string;

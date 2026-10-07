@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, InteractionManager, Keyboard, KeyboardAvoidingView, Modal, SectionList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Modal, PanResponder, SectionList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type StyleProp, type ViewStyle } from 'react-native';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router, useFocusEffect } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
@@ -7,7 +7,6 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { TimePixelColorPicker } from '@/components/time-pixel-color-picker';
-import { showAppDialog } from '@/components/app-dialog-host';
 import { ButtonLabel, CompactPillButton, PrimaryButton, buttonMetrics } from '@/components/ui/buttons';
 import {
   createTimePixelCategory,
@@ -27,14 +26,15 @@ import {
 } from '@/database/time-pixel-repository';
 import { useAppPreferences } from '@/preferences/app-preferences';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
-import { buildPixelGroups, buildPixelSections, focusedPixelFill, type PixelGroup } from '@/utils/time-pixel-display';
+import { buildPixelGroups, buildPixelSections, hasTimePixelRangeOnDate, labelForPixelGroup, type PixelGroup } from '@/utils/time-pixel-display';
 import { timePixelSaveImpact } from '@/utils/time-pixel-impact';
 import { EARLIEST_TIME_PIXEL_DATE, EARLIEST_TIME_PIXEL_YEAR, isTimePixelDate } from '@/utils/time-pixels';
 
-import { TIME_PIXEL_PALETTE as PALETTE, suggestedTimePixelColor, timePixelColor as categoryColor } from '@/utils/time-pixel-colors';
+import { TIME_PIXEL_PALETTE as PALETTE, suggestedTimePixelColor, timePixelColor as categoryColor, timePixelTextColor } from '@/utils/time-pixel-colors';
 
 type EditorState = { kind: TimePixelKind; range: TimePixelRange | null } | null;
-type ReturnView = Pick<TimePixelSettings, 'rangeMode' | 'selectedYear' | 'unit'> & { scrollOffset: number };
+type ViewPreferences = Partial<Pick<TimePixelSettings, 'originDate' | 'endYear' | 'unitCustomized' | 'rangeMode' | 'selectedYear' | 'unit' | 'colorMode'>>;
+type ReturnView = Pick<TimePixelSettings, 'originDate' | 'endYear' | 'rangeMode' | 'selectedYear' | 'unit'> & { scrollOffset: number };
 type InlineNotice = { title: string; message: string };
 
 const YEAR_WHEEL_ITEM_HEIGHT = 48;
@@ -58,15 +58,17 @@ export default function TimePixelsScreen() {
   const [snapshot, setSnapshot] = useState<TimePixelSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [originDraft, setOriginDraft] = useState(`${new Date().getFullYear()}-01-01`);
   const [rangeVisible, setRangeVisible] = useState(false);
   const [rangeModeDraft, setRangeModeDraft] = useState<TimePixelRangeMode>('all');
   const [rangeYearDraft, setRangeYearDraft] = useState(currentYear);
+  const [rangeStartDraft, setRangeStartDraft] = useState(currentYear);
+  const [rangeEndDraft, setRangeEndDraft] = useState<number | null>(null);
   const [editor, setEditor] = useState<EditorState>(null);
   const [detail, setDetail] = useState<PixelGroup | null>(null);
   const [managerVisible, setManagerVisible] = useState(false);
   const [managerCategory, setManagerCategory] = useState<TimePixelCategory | null>(null);
   const [pageNotice, setPageNotice] = useState<string | null>(null);
+  const [savedOutsideYear, setSavedOutsideYear] = useState<number | null>(null);
   const [editorNotice, setEditorNotice] = useState<InlineNotice | null>(null);
   const [managerNotice, setManagerNotice] = useState<InlineNotice | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<TimePixelRange | null>(null);
@@ -78,15 +80,16 @@ export default function TimePixelsScreen() {
   const [returnView, setReturnView] = useState<ReturnView | null>(null);
   const [restoreOffset, setRestoreOffset] = useState<number | null>(null);
   const scrollOffset = useRef(0);
+  const visibleOffset = useRef(0);
   const [editorCategoryId, setEditorCategoryId] = useState<string | 'new'>('new');
   const [editorName, setEditorName] = useState('');
   const [editorColor, setEditorColor] = useState<string>(PALETTE[0].token);
   const [editorStart, setEditorStart] = useState(today);
   const [editorEnd, setEditorEnd] = useState(today);
+  const [editorDateMode, setEditorDateMode] = useState<'day' | 'range'>('day');
   const [editorNote, setEditorNote] = useState('');
   const [managerName, setManagerName] = useState('');
   const [managerColor, setManagerColor] = useState<string>(PALETTE[0].token);
-  const [managerOrigin, setManagerOrigin] = useState(originDraft);
   const preferenceQueue = useRef<Promise<void>>(Promise.resolve());
   const loadSequence = useRef(0);
 
@@ -99,13 +102,14 @@ export default function TimePixelsScreen() {
         pending = preferenceQueue.current;
         await pending;
         data = await getTimePixelSnapshot(db);
+        if (!data.settings) {
+          await initializeTimePixels(db, `${new Date().getFullYear()}-01-01`);
+          await saveTimePixelPreferences(db, { rangeMode: 'year', selectedYear: new Date().getFullYear(), unit: 'day' });
+          data = await getTimePixelSnapshot(db);
+        }
       } while (pending !== preferenceQueue.current);
       if (sequence !== loadSequence.current) return;
       setSnapshot(data);
-      if (data.settings) {
-        setOriginDraft(data.settings.originDate);
-        setManagerOrigin(data.settings.originDate);
-      }
       setLoadError(false);
     } catch { if (sequence === loadSequence.current) setLoadError(true); }
     finally { if (sequence === loadSequence.current) setLoading(false); }
@@ -125,17 +129,7 @@ export default function TimePixelsScreen() {
   const cellWidth = Math.max(5, (contentWidth - gridPadding - cellGap * (columns - 1)) / columns);
   const sections = useMemo(() => buildPixelSections(built?.groups ?? [], settings?.unit ?? 'day', columns), [built?.groups, columns, settings?.unit]);
 
-  async function initialize() {
-    if (!isTimePixelDate(originDraft) || originDraft < EARLIEST_TIME_PIXEL_DATE || originDraft > today) {
-      await showAppDialog({ title: '日期不正确', message: `观察起点需要在 ${formatDate(EARLIEST_TIME_PIXEL_DATE)} 至今天之间。` });
-      return;
-    }
-    try { setSaving(true); await initializeTimePixels(db, originDraft); await load(); }
-    catch { await showAppDialog({ title: '暂时无法开始', message: '观察起点没有保存，请稍后重试。' }); }
-    finally { setSaving(false); }
-  }
-
-  async function updatePreferences(next: Partial<Pick<TimePixelSettings, 'rangeMode' | 'selectedYear' | 'unit' | 'colorMode'>>) {
+  async function updatePreferences(next: ViewPreferences) {
     if (!settings) return;
     setSnapshot((current) => current?.settings ? { ...current, settings: { ...current.settings, ...next } } : current);
     if (next.colorMode) setFocusedCategoryId(null);
@@ -148,7 +142,7 @@ export default function TimePixelsScreen() {
   async function expandYear(year: number, unit: 'month' | 'day') {
     if (!settings) return;
     const firstExpansion = !returnView;
-    if (firstExpansion) setReturnView({ rangeMode: settings.rangeMode, selectedYear: settings.selectedYear, unit: settings.unit, scrollOffset: scrollOffset.current });
+    if (firstExpansion) setReturnView({ originDate: settings.originDate, endYear: settings.endYear, rangeMode: settings.rangeMode, selectedYear: settings.selectedYear, unit: settings.unit, scrollOffset: scrollOffset.current });
     setDetail(null);
     const saved = await updatePreferences({ rangeMode: 'year', selectedYear: year, unit });
     if (!saved && firstExpansion) setReturnView(null);
@@ -170,50 +164,61 @@ export default function TimePixelsScreen() {
     const selectedYear = settings.rangeMode === 'year' && settings.selectedYear !== null ? settings.selectedYear : currentYear;
     setRangeModeDraft(settings.rangeMode);
     setRangeYearDraft(selectedYear);
+    setRangeStartDraft(Number(settings.originDate.slice(0, 4)));
+    setRangeEndDraft(settings.endYear ?? null);
     setRangeVisible(true);
   }
 
   function openManagerSettings() {
     if (!settings || saving) return;
-    setManagerOrigin(settings.originDate);
     setManagerCategory(null);
     setManagerNotice(null);
     setManagerVisible(true);
   }
 
-  function openManagerFromRange() {
-    if (saving) return;
-    setRangeVisible(false);
-    InteractionManager.runAfterInteractions(openManagerSettings);
-  }
-
-  async function applyRangeYear() {
-    if (saving) return;
+  async function applyRange() {
+    if (saving || !settings) return;
+    const single = rangeModeDraft === 'year' || rangeStartDraft === rangeEndDraft;
+    if (!single && rangeStartDraft > (rangeEndDraft ?? currentYear)) return;
     setSaving(true);
-    const saved = await updatePreferences({ rangeMode: 'year', selectedYear: rangeYearDraft });
-    if (saved) setRangeVisible(false);
+    const next: ViewPreferences = single
+      ? { rangeMode: 'year', selectedYear: rangeModeDraft === 'year' ? rangeYearDraft : rangeStartDraft }
+      : { rangeMode: 'all', selectedYear: null, originDate: `${rangeStartDraft}-01-01`, endYear: rangeEndDraft };
+    if (!settings.unitCustomized) next.unit = single ? 'day' : 'month';
+    const saved = await updatePreferences(next);
+    if (saved) { setRangeVisible(false); setReturnView(null); setSavedOutsideYear(null); }
     setSaving(false);
   }
 
-  async function applyAllRange() {
-    if (saving) return;
+  async function changeYear(delta: number) {
+    if (!settings || settings.rangeMode !== 'year' || saving) return;
+    const year = (settings.selectedYear ?? currentYear) + delta;
+    if (year < EARLIEST_TIME_PIXEL_YEAR || year > currentYear) return;
     setSaving(true);
-    const saved = await updatePreferences({ rangeMode: 'all', selectedYear: null });
-    if (saved) setRangeVisible(false);
+    setRestoreOffset(visibleOffset.current);
+    await updatePreferences({ rangeMode: 'year', selectedYear: year });
+    setSavedOutsideYear(null);
     setSaving(false);
   }
 
-  function openCreate(kind: TimePixelKind) {
+  function changeYearFromSwipe(horizontalDistance: number) {
+    // Left swipe moves back in time; right swipe moves forward.
+    void changeYear(horizontalDistance < 0 ? -1 : 1);
+  }
+
+  function openCreate(kind: TimePixelKind, date = today) {
     setConfirmation(null);
     setEditorNotice(null);
     setDeleteCandidate(null);
     const categories = snapshot?.categories.filter((item) => item.kind === kind) ?? [];
     setEditor({ kind, range: null });
-    setEditorCategoryId(categories[0]?.id ?? 'new');
+    setDetail(null);
+    setEditorDateMode('day');
+    setEditorCategoryId(focusedCategory?.kind === kind ? focusedCategory.id : categories[0]?.id ?? 'new');
     setEditorName('');
     setEditorColor(suggestedTimePixelColor(snapshot?.categories ?? [], kind));
-    setEditorStart(today);
-    setEditorEnd(today);
+    setEditorStart(date);
+    setEditorEnd(date);
     setEditorNote('');
   }
 
@@ -228,6 +233,7 @@ export default function TimePixelsScreen() {
     setEditorColor(suggestedTimePixelColor(snapshot?.categories ?? [], range.kind));
     setEditorStart(range.startDate);
     setEditorEnd(range.endDate);
+    setEditorDateMode(range.startDate === range.endDate ? 'day' : 'range');
     setEditorNote(range.note ?? '');
   }
 
@@ -273,8 +279,10 @@ export default function TimePixelsScreen() {
       await saveTimePixelRange(db, { id: editor.range?.id, categoryId, startDate: editorStart, endDate: editorEnd, note: editorNote, expectedImpactSignature: impact.signature });
       setEditor(null);
       setConfirmation(null);
-      setFocusedCategoryId(editor.kind === settings.colorMode ? categoryId : null);
       await load();
+      if (built && (editorStart < built.bounds.start || editorEnd > built.bounds.end)) {
+        setSavedOutsideYear(Number((editorStart < built.bounds.start ? editorStart : editorEnd).slice(0, 4)));
+      } else setSavedOutsideYear(null);
     } catch (error) {
       setConfirmation(null);
       const duplicate = error instanceof Error && error.message === 'duplicate-category';
@@ -307,10 +315,6 @@ export default function TimePixelsScreen() {
       if (managerCategory) {
         await updateTimePixelCategory(db, managerCategory.id, { name: managerName, colorToken: managerColor });
         setManagerCategory(null);
-      } else {
-        if (!isTimePixelDate(managerOrigin) || managerOrigin < EARLIEST_TIME_PIXEL_DATE || managerOrigin > today) throw new Error('invalid-origin-date');
-        await preferenceQueue.current;
-        await initializeTimePixels(db, managerOrigin);
       }
       await load();
     } catch (error) {
@@ -321,22 +325,23 @@ export default function TimePixelsScreen() {
 
   if (loading) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><ActivityIndicator color={colors.primary} style={styles.loader} /></SafeAreaView>;
   if (loadError || !snapshot) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><PageHeader title="时光像素" /><View style={styles.failure}><Text style={[styles.failureTitle, { color: readingTheme.text }]}>时光像素暂时没有打开</Text><Text style={[styles.failureText, { color: readingTheme.secondary }]}>记录仍保存在本机，可以重新加载。</Text><PrimaryButton onPress={() => { setLoading(true); void load(); }}><ButtonLabel>重新加载</ButtonLabel></PrimaryButton></View></SafeAreaView>;
-  if (!settings) return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}><PageHeader title="时光像素" /><ScrollView contentContainerStyle={styles.setup}><PixelMotif background={readingTheme.border} /><Text style={[styles.setupTitle, { color: readingTheme.text }]}>从哪一天开始看？</Text><Text style={[styles.setupCopy, { color: readingTheme.secondary }]}>可以是出生、离家求学，也可以是你想开始记录的某一天。</Text><DateField label="观察起点" value={originDraft} onChange={setOriginDraft} minimumDate={EARLIEST_TIME_PIXEL_DATE} maximumDate={today} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /><Text style={[styles.setupHint, { color: readingTheme.secondary }]}>只决定“起点至今”从哪一天开始，不会自动生成记录。</Text><PrimaryButton disabled={saving} onPress={() => void initialize()} style={styles.setupButton}><ButtonLabel>{saving ? '正在保存…' : '开始观察'}</ButtonLabel></PrimaryButton></ScrollView></SafeAreaView>;
+
+  if (!settings) return null;
 
   const recorded = focusedCategory ? built?.totals.get(focusedCategory.id) ?? 0 : built?.recordedDays ?? 0;
   const ratio = focusedCategory && built?.recordedDays ? recorded / built.recordedDays : 0;
   const originYear = Number(settings.originDate.slice(0, 4));
-  const selectedLabel = settings.rangeMode === 'all' ? `${originYear}年至今` : `${settings.selectedYear}年`;
+  const selectedLabel = settings.rangeMode === 'all' ? settings.endYear ? `${originYear}—${settings.endYear}年` : `${originYear}年至今` : `${settings.selectedYear}年`;
   const detailRanges = detail ? snapshot.ranges.filter((range) => range.startDate <= detail.endDate && range.endDate >= detail.startDate).sort((a, b) => a.kind.localeCompare(b.kind) || a.startDate.localeCompare(b.startDate)) : [];
 
   const listHeader = <>
     {returnView ? <Pressable onPress={() => void restoreView()} style={styles.returnButton}><Text style={styles.returnText}>‹ 返回展开前视图</Text></Pressable> : null}
     <View style={styles.controlsRow}>
       <Pressable accessibilityLabel={`查看范围，${selectedLabel}`} onPress={openRangePicker} style={[styles.rangeButton, { backgroundColor: readingTheme.surface }]}><Text style={styles.rangeButtonText}>{selectedLabel}</Text><View style={styles.chevron} /></Pressable>
-      <View accessibilityRole="radiogroup" style={[styles.segmented, { backgroundColor: readingTheme.surface }]}>{(['year', 'month', 'day'] as TimePixelUnit[]).map((unit) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: settings.unit === unit }} key={unit} onPress={() => void updatePreferences({ unit })} style={[styles.segment, settings.unit === unit && styles.segmentActive]}><Text style={[styles.segmentText, settings.unit === unit && styles.segmentTextActive]}>{unitLabel(unit)}</Text></Pressable>)}</View>
+      <View><Text style={[styles.unitCaption, { color: readingTheme.secondary }]}>每格</Text><View accessibilityRole="radiogroup" style={[styles.segmented, { backgroundColor: readingTheme.surface }]}>{(['year', 'month', 'day'] as TimePixelUnit[]).map((unit) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: settings.unit === unit }} key={unit} onPress={() => void updatePreferences({ unit, unitCustomized: true })} style={[styles.segment, settings.unit === unit && styles.segmentActive]}><Text style={[styles.segmentText, settings.unit === unit && styles.segmentTextActive]}>{unitLabel(unit)}</Text></Pressable>)}</View></View>
     </View>
     <View accessibilityRole="radiogroup" style={styles.modeRow}>{(['location', 'stage'] as TimePixelKind[]).map((kind) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: settings.colorMode === kind }} key={kind} onPress={() => void updatePreferences({ colorMode: kind })} style={[styles.modeButton, { borderBottomColor: settings.colorMode === kind ? colors.primary : 'transparent' }]}><Text style={[styles.modeText, { color: settings.colorMode === kind ? colors.primary : readingTheme.secondary }]}>{kind === 'location' ? '按地点着色' : '按阶段着色'}</Text></Pressable>)}</View>
-    <View style={styles.filterLine}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}><Pressable onPress={() => setFocusedCategoryId(null)} style={[styles.filterChip, { backgroundColor: focusedCategoryId ? readingTheme.surface : colors.primarySoft }]}><Text style={[styles.filterText, !focusedCategoryId && styles.filterTextActive]}>全部</Text></Pressable>{activeCategories.map((category) => <Pressable key={category.id} onPress={() => setFocusedCategoryId(category.id)} style={[styles.filterChip, { backgroundColor: focusedCategoryId === category.id ? colors.primarySoft : readingTheme.surface }]}><View style={[styles.swatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text numberOfLines={1} style={[styles.filterText, focusedCategoryId === category.id && styles.filterTextActive]}>{category.name}</Text></Pressable>)}</ScrollView><Pressable accessibilityLabel="管理名称、颜色与观察起点" onPress={openManagerSettings} style={[styles.manageButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'slider.horizontal.3', android: 'tune', web: 'tune' }} size={16} tintColor={colors.primary} /></Pressable></View>
+    <View style={styles.filterLine}><Pressable onPress={() => setFocusedCategoryId(null)} style={[styles.filterChip, { backgroundColor: focusedCategoryId ? readingTheme.surface : colors.primarySoft }]}><Text style={[styles.filterText, !focusedCategoryId && styles.filterTextActive]}>全部</Text></Pressable><ScrollView horizontal style={styles.filterScroll} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>{activeCategories.map((category) => <Pressable key={category.id} onPress={() => setFocusedCategoryId(category.id)} style={[styles.filterChip, { backgroundColor: focusedCategoryId === category.id ? colors.primarySoft : readingTheme.surface }]}><View style={[styles.swatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text numberOfLines={1} style={[styles.filterText, focusedCategoryId === category.id && styles.filterTextActive]}>{category.name}</Text></Pressable>)}</ScrollView><Pressable accessibilityLabel="管理名称与颜色" onPress={openManagerSettings} style={[styles.manageButton, { backgroundColor: readingTheme.surface }]}><SymbolView name={{ ios: 'slider.horizontal.3', android: 'tune', web: 'tune' }} size={16} tintColor={colors.primary} /></Pressable></View>
     <View style={[styles.pixelCard, { backgroundColor: readingTheme.surface }]}>
       <View style={styles.summaryRow}><View><Text style={[styles.summaryLabel, { color: readingTheme.secondary }]}>{focusedCategory ? `在${focusedCategory.name}度过` : `已记录${settings.colorMode === 'location' ? '地点' : '阶段'}的日子`}</Text><View style={styles.summaryValue}><Text style={[styles.summaryNumber, { color: readingTheme.text }]}>{recorded}</Text><Text style={[styles.summaryUnit, { color: readingTheme.text }]}>天</Text></View></View><View style={styles.summaryMeta}><Text style={[styles.summaryMetaText, { color: readingTheme.secondary }]}>{focusedCategory ? `占已记录日子的 ${(ratio * 100).toFixed(1)}%` : `所选时段已过 ${built?.elapsedDays ?? 0} 天`}</Text><Text style={[styles.summaryMetaText, { color: readingTheme.secondary }]}>{built?.groups.length ?? 0}格 · 每格一{unitLabel(settings.unit)}</Text></View></View>
     </View>
@@ -344,26 +349,31 @@ export default function TimePixelsScreen() {
 
   const listFooter = <>
     <View style={[styles.axis, { paddingHorizontal: spacing.md, backgroundColor: readingTheme.surface }]}><Text style={[styles.axisText, { color: readingTheme.secondary }]}>{built ? formatDate(built.bounds.start) : ''}</Text><Text style={[styles.axisText, { color: readingTheme.secondary }]}>{built ? formatDate(built.bounds.end) : ''}</Text></View>
-    <View style={[styles.legend, { paddingHorizontal: spacing.md }]}>{activeCategories.map((category) => <View key={category.id} style={styles.legendItem}><View style={[styles.swatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text style={[styles.legendText, { color: readingTheme.secondary }]}>{category.name}</Text></View>)}<View style={styles.legendItem}><View style={[styles.swatch, { backgroundColor: readingTheme.border }]} /><Text style={[styles.legendText, { color: readingTheme.secondary }]}>未记录</Text></View></View>
-    <Text style={[styles.observationNote, { color: readingTheme.secondary }]}>小圆点表示阶段起点。点击格子查看地点、阶段和备注详情，年格可按月／天展开。</Text>
+    <View style={[styles.legend, { paddingHorizontal: spacing.md }]}>{activeCategories.map((category) => <View key={category.id} style={styles.legendItem}><View style={[styles.swatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text style={[styles.legendText, { color: readingTheme.secondary }]}>{category.name}</Text></View>)}<View style={styles.legendItem}><View style={[styles.swatch, { backgroundColor: readingTheme.border }]} /><Text style={[styles.legendText, { color: readingTheme.secondary }]}>未记录</Text></View>{built && built.futureDays > 0 ? <View style={styles.legendItem}><View style={[styles.swatch, { backgroundColor: readingTheme.background, borderWidth: 1, borderColor: readingTheme.border }]} /><Text style={[styles.legendText, { color: readingTheme.secondary }]}>未来</Text></View> : null}</View>
     <PrimaryButton onPress={() => openCreate(settings.colorMode)} style={styles.addButton}><ButtonLabel>＋ {settings.colorMode === 'location' ? '记录所在地点' : '添加人生阶段'}</ButtonLabel></PrimaryButton>
-    <Text style={[styles.originText, { color: readingTheme.secondary }]}>观察起点 {formatDate(settings.originDate)}</Text>
   </>;
 
-  return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}> 
+  return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <PageHeader title="时光像素" right={<Pressable accessibilityLabel="时光像素设置" hitSlop={12} onPress={openManagerSettings}><SymbolView name={{ ios: 'slider.horizontal.3', android: 'tune', web: 'tune' }} size={19} tintColor={colors.primary} /></Pressable>} />
     {pageNotice ? <View accessibilityRole="alert" style={[styles.pageNotice, { backgroundColor: readingTheme.surface }]}><Text style={[styles.pageNoticeText, { color: readingTheme.text }]}>{pageNotice}</Text><Pressable onPress={() => setPageNotice(null)} hitSlop={10}><Text style={styles.pageNoticeAction}>知道了</Text></Pressable></View> : null}
+    {savedOutsideYear !== null ? <View accessibilityRole="alert" style={[styles.pageNotice, { backgroundColor: readingTheme.surface }]}><Text style={[styles.pageNoticeText, { color: readingTheme.text }]}>已保存，记录在当前范围之外</Text><Pressable disabled={saving} onPress={() => { void updatePreferences({ rangeMode: 'year', selectedYear: savedOutsideYear, ...(!settings.unitCustomized ? { unit: 'day' as const } : {}) }).then((ok) => { if (ok) { setSavedOutsideYear(null); setReturnView(null); } }); }}><Text style={styles.pageNoticeAction}>查看 {savedOutsideYear} 年</Text></Pressable><Pressable accessibilityLabel="关闭保存提示" onPress={() => setSavedOutsideYear(null)} hitSlop={8}><Text style={styles.pageNoticeAction}>×</Text></Pressable></View> : null}
     <SectionList
-      key={`${settings.rangeMode}-${settings.selectedYear}-${settings.unit}-${settings.originDate}`}
+      key={`${settings.rangeMode}-${settings.selectedYear}-${settings.unit}-${settings.originDate}-${settings.endYear}`}
       sections={sections}
       contentOffset={restoreOffset === null ? undefined : { x: 0, y: restoreOffset }}
       onLayout={() => { if (restoreOffset !== null) requestAnimationFrame(() => setRestoreOffset(null)); }}
-      onScroll={(event) => { if (!returnView) scrollOffset.current = event.nativeEvent.contentOffset.y; }}
+      onScroll={(event) => { visibleOffset.current = event.nativeEvent.contentOffset.y; if (!returnView) scrollOffset.current = visibleOffset.current; }}
       scrollEventThrottle={16}
       stickySectionHeadersEnabled
-      renderSectionHeader={({ section }) => <View style={[styles.yearHeader, { backgroundColor: readingTheme.surface, borderBottomColor: readingTheme.border }]}><Text accessibilityRole="header" style={[styles.yearTitle, { color: readingTheme.text }]}>{section.title}</Text>{section.year !== null && settings.rangeMode === 'all' ? <Pressable accessibilityLabel={`单独查看${section.year}年`} onPress={() => void expandYear(section.year!, settings.unit === 'day' ? 'day' : 'month')} style={styles.yearAction}><Text style={styles.returnText}>单独查看 ›</Text></Pressable> : <Text style={[styles.axisText, { color: readingTheme.secondary }]}>每格一{unitLabel(settings.unit)}</Text>}</View>}
+      renderSectionHeader={({ section }) => <View style={[styles.yearHeader, { backgroundColor: readingTheme.surface, borderBottomColor: readingTheme.border }]}>
+        {settings.rangeMode === 'year' ? <View style={styles.yearNavigation}><Pressable accessibilityLabel="上一年" disabled={saving || settings.selectedYear === EARLIEST_TIME_PIXEL_YEAR} onPress={() => void changeYear(-1)} style={[styles.yearArrow, (saving || settings.selectedYear === EARLIEST_TIME_PIXEL_YEAR) && styles.disabledText]}><Text style={styles.returnText}>‹</Text></Pressable><Pressable accessibilityLabel="选择查看年份" onPress={openRangePicker}><Text style={[styles.yearTitle, { color: readingTheme.text }]}>{settings.selectedYear}年</Text></Pressable><Pressable accessibilityLabel="下一年" disabled={saving || settings.selectedYear === currentYear} onPress={() => void changeYear(1)} style={[styles.yearArrow, (saving || settings.selectedYear === currentYear) && styles.disabledText]}><Text style={styles.returnText}>›</Text></Pressable></View> : <Text accessibilityRole="header" style={[styles.yearTitle, { color: readingTheme.text }]}>{section.title}</Text>}
+        {section.year !== null && settings.rangeMode === 'all' ? <Pressable accessibilityLabel={`单独查看${section.year}年`} onPress={() => void expandYear(section.year!, settings.unit === 'day' ? 'day' : 'month')} style={styles.yearAction}><Text style={styles.returnText}>单独查看 ›</Text></Pressable> : <Text style={[styles.axisText, { color: readingTheme.secondary }]}>每格一{unitLabel(settings.unit)}</Text>}
+      </View>}
       keyExtractor={(row) => row[0]?.key ?? 'empty'}
-      renderItem={({ item: row }) => <View style={[styles.pixelRow, { gap: cellGap, backgroundColor: readingTheme.surface }]}>{row.map((group) => <PixelCell key={group.key} group={group} unit={settings.unit} categories={activeCategories} focusedCategory={focusedCategory} readingBorder={readingTheme.border} surfaceMuted={readingTheme.background} width={cellWidth} selected={detail?.key === group.key} onPress={() => setDetail(group)} />)}{row.length < columns ? Array.from({ length: columns - row.length }, (_, index) => <View key={`blank-${index}`} style={{ width: cellWidth }} />) : null}</View>}
+      renderItem={({ item: row }) => <YearSwipeRow enabled={settings.rangeMode === 'year' && !saving} onChangeYear={changeYearFromSwipe} style={[styles.pixelRow, { gap: cellGap, backgroundColor: readingTheme.surface }]}>{row.map((group) => <PixelCell key={group.key} group={group} unit={settings.unit} categories={activeCategories} focusedCategory={focusedCategory} readingBorder={readingTheme.border} surfaceMuted={readingTheme.background} width={cellWidth} selected={detail?.key === group.key} onPress={() => {
+        if (settings.unit === 'day' && group.startDate <= today && !hasTimePixelRangeOnDate(snapshot.ranges, settings.colorMode, group.startDate)) openCreate(settings.colorMode, group.startDate);
+        else setDetail(group);
+      }} />)}{row.length < columns ? Array.from({ length: columns - row.length }, (_, index) => <View key={`blank-${index}`} style={{ width: cellWidth }} />) : null}</YearSwipeRow>}
       ListHeaderComponent={listHeader}
       ListFooterComponent={listFooter}
       ListEmptyComponent={<View style={styles.emptyPixels}><Text style={[styles.failureText, { color: readingTheme.secondary }]}>这个范围内还没有可显示的时间。</Text></View>}
@@ -374,26 +384,31 @@ export default function TimePixelsScreen() {
       showsVerticalScrollIndicator={false}
     />
 
-    <CenteredPanel resetKey={`range-${settings.rangeMode}-${settings.selectedYear ?? 'all'}-${settings.originDate}`} visible={rangeVisible} onClose={() => { if (!saving) setRangeVisible(false); }} backgroundColor={readingTheme.background} closeColor={readingTheme.secondary} contentContainerStyle={styles.rangeDialogContent} scrollEnabled={false}>
+    <CenteredPanel resetKey={`range-${rangeVisible}`} visible={rangeVisible} onClose={() => { if (!saving) setRangeVisible(false); }} backgroundColor={readingTheme.background} closeColor={readingTheme.secondary} contentContainerStyle={styles.rangeDialogContent}>
       <Text style={[styles.sheetTitle, { color: readingTheme.text }]}>查看范围</Text>
       <View accessibilityRole="radiogroup" style={[styles.rangeModeSwitch, { backgroundColor: readingTheme.surface }]}>
-        <Pressable accessibilityRole="radio" accessibilityState={{ checked: rangeModeDraft === 'all' }} disabled={saving} onPress={() => setRangeModeDraft('all')} style={[styles.rangeModeChoice, rangeModeDraft === 'all' && styles.rangeModeChoiceActive]}><Text style={[styles.rangeModeChoiceText, rangeModeDraft === 'all' && styles.rangeModeChoiceTextActive]}>起点至今</Text></Pressable>
-        <Pressable accessibilityRole="radio" accessibilityState={{ checked: rangeModeDraft === 'year' }} disabled={saving} onPress={() => setRangeModeDraft('year')} style={[styles.rangeModeChoice, rangeModeDraft === 'year' && styles.rangeModeChoiceActive]}><Text style={[styles.rangeModeChoiceText, rangeModeDraft === 'year' && styles.rangeModeChoiceTextActive]}>某一年</Text></Pressable>
+        {(['year', 'all'] as const).map((mode) => <Pressable key={mode} accessibilityRole="radio" accessibilityState={{ checked: rangeModeDraft === mode }} disabled={saving} onPress={() => setRangeModeDraft(mode)} style={[styles.rangeModeChoice, rangeModeDraft === mode && styles.rangeModeChoiceActive]}><Text style={[styles.rangeModeChoiceText, rangeModeDraft === mode && styles.rangeModeChoiceTextActive]}>{mode === 'year' ? '一年' : '多年'}</Text></Pressable>)}
       </View>
-      {rangeModeDraft === 'year' ? <YearWheelPicker key={`wheel-${rangeVisible}-${settings.selectedYear ?? 'all'}`} value={rangeYearDraft} onChange={setRangeYearDraft} minimumYear={EARLIEST_TIME_PIXEL_YEAR} maximumYear={currentYear} surfaceColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /> : <View style={styles.rangeOriginSummary}><Text style={[styles.rangeOriginTitle, { color: readingTheme.text }]}>{originYear}年至今</Text><Pressable disabled={saving} onPress={openManagerFromRange} style={[styles.rangeOriginSetting, { backgroundColor: readingTheme.surface }]}><View><Text style={[styles.rangeOriginSettingLabel, { color: readingTheme.secondary }]}>观察起点</Text><Text style={[styles.rangeOriginSettingValue, { color: readingTheme.text }]}>{formatDate(settings.originDate)}</Text></View><Text style={[styles.rangeOriginSettingAction, { color: colors.primary }]}>修改 ›</Text></Pressable></View>}
-      <PrimaryButton disabled={saving} onPress={() => void (rangeModeDraft === 'year' ? applyRangeYear() : applyAllRange())} style={styles.rangeApply}><ButtonLabel>{saving ? '正在切换…' : rangeModeDraft === 'year' ? `查看 ${rangeYearDraft} 年` : '查看起点至今'}</ButtonLabel></PrimaryButton>
+      <View pointerEvents={saving ? 'none' : 'auto'}>
+        {rangeModeDraft === 'year' ? <YearWheelPicker key={`single-${rangeVisible}`} value={rangeYearDraft} onChange={setRangeYearDraft} minimumYear={EARLIEST_TIME_PIXEL_YEAR} maximumYear={currentYear} surfaceColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /> : <View style={styles.rangeWheels}>
+          <View style={styles.rangeWheelColumn}><Text style={[styles.wheelCaption, { color: readingTheme.secondary }]}>开始年份</Text><YearWheelPicker key={`start-${rangeVisible}`} value={rangeStartDraft} onChange={setRangeStartDraft} minimumYear={EARLIEST_TIME_PIXEL_YEAR} maximumYear={currentYear} surfaceColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /></View>
+          <View style={styles.rangeWheelColumn}><Text style={[styles.wheelCaption, { color: readingTheme.secondary }]}>结束年份</Text><YearWheelPicker key={`end-${rangeVisible}`} includePresent value={rangeEndDraft ?? currentYear + 1} onChange={(year) => setRangeEndDraft(year === currentYear + 1 ? null : year)} minimumYear={EARLIEST_TIME_PIXEL_YEAR} maximumYear={currentYear} surfaceColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /></View>
+        </View>}
+      </View>
+      {rangeModeDraft === 'all' && rangeStartDraft > (rangeEndDraft ?? currentYear) ? <Text accessibilityRole="alert" style={styles.inlineError}>开始年份不能晚于结束年份</Text> : null}
+      <PrimaryButton disabled={saving || (rangeModeDraft === 'all' && rangeStartDraft > (rangeEndDraft ?? currentYear))} onPress={() => void applyRange()} style={styles.rangeApply}><ButtonLabel>{saving ? '正在切换…' : rangeModeDraft === 'year' ? `查看 ${rangeYearDraft} 年` : rangeEndDraft === null ? `查看 ${rangeStartDraft} 年至今` : rangeStartDraft === rangeEndDraft ? `查看 ${rangeStartDraft} 年` : `查看 ${rangeStartDraft}—${rangeEndDraft} 年`}</ButtonLabel></PrimaryButton>
     </CenteredPanel>
 
     <CenteredPanel resetKey={editor ? (confirmation ? 'confirm' : 'form') : deleteCandidate ? 'delete' : `detail-${detail?.key ?? ''}`} visible={Boolean(detail || editor)} onClose={() => { if (saveLock.current) return; setEditor(null); setConfirmation(null); setEditorNotice(null); setDeleteCandidate(null); setDeleteNotice(null); setDetail(null); }} backgroundColor={readingTheme.background} closeColor={readingTheme.secondary} contentContainerStyle={styles.dialogContent}>
       <View pointerEvents={saving ? 'none' : 'auto'}>
-      {editor && confirmation ? <View><Text style={[styles.sheetTitle, { color: readingTheme.text }]}>确认修改这些日子？</Text><Text style={[styles.confirmationCopy, { color: readingTheme.text }]}>{confirmation.message}</Text><PrimaryButton disabled={saving} onPress={() => void saveRange(confirmation.signature)} style={styles.sheetPrimary}><ButtonLabel>{saving ? '正在保存…' : '确认修改'}</ButtonLabel></PrimaryButton><Pressable disabled={saving} onPress={() => setConfirmation(null)} style={styles.sheetCancel}><Text style={[styles.sheetCancelText, { color: readingTheme.secondary }]}>返回修改，不保存</Text></Pressable></View> : editor ? <><Text style={[styles.sheetTitle, styles.formSheetTitle, { color: readingTheme.text }]}>{editor.range ? `编辑${kindLabel(editor.kind)}` : editor.kind === 'location' ? '记录所在地点' : '添加人生阶段'}</Text>{editorNotice ? <InlineNoticeCard notice={editorNotice} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /> : null}<Text style={[styles.formLabel, styles.firstFormLabel, { color: readingTheme.secondary }]}>{kindLabel(editor.kind)}</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryRow}>{snapshot.categories.filter((item) => item.kind === editor.kind).map((category) => <CompactPillButton key={category.id} onPress={() => setEditorCategoryId(category.id)} style={[styles.categoryChoice, { backgroundColor: editorCategoryId === category.id ? colors.primarySoft : readingTheme.surface }]}><View style={[styles.swatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text style={[styles.categoryChoiceText, { color: editorCategoryId === category.id ? colors.primary : readingTheme.text }]}>{category.name}</Text></CompactPillButton>)}<CompactPillButton onPress={() => setEditorCategoryId('new')} style={[styles.categoryChoice, { backgroundColor: editorCategoryId === 'new' ? colors.primarySoft : readingTheme.surface }]}><Text style={styles.newChoiceText}>＋ 新建</Text></CompactPillButton></ScrollView>{editorCategoryId === 'new' ? <><Text style={[styles.formLabel, { color: readingTheme.secondary }]}>名称</Text><TextInput value={editorName} onChangeText={setEditorName} maxLength={30} placeholder={editor.kind === 'location' ? '例如：老家、学校宿舍、上海' : '例如：上小学、上大学、工作'} placeholderTextColor={readingTheme.secondary} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><TimePixelColorPicker key={`${editor.kind}-${editor.range?.id ?? "new"}`} collapsible value={editorColor} onChange={setEditorColor} categories={snapshot.categories} kind={editor.kind} name={editorName} /></> : null}<View style={styles.dateRow}><DateField label="开始日期" value={editorStart} onChange={setEditorStart} minimumDate={EARLIEST_TIME_PIXEL_DATE} maximumDate={today} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /><DateField label="结束日期" value={editorEnd} onChange={setEditorEnd} minimumDate={EARLIEST_TIME_PIXEL_DATE} maximumDate={today} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /></View><Text style={[styles.formLabel, { color: readingTheme.secondary }]}>备注（选填）</Text><TextInput multiline value={editorNote} onChangeText={setEditorNote} maxLength={160} placeholder="写下这段时间发生的事" placeholderTextColor={readingTheme.secondary} textAlignVertical="top" style={[styles.input, styles.noteInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><Text style={[styles.overwriteHint, { color: readingTheme.secondary }]}>{'同类记录发生重叠时，新记录会替换重叠日期；另一条时间层不受影响。'}</Text><PrimaryButton disabled={saving} onPress={() => void saveRange()} style={styles.sheetPrimary}><ButtonLabel>{saving ? '正在保存…' : editor.range ? '保存修改' : '保存'}</ButtonLabel></PrimaryButton></> : deleteCandidate ? <View><Text style={[styles.sheetTitle, { color: readingTheme.text }]}>删除这段记录？</Text><Text style={[styles.confirmationCopy, { color: readingTheme.text }]}>{categoryById.get(deleteCandidate.categoryId)?.name ?? kindLabel(deleteCandidate.kind)}{`\n${formatRange(deleteCandidate.startDate, deleteCandidate.endDate)}`}</Text>{deleteNotice ? <Text accessibilityRole="alert" style={styles.inlineError}>{deleteNotice}</Text> : null}<PrimaryButton disabled={saving} onPress={() => void removeRange()} style={styles.sheetPrimary}><ButtonLabel>{saving ? '正在删除…' : '确认删除'}</ButtonLabel></PrimaryButton><Pressable disabled={saving} onPress={() => { setDeleteCandidate(null); setDeleteNotice(null); }} style={styles.sheetCancel}><Text style={[styles.sheetCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable></View> : detail ? <><Text style={[styles.sheetTitle, { color: readingTheme.text }]}>{formatRange(detail.startDate, detail.endDate)}</Text>{settings.unit === 'year' ? <View style={styles.drillRow}><Pressable style={[styles.drillButton, { backgroundColor: readingTheme.surface }]} onPress={() => void expandYear(Number(detail.key), 'month')}><Text style={styles.returnText}>按月展开</Text></Pressable><Pressable style={[styles.drillButton, { backgroundColor: readingTheme.surface }]} onPress={() => void expandYear(Number(detail.key), 'day')}><Text style={styles.returnText}>按天展开</Text></Pressable></View> : null}{detailRanges.length ? detailRanges.map((range) => { const category = categoryById.get(range.categoryId); return <View key={range.id} style={[styles.detailRow, { backgroundColor: readingTheme.surface }]}><View style={[styles.detailBar, { backgroundColor: categoryColor(category?.colorToken ?? 'fern') }]} /><View style={styles.detailCopy}><Text style={[styles.detailKind, { color: readingTheme.secondary }]}>{kindLabel(range.kind)}</Text><Text style={[styles.detailName, { color: readingTheme.text }]}>{category?.name ?? '已删除的项目'}</Text><Text style={[styles.detailDates, { color: readingTheme.secondary }]}>{formatRange(range.startDate, range.endDate)}</Text>{range.note ? <Text style={[styles.detailNote, { color: readingTheme.text }]}>{range.note}</Text> : null}</View><View style={styles.detailActions}><Pressable onPress={() => openEdit(range)}><Text style={styles.detailEdit}>编辑</Text></Pressable><Pressable onPress={() => { setDeleteNotice(null); setDeleteCandidate(range); }}><Text style={styles.detailDelete}>删除</Text></Pressable></View></View>}) : <Text style={[styles.emptyDetail, { color: readingTheme.secondary }]}>这一格没有地点或阶段记录。</Text>}</> : null}
+      {editor && confirmation ? <View><Text style={[styles.sheetTitle, { color: readingTheme.text }]}>确认修改这些日子？</Text><Text style={[styles.confirmationCopy, { color: readingTheme.text }]}>{confirmation.message}</Text><PrimaryButton disabled={saving} onPress={() => void saveRange(confirmation.signature)} style={styles.sheetPrimary}><ButtonLabel>{saving ? '正在保存…' : '确认修改'}</ButtonLabel></PrimaryButton><Pressable disabled={saving} onPress={() => setConfirmation(null)} style={styles.sheetCancel}><Text style={[styles.sheetCancelText, { color: readingTheme.secondary }]}>返回修改，不保存</Text></Pressable></View> : editor ? <><Text style={[styles.sheetTitle, styles.formSheetTitle, { color: readingTheme.text }]}>{editor.range ? `编辑${kindLabel(editor.kind)}` : editor.kind === 'location' ? '记录所在地点' : '添加人生阶段'}</Text>{editorNotice ? <InlineNoticeCard notice={editorNotice} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /> : null}<Text style={[styles.formLabel, styles.firstFormLabel, { color: readingTheme.secondary }]}>{kindLabel(editor.kind)}</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryRow}>{snapshot.categories.filter((item) => item.kind === editor.kind).map((category) => <CompactPillButton key={category.id} onPress={() => setEditorCategoryId(category.id)} style={[styles.categoryChoice, { backgroundColor: editorCategoryId === category.id ? colors.primarySoft : readingTheme.surface }]}><View style={[styles.swatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text style={[styles.categoryChoiceText, { color: editorCategoryId === category.id ? colors.primary : readingTheme.text }]}>{category.name}</Text></CompactPillButton>)}<CompactPillButton onPress={() => setEditorCategoryId('new')} style={[styles.categoryChoice, { backgroundColor: editorCategoryId === 'new' ? colors.primarySoft : readingTheme.surface }]}><Text style={styles.newChoiceText}>＋ 新建</Text></CompactPillButton></ScrollView>{editorCategoryId === 'new' ? <><Text style={[styles.formLabel, { color: readingTheme.secondary }]}>名称</Text><TextInput value={editorName} onChangeText={setEditorName} maxLength={30} placeholder={editor.kind === 'location' ? '例如：老家、学校宿舍、上海' : '例如：上小学、上大学、工作'} placeholderTextColor={readingTheme.secondary} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><TimePixelColorPicker key={`${editor.kind}-${editor.range?.id ?? "new"}`} collapsible value={editorColor} onChange={setEditorColor} categories={snapshot.categories} kind={editor.kind} name={editorName} /></> : null}<View accessibilityRole="radiogroup" style={[styles.rangeModeSwitch, styles.recordMode, { backgroundColor: readingTheme.surface }]}>{(['day', 'range'] as const).map((mode) => <Pressable key={mode} accessibilityRole="radio" accessibilityState={{ checked: editorDateMode === mode }} onPress={() => { setEditorDateMode(mode); if (mode === 'day') setEditorEnd(editorStart); }} style={[styles.rangeModeChoice, editorDateMode === mode && styles.rangeModeChoiceActive]}><Text style={[styles.rangeModeChoiceText, editorDateMode === mode && styles.rangeModeChoiceTextActive]}>{mode === 'day' ? '一天' : '一段时间'}</Text></Pressable>)}</View><View style={styles.dateRow}><DateField label={editorDateMode === 'day' ? '日期' : '开始日期'} value={editorStart} onChange={(date) => { setEditorStart(date); if (editorDateMode === 'day' || date > editorEnd) setEditorEnd(date); }} minimumDate={EARLIEST_TIME_PIXEL_DATE} maximumDate={today} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} />{editorDateMode === 'range' ? <DateField label="结束日期" value={editorEnd} onChange={setEditorEnd} minimumDate={isTimePixelDate(editorStart) ? editorStart : EARLIEST_TIME_PIXEL_DATE} maximumDate={today} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /> : null}</View><Text style={[styles.formLabel, { color: readingTheme.secondary }]}>备注（选填）</Text><TextInput multiline value={editorNote} onChangeText={setEditorNote} maxLength={160} placeholder={editorDateMode === 'day' ? '写下这一天发生的事' : '写下这段时间发生的事'} placeholderTextColor={readingTheme.secondary} textAlignVertical="top" style={[styles.input, styles.noteInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><Text style={[styles.overwriteHint, { color: readingTheme.secondary }]}>{'同类记录发生重叠时，新记录会替换重叠日期；另一条时间层不受影响。'}</Text><PrimaryButton disabled={saving} onPress={() => void saveRange()} style={styles.sheetPrimary}><ButtonLabel>{saving ? '正在保存…' : editor.range ? '保存修改' : '保存'}</ButtonLabel></PrimaryButton></> : deleteCandidate ? <View><Text style={[styles.sheetTitle, { color: readingTheme.text }]}>删除这段记录？</Text><Text style={[styles.confirmationCopy, { color: readingTheme.text }]}>{categoryById.get(deleteCandidate.categoryId)?.name ?? kindLabel(deleteCandidate.kind)}{`\n${formatRange(deleteCandidate.startDate, deleteCandidate.endDate)}`}</Text>{deleteNotice ? <Text accessibilityRole="alert" style={styles.inlineError}>{deleteNotice}</Text> : null}<PrimaryButton disabled={saving} onPress={() => void removeRange()} style={styles.sheetPrimary}><ButtonLabel>{saving ? '正在删除…' : '确认删除'}</ButtonLabel></PrimaryButton><Pressable disabled={saving} onPress={() => { setDeleteCandidate(null); setDeleteNotice(null); }} style={styles.sheetCancel}><Text style={[styles.sheetCancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable></View> : detail ? <><Text style={[styles.sheetTitle, { color: readingTheme.text }]}>{formatRange(detail.startDate, detail.endDate)}</Text>{settings.unit === 'year' ? <View style={styles.drillRow}><Pressable style={[styles.drillButton, { backgroundColor: readingTheme.surface }]} onPress={() => void expandYear(Number(detail.key), 'month')}><Text style={styles.returnText}>按月展开</Text></Pressable><Pressable style={[styles.drillButton, { backgroundColor: readingTheme.surface }]} onPress={() => void expandYear(Number(detail.key), 'day')}><Text style={styles.returnText}>按天展开</Text></Pressable></View> : null}{detailRanges.length ? detailRanges.map((range) => { const category = categoryById.get(range.categoryId); return <View key={range.id} style={[styles.detailRow, { backgroundColor: readingTheme.surface }]}><View style={[styles.detailBar, { backgroundColor: categoryColor(category?.colorToken ?? 'fern') }]} /><View style={styles.detailCopy}><Text style={[styles.detailKind, { color: readingTheme.secondary }]}>{kindLabel(range.kind)}</Text><Text style={[styles.detailName, { color: readingTheme.text }]}>{category?.name ?? '已删除的项目'}</Text><Text style={[styles.detailDates, { color: readingTheme.secondary }]}>{formatRange(range.startDate, range.endDate)}</Text>{range.note ? <Text style={[styles.detailNote, { color: readingTheme.text }]}>{range.note}</Text> : null}</View><View style={styles.detailActions}><Pressable onPress={() => openEdit(range)}><Text style={styles.detailEdit}>编辑</Text></Pressable><Pressable onPress={() => { setDeleteNotice(null); setDeleteCandidate(range); }}><Text style={styles.detailDelete}>删除</Text></Pressable></View></View>}) : <Text style={[styles.emptyDetail, { color: readingTheme.secondary }]}>这一格没有地点或阶段记录。</Text>}{settings.unit === 'day' && detail.startDate <= today ? <PrimaryButton onPress={() => openCreate(settings.colorMode, detail.startDate)} style={styles.sheetPrimary}><ButtonLabel>记录这一天</ButtonLabel></PrimaryButton> : null}</> : null}
       </View>
     </CenteredPanel>
 
-    <CenteredPanel resetKey={managerCategory ? `manager-${managerCategory.id}` : `manager-settings-${settings.originDate}`} visible={managerVisible} onClose={() => { if (saving) return; setManagerVisible(false); setManagerCategory(null); setManagerNotice(null); setManagerOrigin(settings.originDate); }} backgroundColor={readingTheme.background} closeColor={readingTheme.secondary} contentContainerStyle={styles.dialogContent}>
+    <CenteredPanel resetKey={managerCategory ? `manager-${managerCategory.id}` : `manager-settings-${settings.originDate}`} visible={managerVisible} onClose={() => { if (saving) return; setManagerVisible(false); setManagerCategory(null); setManagerNotice(null); }} backgroundColor={readingTheme.background} closeColor={readingTheme.secondary} contentContainerStyle={styles.dialogContent}>
       <Text style={[styles.sheetTitle, styles.formSheetTitle, { color: readingTheme.text }]}>{managerCategory ? `编辑${kindLabel(managerCategory.kind)}` : '时光像素设置'}</Text>
       {managerNotice ? <InlineNoticeCard notice={managerNotice} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /> : null}
-      {managerCategory ? <><Text style={[styles.formLabel, styles.firstFormLabel, { color: readingTheme.secondary }]}>名称</Text><TextInput value={managerName} onChangeText={setManagerName} maxLength={30} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><TimePixelColorPicker value={managerColor} onChange={setManagerColor} categories={snapshot.categories} kind={managerCategory.kind} categoryId={managerCategory.id} name={managerName} /><PrimaryButton disabled={saving} onPress={() => void saveManager()} style={styles.sheetPrimary}><ButtonLabel>保存名称和颜色</ButtonLabel></PrimaryButton><Pressable onPress={() => { setManagerCategory(null); setManagerNotice(null); }} style={styles.sheetCancel}><Text style={[styles.sheetCancelText, { color: readingTheme.secondary }]}>返回设置</Text></Pressable></> : <><Text style={[styles.formLabel, styles.firstFormLabel, { color: readingTheme.secondary }]}>观察起点</Text><DateField label="" value={managerOrigin} onChange={setManagerOrigin} minimumDate={EARLIEST_TIME_PIXEL_DATE} maximumDate={today} backgroundColor={readingTheme.surface} textColor={readingTheme.text} secondaryColor={readingTheme.secondary} /><Pressable disabled={managerOrigin === settings.originDate || saving} onPress={() => void saveManager()} style={styles.saveOrigin}><Text style={[styles.saveOriginText, managerOrigin === settings.originDate && styles.disabledText]}>保存观察起点</Text></Pressable><Text style={[styles.managerHint, { color: readingTheme.secondary }]}>仅影响“起点至今”的显示范围，不会删除已有记录。</Text>{(['location', 'stage'] as TimePixelKind[]).map((kind) => <View key={kind}><Text style={[styles.managerSection, { color: readingTheme.text }]}>{kind === 'location' ? '地点颜色' : '人生阶段颜色'}</Text>{snapshot.categories.filter((item) => item.kind === kind).length ? snapshot.categories.filter((item) => item.kind === kind).map((category) => <Pressable key={category.id} onPress={() => openManagerCategory(category)} style={[styles.managerRow, { borderBottomColor: readingTheme.border }]}><View style={[styles.managerSwatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text style={[styles.managerName, { color: readingTheme.text }]}>{category.name}</Text><Text style={[styles.managerAction, { color: readingTheme.secondary }]}>编辑 ›</Text></Pressable>) : <Text style={[styles.managerEmpty, { color: readingTheme.secondary }]}>还没有记录</Text>}</View>)}</>}
+      {managerCategory ? <><Text style={[styles.formLabel, styles.firstFormLabel, { color: readingTheme.secondary }]}>名称</Text><TextInput value={managerName} onChangeText={setManagerName} maxLength={30} style={[styles.input, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /><TimePixelColorPicker value={managerColor} onChange={setManagerColor} categories={snapshot.categories} kind={managerCategory.kind} categoryId={managerCategory.id} name={managerName} /><PrimaryButton disabled={saving} onPress={() => void saveManager()} style={styles.sheetPrimary}><ButtonLabel>保存名称和颜色</ButtonLabel></PrimaryButton><Pressable onPress={() => { setManagerCategory(null); setManagerNotice(null); }} style={styles.sheetCancel}><Text style={[styles.sheetCancelText, { color: readingTheme.secondary }]}>返回设置</Text></Pressable></> : <>{(['location', 'stage'] as TimePixelKind[]).map((kind) => <View key={kind}><Text style={[styles.managerSection, { color: readingTheme.text }]}>{kind === 'location' ? '地点颜色' : '人生阶段颜色'}</Text>{snapshot.categories.filter((item) => item.kind === kind).length ? snapshot.categories.filter((item) => item.kind === kind).map((category) => <Pressable key={category.id} onPress={() => openManagerCategory(category)} style={[styles.managerRow, { borderBottomColor: readingTheme.border }]}><View style={[styles.managerSwatch, { backgroundColor: categoryColor(category.colorToken) }]} /><Text style={[styles.managerName, { color: readingTheme.text }]}>{category.name}</Text><Text style={[styles.managerAction, { color: readingTheme.secondary }]}>编辑 ›</Text></Pressable>) : <Text style={[styles.managerEmpty, { color: readingTheme.secondary }]}>还没有记录</Text>}</View>)}</>}
     </CenteredPanel>
   </SafeAreaView>;
 }
@@ -417,10 +432,6 @@ function CenteredPanel({ visible, onClose, backgroundColor, closeColor, resetKey
   </Modal>;
 }
 
-function PixelMotif({ background }: { background: string }) {
-  return <View style={styles.motif}>{Array.from({ length: 45 }, (_, index) => <View key={index} style={[styles.motifCell, { backgroundColor: index < 24 ? PALETTE[0].color : index < 36 ? PALETTE[1].color : background }]} />)}</View>;
-}
-
 function DateField({ label, value, onChange, minimumDate, maximumDate, backgroundColor, textColor, secondaryColor }: { label: string; value: string; onChange: (value: string) => void; minimumDate?: string; maximumDate?: string; backgroundColor: string; textColor: string; secondaryColor: string }) {
   const [visible, setVisible] = useState(false);
   function changed(event: DateTimePickerEvent, selected?: Date) {
@@ -430,10 +441,10 @@ function DateField({ label, value, onChange, minimumDate, maximumDate, backgroun
   return <View style={styles.dateField}>{label ? <Text style={[styles.formLabel, { color: secondaryColor }]}>{label}</Text> : null}{Platform.OS === 'web' ? <TextInput value={value} onChangeText={onChange} placeholder="YYYY-MM-DD" placeholderTextColor={secondaryColor} style={[styles.input, { backgroundColor, color: textColor }]} /> : <><Pressable onPress={() => setVisible(true)} style={[styles.dateButton, { backgroundColor }]}><Text style={[styles.dateButtonText, { color: textColor }]}>{formatDate(value)}</Text><Text style={styles.dateButtonAction}>选择</Text></Pressable>{visible ? <DateTimePicker value={new Date(`${value}T12:00:00`)} mode="date" minimumDate={minimumDate ? new Date(`${minimumDate}T12:00:00`) : undefined} maximumDate={maximumDate ? new Date(`${maximumDate}T12:00:00`) : undefined} onChange={changed} /> : null}</>}</View>;
 }
 
-function YearWheelPicker({ value, onChange, minimumYear, maximumYear, surfaceColor, textColor, secondaryColor }: { value: number; onChange: (year: number) => void; minimumYear: number; maximumYear: number; surfaceColor: string; textColor: string; secondaryColor: string }) {
+function YearWheelPicker({ value, onChange, minimumYear, maximumYear, surfaceColor, textColor, secondaryColor, includePresent = false }: { includePresent?: boolean; value: number; onChange: (year: number) => void; minimumYear: number; maximumYear: number; surfaceColor: string; textColor: string; secondaryColor: string }) {
   const scrollRef = useRef<ScrollView>(null);
   const positioned = useRef(false);
-  const years = useMemo(() => Array.from({ length: maximumYear - minimumYear + 1 }, (_, index) => maximumYear - index), [maximumYear, minimumYear]);
+  const years = useMemo(() => [...(includePresent ? [maximumYear + 1] : []), ...Array.from({ length: maximumYear - minimumYear + 1 }, (_, index) => maximumYear - index)], [includePresent, maximumYear, minimumYear]);
   const selectedIndex = Math.max(0, years.indexOf(value));
   function scrollToIndex(index: number, animated: boolean) {
     scrollRef.current?.scrollTo({ y: index * YEAR_WHEEL_ITEM_HEIGHT, animated });
@@ -456,7 +467,7 @@ function YearWheelPicker({ value, onChange, minimumYear, maximumYear, surfaceCol
       onScroll={(event) => { if (positioned.current) updateFromOffset(event.nativeEvent.contentOffset.y); }}
       contentContainerStyle={styles.yearWheelContent}
     >
-      {years.map((year, index) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: value === year }} key={year} onPress={() => scrollToIndex(index, true)} style={styles.yearWheelItem}><Text style={[styles.yearWheelText, { color: value === year ? textColor : secondaryColor }, value === year && styles.yearWheelTextActive]}>{year}年{year === maximumYear ? ' · 今年' : ''}</Text></Pressable>)}
+      {years.map((year, index) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: value === year }} key={year} onPress={() => scrollToIndex(index, true)} style={styles.yearWheelItem}><Text style={[styles.yearWheelText, { color: value === year ? textColor : secondaryColor }, value === year && styles.yearWheelTextActive]}>{year > maximumYear ? '至今' : `${year}年`}</Text></Pressable>)}
     </ScrollView>
   </View>;
 }
@@ -465,29 +476,49 @@ function InlineNoticeCard({ notice, backgroundColor, textColor, secondaryColor }
   return <View accessibilityRole="alert" style={[styles.inlineNotice, { backgroundColor }]}><Text style={[styles.inlineNoticeTitle, { color: textColor }]}>{notice.title}</Text><Text style={[styles.inlineNoticeMessage, { color: secondaryColor }]}>{notice.message}</Text></View>;
 }
 
+function YearSwipeRow({ enabled, onChangeYear, style, children }: { enabled: boolean; onChangeYear: (delta: number) => void; style: StyleProp<ViewStyle>; children: ReactNode }) {
+  const responder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gesture) => enabled && Math.abs(gesture.dx) > 24 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 2,
+    onPanResponderRelease: (_event, gesture) => {
+      if (enabled && Math.abs(gesture.dx) > 60 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 2) onChangeYear(gesture.dx);
+    },
+    onPanResponderTerminationRequest: () => true,
+  }), [enabled, onChangeYear]);
+  return <View {...responder.panHandlers} style={style}>{children}</View>;
+}
+
 function PixelCell({ group, unit, categories, focusedCategory, readingBorder, surfaceMuted, width, selected, onPress }: { group: PixelGroup; unit: TimePixelUnit; categories: TimePixelCategory[]; focusedCategory: TimePixelCategory | null; readingBorder: string; surfaceMuted: string; width: number; selected: boolean; onPress: () => void }) {
   const knownCounts = categories.map((category) => ({ category, count: group.counts.get(category.id) ?? 0 })).filter((item) => item.count > 0);
   const unknown = group.counts.get('__unknown') ?? 0;
   const future = group.counts.get('__future') ?? 0;
-  const focused = focusedCategory ? focusedPixelFill(group, focusedCategory.id) : null;
-  const label = unit === 'year' ? group.key : unit === 'month' ? `${Number(group.key.slice(5))}月` : '';
-  return <Pressable accessibilityLabel={`${formatRange(group.startDate, group.endDate)}${group.hasStageStart ? '，阶段起点' : ''}${group.hasNote ? '，包含备注' : ''}，点击查看详情`} onPress={onPress} style={[styles.pixelPressable, { width }, selected && styles.pixelSelected]}>
+  const label = labelForPixelGroup(group, unit);
+  const isMonthMarker = unit === 'day' && label !== '';
+  const firstCategory = knownCounts[0]?.category;
+  const monthTextColor = firstCategory && (!focusedCategory || focusedCategory.id === firstCategory.id)
+    ? timePixelTextColor(firstCategory.colorToken)
+    : colors.primary;
+  return <Pressable accessibilityLabel={`${formatRange(group.startDate, group.endDate)}${group.hasNote ? '，包含备注' : ''}，点击查看详情`} onPress={onPress} style={[styles.pixelPressable, { width }, selected && styles.pixelSelected]}>
     <View style={[styles.pixel, { width, height: unit === 'day' ? width : Math.max(38, width * 0.72), backgroundColor: surfaceMuted }]}>
-      {focusedCategory && focused ? <View style={styles.pixelSegments}>{focused.elapsedDays ? <View style={{ flex: focused.elapsedDays, backgroundColor: categoryColor(focusedCategory.colorToken), opacity: focused.opacity }} /> : null}{focused.futureDays ? <View style={{ flex: focused.futureDays, backgroundColor: surfaceMuted }} /> : null}</View> : <View style={styles.pixelSegments}>{knownCounts.map(({ category, count }) => <View key={category.id} style={{ flex: count, backgroundColor: categoryColor(category.colorToken) }} />)}{unknown ? <View style={{ flex: unknown, backgroundColor: readingBorder }} /> : null}{future ? <View style={{ flex: future, backgroundColor: surfaceMuted }} /> : null}</View>}
-      {label ? <Text style={styles.pixelLabel}>{label}</Text> : null}
-      {group.hasStageStart ? <View style={styles.stageMarker} /> : null}
+      <View style={styles.pixelSegments}>{knownCounts.map(({ category, count }) => <View key={category.id} style={{ flex: count, backgroundColor: categoryColor(category.colorToken), opacity: focusedCategory && focusedCategory.id !== category.id ? 0.35 : 1 }} />)}{unknown ? <View style={{ flex: unknown, backgroundColor: readingBorder }} /> : null}{future ? <View style={{ flex: future, backgroundColor: surfaceMuted }} /> : null}</View>
+      {future === group.totalDays ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, { borderWidth: StyleSheet.hairlineWidth, borderColor: readingBorder, borderRadius: 3 }]} /> : null}
+      {label ? <View pointerEvents="none" style={styles.pixelLabelContainer}><Text allowFontScaling={!isMonthMarker} style={[styles.pixelLabel, isMonthMarker && styles.monthPixelLabel, isMonthMarker && { color: monthTextColor }, isMonthMarker && monthTextColor !== '#FFFFFF' && styles.pixelLabelWithoutShadow]}>{label}</Text></View> : null}
     </View>
   </Pressable>;
 }
 
 const styles = StyleSheet.create({
+  unitCaption: { fontSize: 9, marginBottom: 3 },
+  filterScroll: { flex: 1, minWidth: 0 },
+  rangeWheels: { flexDirection: 'row', gap: spacing.md }, rangeWheelColumn: { flex: 1, minWidth: 0 }, wheelCaption: { fontSize: 11, textAlign: 'center', marginBottom: spacing.sm },
+  yearNavigation: { flexDirection: 'row', alignItems: 'center' }, yearArrow: { minWidth: 32, minHeight: 36, alignItems: 'center', justifyContent: 'center' },
+  recordMode: { marginTop: spacing.md, marginBottom: 0 },
   confirmationCopy: { fontSize: 12, lineHeight: 22 },
   pageNotice: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginHorizontal: spacing.md, marginTop: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radii.md }, pageNoticeText: { flex: 1, fontSize: 10, lineHeight: 16 }, pageNoticeAction: { color: colors.primary, fontSize: 10, fontWeight: '700' },
   inlineNotice: { marginBottom: spacing.md, padding: spacing.md, borderRadius: radii.md }, inlineNoticeTitle: { fontSize: 11, fontWeight: '700' }, inlineNoticeMessage: { marginTop: 3, fontSize: 10, lineHeight: 16 }, inlineError: { marginTop: spacing.md, color: colors.danger, fontSize: 10, lineHeight: 16, textAlign: 'center' },
   dialogKeyboard: { flex: 1 }, dialogOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl, backgroundColor: colors.overlay }, dialogCard: { width: '100%', maxWidth: 440, overflow: 'hidden', borderRadius: radii.lg, elevation: 14, shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 6 } }, dialogContent: { paddingHorizontal: spacing.xl, paddingTop: spacing.xxl, paddingBottom: spacing.xl }, dialogClose: { position: 'absolute', zIndex: 2, top: spacing.sm, right: spacing.sm, width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill }, dialogCloseText: { fontSize: 24, lineHeight: 28, fontWeight: '300' },
-  yearHeader: { minHeight: 44, paddingHorizontal: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth },
+  yearHeader: { minHeight: 36, paddingHorizontal: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth },
   yearTitle: { fontFamily: fonts.serif, fontSize: 13, fontWeight: '600' },
-  yearAction: { minHeight: 44, paddingLeft: spacing.md, justifyContent: 'center' },
+  yearAction: { minHeight: 36, paddingLeft: spacing.md, justifyContent: 'center' },
   returnButton: { minHeight: 36, justifyContent: 'center', marginBottom: spacing.xs },
   returnText: { fontSize: 11, color: colors.primary, fontWeight: '600' },
   drillRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
@@ -495,14 +526,14 @@ const styles = StyleSheet.create({
   safe: { flex: 1 }, loader: { marginTop: 120 },
   header: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, headerTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerRight: { width: 42, alignItems: 'flex-end' },
   failure: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl }, failureTitle: { fontFamily: fonts.serif, fontSize: 17 }, failureText: { fontSize: 11, lineHeight: 18, textAlign: 'center' },
-  setup: { padding: spacing.xl, paddingTop: 56, paddingBottom: 60 }, motif: { width: 140, flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: spacing.xxxl }, motifCell: { width: 12, height: 12, borderRadius: 3 }, setupTitle: { fontFamily: fonts.serif, fontSize: 24, fontWeight: '600' }, setupCopy: { marginTop: spacing.md, marginBottom: spacing.xxl, fontSize: 12, lineHeight: 21 }, setupHint: { marginTop: spacing.md, fontSize: 10, lineHeight: 17 }, setupButton: { marginTop: spacing.xxl },
+
   list: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: 44 }, controlsRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: spacing.md }, rangeButton: { minHeight: 42, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md }, rangeButtonText: { color: colors.primary, fontSize: 12, fontWeight: '700' }, chevron: { width: 7, height: 7, marginTop: -3, marginRight: 2, borderRightWidth: 1.5, borderBottomWidth: 1.5, borderColor: colors.primary, transform: [{ rotate: '45deg' }] }, segmented: { flexDirection: 'row', padding: 3, borderRadius: radii.md }, segment: { minWidth: 38, minHeight: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm }, segmentActive: { backgroundColor: colors.primarySoft }, segmentText: { color: colors.textSecondary, fontSize: 11 }, segmentTextActive: { color: colors.primary, fontWeight: '700' },
-  modeRow: { flexDirection: 'row', marginTop: spacing.lg }, modeButton: { flex: 1, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2 }, modeText: { fontSize: 12, fontWeight: '700' }, filterLine: { height: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginVertical: spacing.xs }, filterRow: { alignItems: 'center', gap: spacing.xs }, filterChip: { height: buttonMetrics.compactHeight, maxWidth: 150, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: spacing.md, borderRadius: radii.pill }, filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: colors.primary, fontWeight: '700' }, swatch: { width: 9, height: 9, borderRadius: 3 }, manageButton: { width: buttonMetrics.iconSize, height: buttonMetrics.iconSize, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill },
-  pixelCard: { borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, padding: spacing.md, paddingBottom: spacing.xl }, summaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md }, summaryLabel: { fontSize: 10 }, summaryValue: { flexDirection: 'row', alignItems: 'baseline', gap: 5, marginTop: 2 }, summaryNumber: { fontFamily: fonts.serif, fontSize: 29, fontWeight: '600' }, summaryUnit: { fontSize: 11 }, summaryMeta: { alignItems: 'flex-end', gap: 4, maxWidth: 156 }, summaryMetaText: { fontSize: 9, textAlign: 'right' },
-  pixelRow: { flexDirection: 'row', paddingHorizontal: spacing.md, backgroundColor: colors.surface }, pixelPressable: { paddingBottom: 3 }, pixel: { position: 'relative', overflow: 'hidden', borderRadius: 3 }, absoluteFill: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }, pixelSegments: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, flexDirection: 'row' }, pixelLabel: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, color: '#FFFFFF', fontSize: 10, fontWeight: '700', textAlign: 'center', textAlignVertical: 'center', textShadowColor: '#00000070', textShadowRadius: 3 }, stageMarker: { position: 'absolute', top: 2, right: 2, width: 5, height: 5, borderRadius: 3, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.primary }, pixelSelected: { opacity: 0.56 },
-  axis: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: spacing.sm, backgroundColor: colors.surface, borderBottomLeftRadius: radii.lg, borderBottomRightRadius: radii.lg }, axisText: { fontSize: 8 }, legend: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.lg }, legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 }, legendText: { fontSize: 9 }, observationNote: { marginTop: spacing.md, fontSize: 10, lineHeight: 17 }, addButton: { marginTop: spacing.lg }, originText: { marginTop: spacing.md, fontSize: 9, textAlign: 'center' }, emptyPixels: { padding: spacing.xl },
-  sheetTitle: { marginBottom: spacing.lg, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, formSheetTitle: { marginBottom: spacing.xs }, firstFormLabel: { marginTop: 0 }, rangeDialogContent: { paddingHorizontal: spacing.xl, paddingTop: spacing.xxl, paddingBottom: spacing.xl }, rangeModeSwitch: { flexDirection: 'row', padding: 3, borderRadius: radii.md, marginBottom: spacing.lg }, rangeModeChoice: { flex: 1, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm }, rangeModeChoiceActive: { backgroundColor: colors.primary }, rangeModeChoiceText: { color: colors.textSecondary, fontSize: 11 }, rangeModeChoiceTextActive: { color: '#FFFFFF', fontWeight: '700' }, rangeOriginSummary: { height: YEAR_WHEEL_ITEM_HEIGHT * 5, alignItems: 'center', justifyContent: 'center' }, rangeOriginTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, rangeOriginSetting: { width: '100%', minHeight: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg, paddingHorizontal: spacing.md, borderRadius: radii.md }, rangeOriginSettingLabel: { fontSize: 9 }, rangeOriginSettingValue: { marginTop: 3, fontSize: 11, fontWeight: '600' }, rangeOriginSettingAction: { fontSize: 10, fontWeight: '700' }, yearWheel: { height: YEAR_WHEEL_ITEM_HEIGHT * 5, overflow: 'hidden', borderRadius: radii.md }, yearWheelContent: { paddingVertical: YEAR_WHEEL_ITEM_HEIGHT * 2 }, yearWheelSelection: { position: 'absolute', zIndex: 0, top: YEAR_WHEEL_ITEM_HEIGHT * 2, left: spacing.sm, right: spacing.sm, height: YEAR_WHEEL_ITEM_HEIGHT, borderRadius: radii.md, backgroundColor: colors.primarySoft }, yearWheelItem: { zIndex: 1, height: YEAR_WHEEL_ITEM_HEIGHT, alignItems: 'center', justifyContent: 'center' }, yearWheelText: { fontSize: 12 }, yearWheelTextActive: { color: colors.primary, fontSize: 16, fontWeight: '700' }, rangeApply: { marginTop: spacing.lg }, check: { color: colors.primary, fontSize: 13, fontWeight: '700' },
+  modeRow: { flexDirection: 'row', marginTop: spacing.sm }, modeButton: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2 }, modeText: { fontSize: 12, fontWeight: '700' }, filterLine: { height: 40, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginVertical: 0 }, filterRow: { alignItems: 'center', gap: spacing.xs }, filterChip: { height: buttonMetrics.compactHeight, maxWidth: 150, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: spacing.md, borderRadius: radii.pill }, filterText: { color: colors.textSecondary, fontSize: 10 }, filterTextActive: { color: colors.primary, fontWeight: '700' }, swatch: { width: 9, height: 9, borderRadius: 3 }, manageButton: { width: buttonMetrics.iconSize, height: buttonMetrics.iconSize, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill },
+  pixelCard: { borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, paddingBottom: spacing.xs }, summaryRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md }, summaryLabel: { fontSize: 10 }, summaryValue: { flexDirection: 'row', alignItems: 'baseline', gap: 5, marginTop: 0 }, summaryNumber: { fontFamily: fonts.serif, fontSize: 29, fontWeight: '600', lineHeight: 34 }, summaryUnit: { fontSize: 11 }, summaryMeta: { alignItems: 'flex-end', gap: 2, maxWidth: 156, marginTop: spacing.xs }, summaryMetaText: { fontSize: 9, textAlign: 'right' },
+  pixelRow: { flexDirection: 'row', paddingHorizontal: spacing.md, backgroundColor: colors.surface }, pixelPressable: { paddingBottom: 3 }, pixel: { position: 'relative', overflow: 'hidden', borderRadius: 3 }, pixelSegments: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, flexDirection: 'row' }, pixelLabelContainer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' }, pixelLabel: { color: '#FFFFFF', fontSize: 10, fontWeight: '700', textAlign: 'center', textShadowColor: '#00000070', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }, monthPixelLabel: { fontSize: 8, textShadowRadius: 1 }, pixelLabelWithoutShadow: { textShadowColor: 'transparent', textShadowRadius: 0 }, pixelSelected: { opacity: 0.56 },
+  axis: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: spacing.sm, backgroundColor: colors.surface, borderBottomLeftRadius: radii.lg, borderBottomRightRadius: radii.lg }, axisText: { fontSize: 8 }, legend: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, paddingTop: spacing.lg }, legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 }, legendText: { fontSize: 9 }, addButton: { marginTop: spacing.lg }, emptyPixels: { padding: spacing.xl },
+  sheetTitle: { marginBottom: spacing.lg, fontFamily: fonts.serif, fontSize: 18, fontWeight: '600', textAlign: 'center' }, formSheetTitle: { marginBottom: spacing.xs }, firstFormLabel: { marginTop: 0 }, rangeDialogContent: { paddingHorizontal: spacing.xl, paddingTop: spacing.xxl, paddingBottom: spacing.xl }, rangeModeSwitch: { flexDirection: 'row', padding: 3, borderRadius: radii.md, marginBottom: spacing.lg }, rangeModeChoice: { flex: 1, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm }, rangeModeChoiceActive: { backgroundColor: colors.primary }, rangeModeChoiceText: { color: colors.textSecondary, fontSize: 11 }, rangeModeChoiceTextActive: { color: '#FFFFFF', fontWeight: '700' }, yearWheel: { height: YEAR_WHEEL_ITEM_HEIGHT * 5, overflow: 'hidden', borderRadius: radii.md }, yearWheelContent: { paddingVertical: YEAR_WHEEL_ITEM_HEIGHT * 2 }, yearWheelSelection: { position: 'absolute', zIndex: 0, top: YEAR_WHEEL_ITEM_HEIGHT * 2, left: spacing.sm, right: spacing.sm, height: YEAR_WHEEL_ITEM_HEIGHT, borderRadius: radii.md, backgroundColor: colors.primarySoft }, yearWheelItem: { zIndex: 1, height: YEAR_WHEEL_ITEM_HEIGHT, alignItems: 'center', justifyContent: 'center' }, yearWheelText: { fontSize: 12 }, yearWheelTextActive: { color: colors.primary, fontSize: 16, fontWeight: '700' }, rangeApply: { marginTop: spacing.lg },
   detailRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.sm, padding: spacing.md, borderRadius: radii.md }, detailBar: { width: 4, borderRadius: 2 }, detailCopy: { flex: 1 }, detailKind: { fontSize: 9 }, detailName: { marginTop: 2, fontSize: 13, fontWeight: '700' }, detailDates: { marginTop: 3, fontSize: 9 }, detailNote: { marginTop: spacing.sm, fontSize: 11, lineHeight: 17 }, detailActions: { justifyContent: 'space-between', alignItems: 'flex-end' }, detailEdit: { color: colors.primary, fontSize: 10, fontWeight: '700' }, detailDelete: { color: colors.danger, fontSize: 10 }, emptyDetail: { paddingVertical: spacing.xxl, fontSize: 11, textAlign: 'center' },
   formLabel: { marginTop: spacing.md, marginBottom: spacing.sm, fontSize: 10 }, categoryRow: { minHeight: buttonMetrics.minimumTouchTarget, alignItems: 'center', gap: spacing.xs }, categoryChoice: { gap: 6 }, categoryChoiceText: { fontSize: 10 }, newChoiceText: { color: colors.primary, fontSize: 10, fontWeight: '700' }, input: { minHeight: 46, paddingHorizontal: spacing.md, borderRadius: radii.md, fontSize: 13 }, noteInput: { minHeight: 92, paddingTop: spacing.md }, dateRow: { flexDirection: 'row', gap: spacing.md }, dateField: { flex: 1 }, dateButton: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, borderRadius: radii.md }, dateButtonText: { fontSize: 11 }, dateButtonAction: { color: colors.primary, fontSize: 9, fontWeight: '700' }, overwriteHint: { marginTop: spacing.md, fontSize: 9, lineHeight: 15 }, sheetPrimary: { marginTop: spacing.xl }, sheetCancel: { minHeight: 44, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm }, sheetCancelText: { fontSize: 11 },
-  saveOrigin: { alignSelf: 'flex-end', minHeight: 38, justifyContent: 'center' }, saveOriginText: { color: colors.primary, fontSize: 10, fontWeight: '700' }, disabledText: { opacity: 0.32 }, managerHint: { fontSize: 9, lineHeight: 15 }, managerSection: { marginTop: spacing.xl, marginBottom: spacing.xs, fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' }, managerRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth }, managerSwatch: { width: 18, height: 18, borderRadius: 6 }, managerName: { flex: 1, marginLeft: spacing.md, fontSize: 12 }, managerAction: { fontSize: 10 }, managerEmpty: { paddingVertical: spacing.md, fontSize: 10 },
+  disabledText: { opacity: 0.32 }, managerSection: { marginTop: spacing.xl, marginBottom: spacing.xs, fontFamily: fonts.serif, fontSize: 14, fontWeight: '600' }, managerRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth }, managerSwatch: { width: 18, height: 18, borderRadius: 6 }, managerName: { flex: 1, marginLeft: spacing.md, fontSize: 12 }, managerAction: { fontSize: 10 }, managerEmpty: { paddingVertical: spacing.md, fontSize: 10 },
 });

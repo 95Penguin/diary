@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildPixelGroups, buildPixelSections, focusedPixelFill } from '../src/utils/time-pixel-display.ts';
+import { buildPixelGroups, buildPixelSections, hasTimePixelRangeOnDate, labelForPixelGroup } from '../src/utils/time-pixel-display.ts';
 import { timePixelSaveImpact } from '../src/utils/time-pixel-impact.ts';
 import { migrateDatabase } from '../src/database/migrate.ts';
 import { createTimePixelCategory, getTimePixelSnapshot, initializeTimePixels, saveTimePixelRange } from '../src/database/time-pixel-repository.ts';
@@ -41,27 +41,27 @@ test('a selected year remains visible before the observation start', () => {
   assert.equal(built.recordedDays, 2);
 });
 
-test('note presence spans its full range in either layer and remains independent of stage-start dots', () => {
+test('note presence spans its full range in either layer', () => {
   const ranges = [range('home', '2023-12-30', '2024-01-01', { note: '回家' }), range('stage', '2024-01-01', '2024-01-03', { kind: 'stage', note: '上学' })];
   for (const colorMode of ['location', 'stage']) {
     const built = buildPixelGroups(snapshot(ranges), { ...settings, colorMode }, '2024-01-04');
     assert.deepEqual(built.groups.map((item) => item.hasNote), [true, true, true, true, true, false]);
-    assert.deepEqual(built.groups.filter((item) => item.hasStageStart).map((item) => item.key), ['2024-01-01']);
   }
 });
 
-test('stage markers represent category transitions rather than stored range fragments', () => {
-  const fragments = [
-    range('school-a', '2024-01-01', '2024-01-09', { kind: 'stage', categoryId: 'school' }),
-    range('school-note', '2024-01-10', '2024-01-20', { kind: 'stage', categoryId: 'school', note: '同一阶段里的备注' }),
-    range('school-b', '2024-01-21', '2024-01-24', { kind: 'stage', categoryId: 'school' }),
-    range('work', '2024-01-25', '2024-01-31', { kind: 'stage', categoryId: 'work' }),
-  ];
-  const built = buildPixelGroups(snapshot(fragments), { ...settings, originDate: '2024-01-01', colorMode: 'stage' }, '2024-01-31');
-  assert.deepEqual(built.groups.filter((item) => item.hasStageStart).map((item) => item.key), ['2024-01-01', '2024-01-25']);
+test('day labels mark only the first day of each month', () => {
+  assert.equal(labelForPixelGroup({ key: '2025-01-01', startDate: '2025-01-01' }, 'day'), '1');
+  assert.equal(labelForPixelGroup({ key: '2025-10-01', startDate: '2025-10-01' }, 'day'), '10');
+  assert.equal(labelForPixelGroup({ key: '2025-10-02', startDate: '2025-10-02' }, 'day'), '');
+  assert.equal(labelForPixelGroup({ key: '2025-10', startDate: '2025-10-01' }, 'month'), '10月');
+  assert.equal(labelForPixelGroup({ key: '2025', startDate: '2025-01-01' }, 'year'), '2025');
+});
 
-  const clipped = buildPixelGroups(snapshot(fragments), { ...settings, originDate: '2024-01-10', colorMode: 'stage' }, '2024-01-31');
-  assert.deepEqual(clipped.groups.filter((item) => item.hasStageStart).map((item) => item.key), ['2024-01-25']);
+test('a day is considered recorded only in the active layer', () => {
+  const ranges = [range('school', '2025-01-01', '2025-01-02', { kind: 'stage', categoryId: 'school' })];
+  assert.equal(hasTimePixelRangeOnDate(ranges, 'location', '2025-01-01'), false);
+  assert.equal(hasTimePixelRangeOnDate(ranges, 'stage', '2025-01-01'), true);
+  assert.equal(hasTimePixelRangeOnDate(ranges, 'stage', '2025-01-03'), false);
 });
 
 test('coarse note presence aggregates only visible elapsed days, including leap day', () => {
@@ -69,7 +69,6 @@ test('coarse note presence aggregates only visible elapsed days, including leap 
   const selected = { ...settings, rangeMode: 'year', selectedYear: 2024, unit: 'month' };
   const built = buildPixelGroups(snapshot(ranges), selected, '2024-03-01');
   assert.deepEqual(built.groups.filter((item) => item.hasNote).map((item) => item.key), ['2024-02']);
-  assert.equal(built.groups.some((item) => item.hasStageStart), false);
   assert.equal(built.elapsedDays, 61);
   assert.equal(built.futureDays, 305);
   const years = buildPixelGroups(snapshot(ranges), { ...selected, unit: 'year' }, '2024-03-01');
@@ -78,17 +77,16 @@ test('coarse note presence aggregates only visible elapsed days, including leap 
   assert.equal(independent.groups.some((item) => item.hasNote), true);
 });
 
-test('focused category fill keeps future days blank in the current month and year', () => {
+test('current month and year preserve category counts separately from future days', () => {
   const current = { ...settings, originDate: '2026-01-01', rangeMode: 'year', selectedYear: 2026, unit: 'month' };
   const ranges = [range('home-now', '2026-10-01', '2026-10-02')];
   const october = buildPixelGroups(snapshot(ranges), current, '2026-10-02').groups.find((item) => item.key === '2026-10');
   assert.ok(october);
-  assert.deepEqual(focusedPixelFill(october, 'home'), { elapsedDays: 2, futureDays: 29, opacity: 1 });
-  assert.deepEqual(focusedPixelFill(october, 'missing'), { elapsedDays: 2, futureDays: 29, opacity: 0 });
+  assert.equal(october.counts.get('home'), 2);
+  assert.equal(october.counts.get('__future'), 29);
   const year = buildPixelGroups(snapshot(ranges), { ...current, unit: 'year' }, '2026-10-02').groups[0];
-  const yearFill = focusedPixelFill(year, 'home');
-  assert.equal(yearFill.elapsedDays + yearFill.futureDays, year.totalDays);
-  assert.equal(yearFill.futureDays, 90);
+  assert.equal(year.elapsedDays + year.counts.get('__future'), year.totalDays);
+  assert.equal(year.counts.get('__future'), 90);
 });
 
 test('overlap preview counts inclusive dates per category, with independent layers and note risks', () => {
