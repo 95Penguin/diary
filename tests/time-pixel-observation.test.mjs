@@ -89,6 +89,23 @@ test('current month and year preserve category counts separately from future day
   assert.equal(year.counts.get('__future'), 90);
 });
 
+test('coarse aggregation matches day totals when newer ranges overlap and another layer contains notes', () => {
+  const ranges = [
+    range('old-home', '2025-01-01', '2025-01-10', { updatedAt: '2025-01-01' }),
+    range('new-dorm', '2025-01-05', '2025-01-06', { categoryId: 'dorm', updatedAt: '2025-02-01' }),
+    range('stage-note', '2025-01-03', '2025-01-04', { kind: 'stage', categoryId: 'school', note: '开学' }),
+  ];
+  const base = { ...settings, originDate: '2025-01-01', rangeMode: 'year', selectedYear: 2025 };
+  for (const unit of ['day', 'month', 'year']) {
+    const built = buildPixelGroups(snapshot(ranges), { ...base, unit }, '2025-01-08');
+    assert.equal(built.recordedDays, 8);
+    assert.equal(built.totals.get('home'), 6);
+    assert.equal(built.totals.get('dorm'), 2);
+    assert.equal(built.futureDays, 357);
+    assert.equal(built.groups.some((group) => group.hasNote), true);
+  }
+});
+
 test('overlap preview counts inclusive dates per category, with independent layers and note risks', () => {
   const ranges = [range('a', '2024-02-27', '2024-02-29', { note: '旧备注' }), range('b', '2024-03-01', '2024-03-10', { categoryId: 'dorm' }), range('c', '2024-02-01', '2024-03-31', { kind: 'stage', note: '不受影响' })];
   const impact = timePixelSaveImpact(ranges, { kind: 'location', startDate: '2024-02-28', endDate: '2024-03-02' });
