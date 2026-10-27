@@ -64,7 +64,7 @@ test('v20 upgrade retains records, notes, colors and granularity and migrates th
   const id = await createTimePixelCategory(db, { kind: 'location', name: '家', colorToken: 'fern' });
   await saveTimePixelRange(db, { categoryId: id, startDate: '2015-09-01', endDate: '2015-09-01', note: '开学' });
   const before = await getTimePixelSnapshot(db);
-  await db.execAsync('ALTER TABLE time_pixel_settings DROP COLUMN end_year; ALTER TABLE time_pixel_settings DROP COLUMN unit_customized; PRAGMA user_version = 20;');
+  await db.execAsync('ALTER TABLE time_pixel_settings DROP COLUMN end_year; ALTER TABLE time_pixel_settings DROP COLUMN unit_customized; DROP TABLE sleep_record_deletions; DROP TABLE sleep_records; PRAGMA user_version = 20;');
   await migrateDatabase(db);
   const after = await getTimePixelSnapshot(db);
   assert.equal((await db.getFirstAsync('PRAGMA user_version')).user_version, DATABASE_VERSION);

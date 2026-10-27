@@ -89,7 +89,7 @@ test('backup validation and restore preserve time pixels', async (t) => {
   const localCategoryId = await createTimePixelCategory(target, { kind: 'location', name: '杭州', colorToken: 'slate' }, new Date('2025-01-01T00:00:00.000Z'));
 
   const backup = await createJournalExport(source);
-  assert.equal(backup.version, 15);
+  assert.equal(backup.version, 16);
   const parsed = parseJournalBackup(JSON.stringify(backup));
   await importJournalBackup(target, parsed);
   const restored = await getTimePixelSnapshot(target);

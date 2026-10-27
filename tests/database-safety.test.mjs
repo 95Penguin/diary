@@ -360,7 +360,7 @@ test('current backup preserves location details and portable app preferences', a
   await saveJournalTemplate(sourceDb, null, { title: '周复盘', description: '每周使用', content: '本周：' });
 
   const backup = await createJournalExport(sourceDb);
-  assert.equal(backup.version, 15);
+  assert.equal(backup.version, 16);
   assert.equal(backup.appPreferences.nickname, '小拾');
   assert.equal(backup.appPreferences.avatarLocalUri, 'file:///avatar.png');
   assert.equal(backup.appPreferences.readingTheme, 'green');

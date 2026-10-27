@@ -2,7 +2,7 @@
 
 拾时是一款本地优先的个人生活记录应用：记下此刻，也在未来重新拾起它。
 
-当前版本为 `1.0.10`，Android 包名为 `com.penguin95.shishi`。应用以 Android
+当前版本为 `1.0.11`，Android 包名为 `com.penguin95.shishi`。应用以 Android
 真机自用为主要场景，同时保留 iOS 与 Web 工程能力。
 
 ## 主要功能

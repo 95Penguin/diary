@@ -199,6 +199,8 @@ function AppStack() {
             <Stack.Screen name="location-health" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="footprint-map" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="time-pixels" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="sleep-log" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="sleep-log/history" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="location/[name]" options={{ animation: 'slide_from_right' }} />
           </Stack>
         </>;

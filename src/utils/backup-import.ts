@@ -45,9 +45,11 @@ export function parseJournalBackup(contents: string): JournalBackup {
   try { value = JSON.parse(contents); } catch { throw new Error('invalid-json'); }
   if (!value || typeof value !== 'object') throw new Error('invalid-backup');
   const backup = value as Partial<JournalBackup>;
-  if (backup.format !== 'shishi-journal' || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].some((version) => backup.version === version)) throw new Error('unsupported-backup');
+  if (backup.format !== 'shishi-journal' || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].some((version) => backup.version === version)) throw new Error('unsupported-backup');
   if (!Array.isArray(backup.entries) || !Array.isArray(backup.followUps) || !Array.isArray(backup.tags) || !Array.isArray(backup.images)) throw new Error('invalid-backup');
   const validEntries = backup.entries.every((item) => item && isString(item.id) && isString(item.content) && isString(item.occurredAt) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt));
+  const validSleepRecords = backup.sleepRecords === undefined || (Array.isArray(backup.sleepRecords) && backup.sleepRecords.every((item) => item && isString(item.id) && isDateKey(item.nightDate) && isString(item.occurredAt) && !Number.isNaN(Date.parse(item.occurredAt)) && isString(item.createdAt) && isString(item.updatedAt)));
+  const validSleepRecordDeletions = backup.sleepRecordDeletions === undefined || (Array.isArray(backup.sleepRecordDeletions) && backup.sleepRecordDeletions.every((item) => item && isString(item.id) && isString(item.deletedAt) && !Number.isNaN(Date.parse(item.deletedAt))));
   const validFollowUps = backup.followUps.every((item) => item && isString(item.id) && isString(item.entryId) && isString(item.content) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt));
   const validTags = backup.tags.every((item) => item && isString(item.entryId) && isString(item.label) && typeof item.sortOrder === 'number');
   const validImages = backup.images.every((item) => item && isString(item.id) && isString(item.entryId) && isString(item.localUri) && typeof item.width === 'number' && Number.isFinite(item.width) && typeof item.height === 'number' && Number.isFinite(item.height) && typeof item.sortOrder === 'number' && Number.isFinite(item.sortOrder) && isString(item.createdAt) && isMediaType(item.mediaType) && isOptionalNullableString(item.pairedVideoLocalUri) && isOptionalNullableNumber(item.duration) && isOptionalNullableString(item.thumbnailLocalUri) && isOptionalNullableString(item.dataBase64) && isOptionalNullableString(item.mimeType) && isOptionalNullableString(item.pairedVideoDataBase64) && isOptionalNullableString(item.pairedVideoMimeType) && isOptionalNullableString(item.thumbnailDataBase64) && isOptionalNullableString(item.thumbnailMimeType));
@@ -117,9 +119,11 @@ export function parseJournalBackup(contents: string): JournalBackup {
     && (preferences.locationPrivacyMode === undefined || ['precise', 'approximate', 'nameOnly', 'ask'].includes(preferences.locationPrivacyMode))
     && (preferences.exportLocationMode === undefined || ['include', 'hidden'].includes(preferences.exportLocationMode))
   );
-  if (!validEntries || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validMediaMetadata || !validCapsules || !validCapsuleReplies || !validCapsuleImages || !validTimePixelSettings || !validTimePixelCategories || !validTimePixelRanges || !validMetadataCatalog || !validJournalTemplates || !validAppPreferences) throw new Error('invalid-backup');
+  if (!validEntries || !validSleepRecords || !validSleepRecordDeletions || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validMediaMetadata || !validCapsules || !validCapsuleReplies || !validCapsuleImages || !validTimePixelSettings || !validTimePixelCategories || !validTimePixelRanges || !validMetadataCatalog || !validJournalTemplates || !validAppPreferences) throw new Error('invalid-backup');
 
   const entries = backup.entries as JournalBackup['entries'];
+  const sleepRecords = backup.sleepRecords ?? [];
+  const sleepRecordDeletions = backup.sleepRecordDeletions ?? [];
   const followUps = backup.followUps as JournalBackup['followUps'];
   const images = backup.images as JournalBackup['images'];
   const followUpImages = (backup.followUpImages ?? []) as NonNullable<JournalBackup['followUpImages']>;
@@ -130,7 +134,7 @@ export function parseJournalBackup(contents: string): JournalBackup {
   const timePixelCategories = backup.timePixelCategories ?? [];
   const timePixelRanges = backup.timePixelRanges ?? [];
   const timePixelCategoryNames = timePixelCategories.map((item) => `${item.kind}\0${item.name.trim().toLocaleLowerCase()}`);
-  if (!hasUniqueIds(entries) || !hasUniqueIds(followUps) || !hasUniqueIds(images) || !hasUniqueIds(followUpImages) || !hasUniqueIds(versions) || !hasUniqueIds(capsules) || !hasUniqueIds(capsuleReplies) || !hasUniqueIds(capsuleImages) || !hasUniqueIds(timePixelCategories) || !hasUniqueIds(timePixelRanges)) {
+  if (!hasUniqueIds(entries) || !hasUniqueIds(sleepRecords) || !hasUniqueIds(sleepRecordDeletions) || sleepRecordDeletions.some((item) => sleepRecords.some((record) => record.id === item.id)) || new Set(sleepRecords.map((item) => item.nightDate)).size !== sleepRecords.length || !hasUniqueIds(followUps) || !hasUniqueIds(images) || !hasUniqueIds(followUpImages) || !hasUniqueIds(versions) || !hasUniqueIds(capsules) || !hasUniqueIds(capsuleReplies) || !hasUniqueIds(capsuleImages) || !hasUniqueIds(timePixelCategories) || !hasUniqueIds(timePixelRanges)) {
     throw new Error('invalid-backup');
   }
   if (new Set(timePixelCategoryNames).size !== timePixelCategoryNames.length) throw new Error('invalid-backup');

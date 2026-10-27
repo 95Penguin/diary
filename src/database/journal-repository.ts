@@ -1541,6 +1541,12 @@ export async function getJournalStats(db: SQLiteDatabase): Promise<JournalStats>
 }
 
 export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBackup> {
+  const sleepRecords = await db.getAllAsync<{ id: string; night_date: string; occurred_at: string; created_at: string; updated_at: string }>(
+    'SELECT id, night_date, occurred_at, created_at, updated_at FROM sleep_records ORDER BY night_date ASC',
+  );
+  const sleepRecordDeletions = await db.getAllAsync<{ id: string; deleted_at: string }>(
+    'SELECT id, deleted_at FROM sleep_record_deletions ORDER BY deleted_at ASC',
+  );
   const entries = await db.getAllAsync<{
     id: string; content: string; occurred_at: string; created_at: string; updated_at: string; mood: string | null; weather: string | null; favorited_at: string | null; location_name: string | null; latitude: number | null; longitude: number | null; deleted_at: string | null;
   }>('SELECT id, content, occurred_at, created_at, updated_at, mood, weather, favorited_at, location_name, latitude, longitude, deleted_at FROM entries ORDER BY occurred_at ASC');
@@ -1600,7 +1606,9 @@ export async function createJournalExport(db: SQLiteDatabase): Promise<JournalBa
   }
   return {
     format: 'shishi-journal',
-    version: 15,
+    version: 16,
+    sleepRecords: sleepRecords.map((item) => ({ id: item.id, nightDate: item.night_date, occurredAt: item.occurred_at, createdAt: item.created_at, updatedAt: item.updated_at })),
+    sleepRecordDeletions: sleepRecordDeletions.map((item) => ({ id: item.id, deletedAt: item.deleted_at })),
     exportedAt: new Date().toISOString(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     entries: entries.map((entry) => ({
@@ -1678,6 +1686,10 @@ export async function saveCalendarOrder(db: SQLiteDatabase, value: 'asc' | 'desc
 
 export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBackup): Promise<ImportResult> {
   const result: ImportResult = { createdEntries: 0, updatedEntries: 0, createdFollowUps: 0, updatedFollowUps: 0, tags: 0 };
+  if (backup.sleepRecords?.length || backup.sleepRecordDeletions?.length) {
+    result.createdSleepRecords = 0;
+    result.updatedSleepRecords = 0;
+  }
   // Use the primary connection: Android can invalidate prepared statements when
   // reads are mixed into expo-sqlite's temporary exclusive connection.
   await db.withTransactionAsync(async () => {
@@ -1697,6 +1709,43 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
         );
         result.updatedEntries += 1;
       }
+    }
+    for (const record of backup.sleepRecords ?? []) {
+      const existing = await txn.getFirstAsync<{ updated_at: string }>('SELECT updated_at FROM sleep_records WHERE id = ?', record.id);
+      if (existing && record.updatedAt <= existing.updated_at) continue;
+      const deletion = await txn.getFirstAsync<{ deleted_at: string }>('SELECT deleted_at FROM sleep_record_deletions WHERE id = ?', record.id);
+      if (deletion && record.updatedAt <= deletion.deleted_at) continue;
+      const sameNight = await txn.getFirstAsync<{ id: string; updated_at: string }>('SELECT id, updated_at FROM sleep_records WHERE night_date = ?', record.nightDate);
+      if (sameNight && sameNight.id !== record.id && sameNight.updated_at >= record.updatedAt) continue;
+      if (sameNight && sameNight.id !== record.id) {
+        await txn.runAsync('DELETE FROM sleep_records WHERE id = ?', sameNight.id);
+        await txn.runAsync(
+          `INSERT INTO sleep_record_deletions (id, deleted_at) VALUES (?, ?)
+           ON CONFLICT(id) DO UPDATE SET deleted_at = MAX(deleted_at, excluded.deleted_at)`,
+          sameNight.id, record.updatedAt,
+        );
+      }
+      if (existing) {
+        await txn.runAsync('UPDATE sleep_records SET night_date = ?, occurred_at = ?, updated_at = ? WHERE id = ?', record.nightDate, record.occurredAt, record.updatedAt, record.id);
+        if (result.updatedSleepRecords !== undefined) result.updatedSleepRecords += 1;
+      } else {
+        await txn.runAsync('INSERT INTO sleep_records (id, night_date, occurred_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', record.id, record.nightDate, record.occurredAt, record.createdAt, record.updatedAt);
+        if (result.createdSleepRecords !== undefined) result.createdSleepRecords += 1;
+      }
+      await txn.runAsync('DELETE FROM sleep_record_deletions WHERE id = ?', record.id);
+    }
+    for (const deletion of backup.sleepRecordDeletions ?? []) {
+      const existing = await txn.getFirstAsync<{ updated_at: string }>('SELECT updated_at FROM sleep_records WHERE id = ?', deletion.id);
+      if (existing && existing.updated_at > deletion.deletedAt) {
+        await txn.runAsync('DELETE FROM sleep_record_deletions WHERE id = ?', deletion.id);
+        continue;
+      }
+      if (existing) await txn.runAsync('DELETE FROM sleep_records WHERE id = ?', deletion.id);
+      await txn.runAsync(
+        `INSERT INTO sleep_record_deletions (id, deleted_at) VALUES (?, ?)
+         ON CONFLICT(id) DO UPDATE SET deleted_at = MAX(deleted_at, excluded.deleted_at)`,
+        deletion.id, deletion.deletedAt,
+      );
     }
     for (const item of backup.followUps) {
       const parent = await txn.getFirstAsync<{ id: string }>('SELECT id FROM entries WHERE id = ?', item.entryId);

@@ -7,7 +7,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
  * migrated in production: data from those builds must first be exported by the
  * old build and restored through the validated ZIP backup flow.
  */
-export const DATABASE_VERSION = 21;
+export const DATABASE_VERSION = 22;
 export const DATABASE_BASELINE_VERSION = 13;
 
 const SEARCH_INDEX_SCHEMA = `
@@ -417,6 +417,20 @@ const MIGRATION_20_TO_21 = `
   UPDATE time_pixel_settings SET origin_date = substr(origin_date, 1, 4) || '-01-01', unit_customized = 1;
 `;
 
+const MIGRATION_21_TO_22 = `
+  CREATE TABLE sleep_records (
+    id TEXT PRIMARY KEY NOT NULL,
+    night_date TEXT NOT NULL UNIQUE,
+    occurred_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE sleep_record_deletions (
+    id TEXT PRIMARY KEY NOT NULL,
+    deleted_at TEXT NOT NULL
+  );
+`;
+
 export async function migrateDatabase(db: SQLiteDatabase) {
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
@@ -436,7 +450,7 @@ export async function migrateDatabase(db: SQLiteDatabase) {
   try {
     if (currentVersion === 0) {
       await db.execAsync(BASELINE_SCHEMA);
-    } else if (currentVersion >= 13 && currentVersion <= 20) {
+    } else if (currentVersion >= 13 && currentVersion <= 21) {
       if (currentVersion === 13) await db.execAsync(MIGRATION_13_TO_14);
       if (currentVersion <= 14) await db.execAsync(MIGRATION_14_TO_15);
       if (currentVersion <= 15) await db.execAsync(MIGRATION_15_TO_16);
@@ -447,7 +461,8 @@ export async function migrateDatabase(db: SQLiteDatabase) {
     } else {
       throw new Error(`没有可用的数据库迁移路径：${currentVersion} → ${DATABASE_VERSION}`);
     }
-    await db.execAsync(MIGRATION_20_TO_21);
+    if (currentVersion <= 20) await db.execAsync(MIGRATION_20_TO_21);
+    await db.execAsync(MIGRATION_21_TO_22);
     await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION}; COMMIT`);
   } catch (error) {
     try {

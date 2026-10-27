@@ -243,7 +243,7 @@ export default function BackupScreen() {
       const backup = await inspectZipBackupFile(picked.assets[0].uri);
       const now = new Date().toISOString();
       await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: 'healthy' });
-      setMessage(`备份健康：可恢复 ${backup.entries.length} 条记录、${backup.followUps.length} 条后续`);
+      setMessage(`备份健康：可恢复 ${backup.entries.length} 条记录、${backup.followUps.length} 条后续${backup.sleepRecords?.length ? `、${backup.sleepRecords.length} 晚睡眠记录` : ''}`);
     } catch (error) {
       void recordAppError('backup.health-check', error);
       const now = new Date().toISOString();
@@ -329,8 +329,10 @@ export default function BackupScreen() {
       await syncTimeCapsuleNotifications(db).catch(() => undefined);
       const created = result.createdEntries + result.createdFollowUps;
       const updated = result.updatedEntries + result.updatedFollowUps;
+      const createdSleep = result.createdSleepRecords ?? 0;
+      const updatedSleep = result.updatedSleepRecords ?? 0;
       setOperationProgress({ label: '恢复已完成', value: 1 });
-      setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条${restoredPreferences ? '，个人资料和设置已恢复' : ''}。恢复前快照已安全保留。`);
+      setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条${createdSleep || updatedSleep ? `；睡眠记录新增 ${createdSleep} 晚、更新 ${updatedSleep} 晚` : ''}${restoredPreferences ? '，个人资料和设置已恢复' : ''}。恢复前快照已安全保留。`);
     } catch (error) {
       void recordAppError('backup.restore', error);
       if (!imported) createdImageUris.forEach(deleteJournalImage);
@@ -433,7 +435,7 @@ export default function BackupScreen() {
         <Pressable onPress={(event) => event.stopPropagation()} style={[styles.confirmCard, { backgroundColor: readingTheme.background }]}>
           <Text style={[styles.confirmTitle, { color: readingTheme.text }]}>合并这份备份？</Text>
           {pendingBackup ? <>
-            <Text style={styles.confirmSummary}>{pendingBackup.entries.length} 条记录 · {pendingBackup.followUps.length} 条后续 · {pendingBackup.images.length + (pendingBackup.followUpImages?.length ?? 0)} 个媒体</Text>
+            <Text style={styles.confirmSummary}>{pendingBackup.entries.length} 条记录 · {pendingBackup.followUps.length} 条后续 · {pendingBackup.images.length + (pendingBackup.followUpImages?.length ?? 0)} 个媒体{pendingBackup.sleepRecords?.length ? ` · ${pendingBackup.sleepRecords.length} 晚睡眠` : ''}</Text>
             <View style={[styles.preview, { backgroundColor: readingTheme.surface }]}>
               <View style={styles.previewRow}><Text style={[styles.previewLabel, { color: readingTheme.secondary }]}>备份时间</Text><Text style={[styles.previewValue, { color: readingTheme.text }]}>{formatShortDateTime(pendingBackup.exportedAt)}</Text></View>
               <View style={styles.previewRow}><Text style={[styles.previewLabel, { color: readingTheme.secondary }]}>备份版本</Text><Text style={[styles.previewValue, { color: readingTheme.text }]}>v{pendingBackup.version}</Text></View>
