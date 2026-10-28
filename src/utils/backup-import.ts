@@ -50,6 +50,20 @@ export function parseJournalBackup(contents: string): JournalBackup {
   const validEntries = backup.entries.every((item) => item && isString(item.id) && isString(item.content) && isString(item.occurredAt) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt));
   const validSleepRecords = backup.sleepRecords === undefined || (Array.isArray(backup.sleepRecords) && backup.sleepRecords.every((item) => item && isString(item.id) && isDateKey(item.nightDate) && isString(item.occurredAt) && !Number.isNaN(Date.parse(item.occurredAt)) && isString(item.createdAt) && isString(item.updatedAt)));
   const validSleepRecordDeletions = backup.sleepRecordDeletions === undefined || (Array.isArray(backup.sleepRecordDeletions) && backup.sleepRecordDeletions.every((item) => item && isString(item.id) && isString(item.deletedAt) && !Number.isNaN(Date.parse(item.deletedAt))));
+  const correction = backup.sleepHistoryCorrection;
+  const validSleepHistoryCorrection = correction === undefined || (
+    correction.source === 'sleep-docx-20261027'
+    && Array.isArray(correction.replacements)
+    && correction.replacements.length <= 5000
+    && correction.replacements.every((item) => item && /^sleep-docx-\d{8}$/.test(item.legacyId) && /^sleep-docx-corrected-\d{8}$/.test(item.correctedId))
+    && new Set(correction.replacements.map((item) => item.legacyId)).size === correction.replacements.length
+    && backup.version === 16 && backup.timezone === 'Asia/Shanghai'
+    && validSleepRecords && Array.isArray(backup.sleepRecords)
+    && backup.sleepRecords.every((item) => /^sleep-docx-corrected-\d{8}$/.test(item.id))
+    && correction.replacements.every((item) => backup.sleepRecords?.some((record) => record.id === item.correctedId))
+    && validSleepRecordDeletions && !backup.sleepRecordDeletions?.length
+    && !backup.entries.length && !backup.followUps.length && !backup.images.length && !backup.tags.length
+  );
   const validFollowUps = backup.followUps.every((item) => item && isString(item.id) && isString(item.entryId) && isString(item.content) && isString(item.createdAt) && isString(item.updatedAt) && isNullableString(item.deletedAt));
   const validTags = backup.tags.every((item) => item && isString(item.entryId) && isString(item.label) && typeof item.sortOrder === 'number');
   const validImages = backup.images.every((item) => item && isString(item.id) && isString(item.entryId) && isString(item.localUri) && typeof item.width === 'number' && Number.isFinite(item.width) && typeof item.height === 'number' && Number.isFinite(item.height) && typeof item.sortOrder === 'number' && Number.isFinite(item.sortOrder) && isString(item.createdAt) && isMediaType(item.mediaType) && isOptionalNullableString(item.pairedVideoLocalUri) && isOptionalNullableNumber(item.duration) && isOptionalNullableString(item.thumbnailLocalUri) && isOptionalNullableString(item.dataBase64) && isOptionalNullableString(item.mimeType) && isOptionalNullableString(item.pairedVideoDataBase64) && isOptionalNullableString(item.pairedVideoMimeType) && isOptionalNullableString(item.thumbnailDataBase64) && isOptionalNullableString(item.thumbnailMimeType));
@@ -119,7 +133,7 @@ export function parseJournalBackup(contents: string): JournalBackup {
     && (preferences.locationPrivacyMode === undefined || ['precise', 'approximate', 'nameOnly', 'ask'].includes(preferences.locationPrivacyMode))
     && (preferences.exportLocationMode === undefined || ['include', 'hidden'].includes(preferences.exportLocationMode))
   );
-  if (!validEntries || !validSleepRecords || !validSleepRecordDeletions || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validMediaMetadata || !validCapsules || !validCapsuleReplies || !validCapsuleImages || !validTimePixelSettings || !validTimePixelCategories || !validTimePixelRanges || !validMetadataCatalog || !validJournalTemplates || !validAppPreferences) throw new Error('invalid-backup');
+  if (!validEntries || !validSleepRecords || !validSleepRecordDeletions || !validSleepHistoryCorrection || !validFollowUps || !validTags || !validImages || !validFollowUpImages || !validVersions || !validSuppressed || !validMediaMetadata || !validCapsules || !validCapsuleReplies || !validCapsuleImages || !validTimePixelSettings || !validTimePixelCategories || !validTimePixelRanges || !validMetadataCatalog || !validJournalTemplates || !validAppPreferences) throw new Error('invalid-backup');
 
   const entries = backup.entries as JournalBackup['entries'];
   const sleepRecords = backup.sleepRecords ?? [];

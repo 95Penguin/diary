@@ -1710,6 +1710,36 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
         result.updatedEntries += 1;
       }
     }
+    if (backup.sleepHistoryCorrection) {
+      const preservedCorrectedIds = new Set<string>();
+      const correctedAt = new Date().toISOString();
+      for (const replacement of backup.sleepHistoryCorrection.replacements) {
+        const old = await txn.getFirstAsync<{ created_at: string; updated_at: string }>(
+          'SELECT created_at, updated_at FROM sleep_records WHERE id = ?', replacement.legacyId,
+        );
+        // A changed timestamp means this imported row was edited in the app.
+        if (old && old.updated_at !== old.created_at) {
+          preservedCorrectedIds.add(replacement.correctedId);
+          continue;
+        }
+        if (old) await txn.runAsync('DELETE FROM sleep_records WHERE id = ?', replacement.legacyId);
+        await txn.runAsync(
+          `INSERT INTO sleep_record_deletions (id, deleted_at) VALUES (?, ?)
+           ON CONFLICT(id) DO UPDATE SET deleted_at = MAX(deleted_at, excluded.deleted_at)`,
+          replacement.legacyId, correctedAt,
+        );
+      }
+      for (const record of backup.sleepRecords ?? []) {
+        if (preservedCorrectedIds.has(record.id)) continue;
+        const existing = await txn.getFirstAsync<{ id: string }>('SELECT id FROM sleep_records WHERE id = ?', record.id);
+        if (existing) continue;
+        // Keep records created or edited by the user for the same night.
+        const sameNight = await txn.getFirstAsync<{ id: string }>('SELECT id FROM sleep_records WHERE night_date = ?', record.nightDate);
+        if (sameNight) continue;
+        await txn.runAsync('INSERT INTO sleep_records (id, night_date, occurred_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', record.id, record.nightDate, record.occurredAt, record.createdAt, record.updatedAt);
+        if (result.createdSleepRecords !== undefined) result.createdSleepRecords += 1;
+      }
+    } else {
     for (const record of backup.sleepRecords ?? []) {
       const existing = await txn.getFirstAsync<{ updated_at: string }>('SELECT updated_at FROM sleep_records WHERE id = ?', record.id);
       if (existing && record.updatedAt <= existing.updated_at) continue;
@@ -1746,6 +1776,7 @@ export async function importJournalBackup(db: SQLiteDatabase, backup: JournalBac
          ON CONFLICT(id) DO UPDATE SET deleted_at = MAX(deleted_at, excluded.deleted_at)`,
         deletion.id, deletion.deletedAt,
       );
+    }
     }
     for (const item of backup.followUps) {
       const parent = await txn.getFirstAsync<{ id: string }>('SELECT id FROM entries WHERE id = ?', item.entryId);

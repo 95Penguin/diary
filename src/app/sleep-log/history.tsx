@@ -42,11 +42,20 @@ export default function SleepHistoryScreen() {
   const [editing, setEditing] = useState<SleepRecord | null>(null);
   const [editorVisible, setEditorVisible] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [saveNotice, setSaveNotice] = useState('');
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [editValue, setEditValue] = useState<Date | null>(null);
   const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
   const [pickerOpen, setPickerOpen] = useState(false);
   const loadSequence = useRef(0);
   const autoEditHandled = useRef(false);
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
+
+  function showSaveNotice(message: string) {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    setSaveNotice(message);
+    noticeTimer.current = setTimeout(() => { setSaveNotice(''); noticeTimer.current = null; }, 3500);
+  }
   const monthName = useMemo(() => new Date(year, month - 1, 1).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long' }), [month, year]);
   const years = useMemo(() => {
     const firstYear = bounds.first_date ? Number(bounds.first_date.slice(0, 4)) : year;
@@ -108,12 +117,15 @@ export default function SleepHistoryScreen() {
       const updated = editing
         ? await saveSleepRecord(db, editValue.toISOString(), editing.id)
         : await createSleepRecord(db, editValue.toISOString());
+      if (!updated) throw new Error('sleep-record-not-found');
+      const notice = editing
+        ? `${updated.nightDate === editing.nightDate ? '已更新' : '已移至'} ${fullNightLabel(updated.nightDate)}`
+        : `已补记至 ${fullNightLabel(updated.nightDate)}`;
       setEditing(null); setPickerOpen(false); setEditorVisible(false);
-      if (updated) {
-        const [nextYear, nextMonth] = updated.nightDate.split('-').map(Number);
-        if (nextYear !== year || nextMonth !== month) { setYear(nextYear); setMonth(nextMonth); }
-        else await load();
-      } else await load();
+      const [nextYear, nextMonth] = updated.nightDate.split('-').map(Number);
+      if (nextYear !== year || nextMonth !== month) { setYear(nextYear); setMonth(nextMonth); }
+      else await load();
+      showSaveNotice(notice);
     } catch {
       await showAppDialog({ title: editing ? '修改没有保存' : '补记没有保存', message: '这一晚可能已有记录，请长按原记录修改，或换一个日期后重试。' });
     } finally { setSavingEdit(false); }
@@ -127,7 +139,7 @@ export default function SleepHistoryScreen() {
   }
 
   async function manageRecord(record: SleepRecord) {
-    const answer = await showAppDialog({ title: `${nightLabel(record.nightDate)} · ${timeLabel(record.occurredAt)}`, actions: [{ label: '取消', value: 'cancel' }, { label: '编辑时间', value: 'edit' }, { label: '删除记录', value: 'delete', tone: 'danger' }] });
+    const answer = await showAppDialog({ title: `${nightLabel(record.nightDate)} · ${timeLabel(record.occurredAt)}`, actions: [{ label: '编辑时间', value: 'edit' }, { label: '删除记录', value: 'delete', tone: 'danger' }] });
     if (answer === 'edit') openEdit(record);
     else if (answer === 'delete') await remove(record);
   }
@@ -140,10 +152,11 @@ export default function SleepHistoryScreen() {
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.monthNav}>
         <Pressable accessibilityLabel="上一个月" onPress={() => changeMonth(-1)} hitSlop={10} style={[styles.arrowButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.arrowText, { color: colors.primary }]}>‹</Text></Pressable>
-        <Pressable accessibilityRole="button" onPress={openMonthPicker} style={styles.monthTitleButton}><Text style={[styles.monthTitle, { color: readingTheme.text }]}>{monthName}</Text><SymbolView name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }} size={14} tintColor={colors.primary} /></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={`选择年月，当前${monthName}`} onPress={openMonthPicker} style={styles.monthTitleButton}><Text style={[styles.monthTitle, { color: readingTheme.text }]}>{monthName}</Text></Pressable>
         <Pressable accessibilityLabel="下一个月" disabled={year === today.getFullYear() && month === today.getMonth() + 1} onPress={() => changeMonth(1)} hitSlop={10} style={[styles.arrowButton, { backgroundColor: readingTheme.surface }, year === today.getFullYear() && month === today.getMonth() + 1 && styles.disabled]}><Text style={[styles.arrowText, { color: colors.primary }]}>›</Text></Pressable>
       </View>
       <View style={styles.monthSummary}><Text style={[styles.summaryCount, { color: readingTheme.text }]}>{records.length}</Text><Text style={[styles.summaryLabel, { color: readingTheme.secondary }]}>晚有记录</Text><Text style={[styles.summaryAside, { color: readingTheme.secondary }]}>本月</Text></View>
+      {saveNotice ? <Text accessibilityLiveRegion="polite" style={styles.saveNotice}>{saveNotice}</Text> : null}
       {records.length ? <View style={[styles.recordList, { backgroundColor: readingTheme.surface }]}>
         {records.map((record, index) => <Pressable key={record.id} accessibilityRole="button" accessibilityLabel={`${nightLabel(record.nightDate)} ${timeLabel(record.occurredAt)}，长按编辑或删除`} onLongPress={() => void manageRecord(record)} delayLongPress={350} style={({ pressed }) => [styles.recordRow, index > 0 && { borderTopColor: readingTheme.border, borderTopWidth: StyleSheet.hairlineWidth }, pressed && styles.rowPressed]}>
           <View style={styles.recordInfo}><Text style={[styles.recordDate, { color: readingTheme.text }]}>{nightLabel(record.nightDate)}</Text></View>
@@ -189,7 +202,8 @@ export default function SleepHistoryScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 }, header: { height: 52, paddingHorizontal: spacing.xl, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, headerTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerRight: { minWidth: 42, height: 42, justifyContent: 'center', alignItems: 'flex-end' }, addText: { color: colors.primary, fontSize: 12, fontWeight: '600' },
-  content: { paddingHorizontal: spacing.xl, paddingTop: spacing.xs, paddingBottom: 28 }, monthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, arrowButton: { width: 36, height: 36, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center' }, arrowText: { fontSize: 24, lineHeight: 27 }, monthTitleButton: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md }, monthTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, disabled: { opacity: 0.35 }, monthSummary: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm, marginTop: spacing.xs, marginBottom: spacing.xs }, summaryCount: { fontFamily: fonts.serif, fontSize: 23, fontWeight: '600' }, summaryLabel: { fontSize: 12 }, summaryAside: { marginLeft: 'auto', fontSize: 11 },
+  content: { paddingHorizontal: spacing.xl, paddingTop: spacing.xs, paddingBottom: 28 }, monthNav: { height: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, arrowButton: { width: 36, height: 36, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center' }, arrowText: { fontSize: 24, lineHeight: 27 }, monthTitleButton: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md }, monthTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, disabled: { opacity: 0.35 }, monthSummary: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm, marginTop: 0, marginBottom: spacing.sm }, summaryCount: { fontFamily: fonts.serif, fontSize: 21, fontWeight: '600' }, summaryLabel: { fontSize: 12 }, summaryAside: { marginLeft: 'auto', fontSize: 11 },
+  saveNotice: { marginBottom: spacing.xs, color: colors.primary, fontSize: 11, textAlign: 'center' },
   recordList: { paddingHorizontal: spacing.md, borderRadius: radii.lg }, recordRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, rowPressed: { opacity: 0.72 }, recordInfo: { flex: 1, minWidth: 0 }, recordDate: { fontFamily: fonts.serif, fontSize: 13 }, recordTime: { width: 48, fontSize: 14, fontWeight: '600', fontVariant: ['tabular-nums'], textAlign: 'right' }, empty: { alignItems: 'center', padding: spacing.lg, borderRadius: radii.lg }, emptyTitle: { marginTop: spacing.sm, fontSize: 13 },
   overlay: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: spacing.xl, backgroundColor: colors.overlay }, pickerCard: { width: '100%', maxWidth: 390, borderRadius: radii.lg, padding: spacing.lg }, pickerTitle: { textAlign: 'center', fontFamily: fonts.serif, fontSize: 16, fontWeight: '600' }, yearStrip: { gap: spacing.sm, paddingVertical: spacing.md }, yearChip: { minWidth: 58, minHeight: 34, paddingHorizontal: spacing.md, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center' }, chipActive: { backgroundColor: colors.primary }, yearText: { fontSize: 11, fontWeight: '600' }, monthGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'space-between' }, monthChip: { width: '22%', minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: radii.md }, monthText: { fontSize: 11 }, monthDot: { position: 'absolute', bottom: 4, width: 4, height: 4, borderRadius: 2 }, pickerActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm, marginTop: spacing.sm }, cancelButton: { minHeight: 40, paddingHorizontal: spacing.md, alignItems: 'center', justifyContent: 'center' }, cancelText: { fontSize: 12 }, confirmButton: { minHeight: 40, paddingHorizontal: spacing.lg, borderRadius: radii.pill, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' }, confirmText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
   editorCard: { width: '100%', maxWidth: 430, borderRadius: radii.lg, padding: spacing.lg }, editorTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, editActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg }, editField: { flex: 1, minHeight: 64, justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radii.md }, fieldLabel: { fontSize: 10 }, fieldValue: { marginTop: 4, fontSize: 13, fontWeight: '600' }, nightPreview: { marginTop: spacing.sm, fontSize: 12 }, pickerControl: { alignItems: 'center', marginTop: spacing.md }, editorButtons: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: spacing.md, marginTop: spacing.md }, cancelAction: { minHeight: 42, paddingHorizontal: spacing.md, justifyContent: 'center' }, saveAction: { minHeight: 42, paddingHorizontal: spacing.lg, borderRadius: radii.pill, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' }, saveText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },

@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import * as DocumentPicker from 'expo-document-picker';
-import { File } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 
 import { createJournalExport, getJournalStats, getLastExportAt, importJournalBackup, saveLastExportAt } from '@/database/journal-repository';
 import type { JournalBackup, JournalStats } from '@/domain/journal';
@@ -52,6 +52,27 @@ function isSleepOnlyBackup(backup: JournalBackup) {
     || backup.timePixelRanges?.length || backup.mediaMetadata?.length || backup.timePixelSettings
     || backup.journalTemplates || backup.appPreferences || hasCatalogData;
   return !hasOtherData && Boolean(backup.sleepRecords?.length || backup.sleepRecordDeletions?.length);
+}
+
+async function storeSleepCorrectionSnapshot(backup: JournalBackup) {
+  const snapshot: JournalBackup = {
+    format: 'shishi-journal', version: 16, exportedAt: new Date().toISOString(), timezone: backup.timezone,
+    entries: [], followUps: [], images: [], tags: [],
+    sleepRecords: backup.sleepRecords ?? [], sleepRecordDeletions: backup.sleepRecordDeletions ?? [],
+  };
+  const directory = new Directory(Paths.document, 'recovery-snapshots');
+  directory.create({ idempotent: true, intermediates: true });
+  const file = new File(directory, `sleep-before-correction-${Date.now()}.json`);
+  file.create({ intermediates: true });
+  try {
+    file.write(JSON.stringify(snapshot));
+    const verified = parseJournalBackup(await file.text());
+    if (verified.sleepRecords?.length !== snapshot.sleepRecords?.length || verified.sleepRecordDeletions?.length !== snapshot.sleepRecordDeletions?.length) throw new Error('recovery-snapshot-verification-failed');
+    return { uri: file.uri, size: file.size, retained: 1 };
+  } catch (error) {
+    if (file.exists) file.delete();
+    throw error;
+  }
 }
 
 export default function BackupScreen() {
@@ -300,7 +321,11 @@ export default function BackupScreen() {
     let snapshotArchive: GeneratedArchive | null = null;
     let restoreStage: 'snapshot' | 'media' | 'database' | 'preferences' = 'snapshot';
     try {
-      if (!sleepOnly) {
+      if (pendingBackup.sleepHistoryCorrection) {
+        setOperationProgress({ label: '正在保存睡眠记录快照', value: 0.12 });
+        const currentData = await createJournalExport(db);
+        safetySnapshot = await storeSleepCorrectionSnapshot(currentData);
+      } else if (!sleepOnly) {
         setOperationProgress({ label: '正在创建恢复前安全快照', value: 0.04 });
         const currentData = await createJournalExport(db);
         snapshotArchive = await createZipBackupFile(currentData, (completed, total) => {
@@ -363,7 +388,9 @@ export default function BackupScreen() {
       setMessage(reason === 'missing-backup-media'
         ? '备份文件不完整，未恢复任何数据'
         : restoreStage === 'snapshot' || reason.startsWith('recovery-snapshot')
-          ? '无法生成恢复前安全快照，未导入数据。请检查手机可用空间后重试。'
+          ? pendingBackup.sleepHistoryCorrection
+            ? '无法保存睡眠记录快照，未导入数据。请到“关于拾时”查看诊断信息。'
+            : '无法生成恢复前安全快照，未导入数据。请检查手机可用空间后重试。'
           : restoreStage === 'media'
             ? '读取备份文件失败，原有记录没有被清空。请重新选择备份后重试。'
             : imported
@@ -470,7 +497,7 @@ export default function BackupScreen() {
               <View style={styles.previewRow}><Text style={[styles.previewLabel, { color: readingTheme.secondary }]}>显示与安全设置</Text><Text style={[styles.previewValue, { color: readingTheme.text }]}>{pendingBackup.appPreferences ? '将一并恢复' : '保留本机设置'}</Text></View>
             </View>
           </> : null}
-          <Text style={[styles.confirmHint, { color: readingTheme.secondary }]}>{pendingBackup && isSleepOnlyBackup(pendingBackup) ? '仅合并睡眠记录，不改动日记和个人设置。' : '不会清空现有内容；同一记录将保留更新时间较新的版本。'}</Text>
+          <Text style={[styles.confirmHint, { color: readingTheme.secondary }]}>{pendingBackup?.sleepHistoryCorrection ? '将校正旧文档导入的睡眠日期；保留在应用里手动修改或补记的记录。恢复前会保存睡眠记录快照。' : pendingBackup && isSleepOnlyBackup(pendingBackup) ? '仅合并睡眠记录，不改动日记和个人设置。' : '不会清空现有内容；同一记录将保留更新时间较新的版本。'}</Text>
           <View style={styles.confirmActions}><Pressable disabled={importing} onPress={dismissPendingBackup} style={[styles.confirmButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={importing} onPress={() => void restoreBackup()} style={[styles.confirmButton, styles.restoreButton]}>{importing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.restoreText}>开始恢复</Text>}</Pressable></View>
         </Pressable>
       </Pressable>

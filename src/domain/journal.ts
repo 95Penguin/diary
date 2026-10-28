@@ -32,6 +32,7 @@ export type JournalBackup = {
   format: 'shishi-journal'; version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16; exportedAt: string; timezone: string;
   sleepRecords?: { id: string; nightDate: string; occurredAt: string; createdAt: string; updatedAt: string }[];
   sleepRecordDeletions?: { id: string; deletedAt: string }[];
+  sleepHistoryCorrection?: { source: 'sleep-docx-20261027'; replacements: { legacyId: string; correctedId: string }[] };
   entries: { id: string; content: string; occurredAt: string; createdAt: string; updatedAt: string; deletedAt: string | null; mood?: string | null; weather?: string | null; favoritedAt?: string | null; locationName?: string | null; latitude?: number | null; longitude?: number | null }[];
   followUps: { id: string; entryId: string; content: string; createdAt: string; updatedAt: string; deletedAt: string | null }[];
   images: { id: string; entryId: string; localUri: string; width: number; height: number; sortOrder: number; createdAt: string; mediaType?: JournalMediaType; pairedVideoLocalUri?: string | null; duration?: number | null; thumbnailLocalUri?: string | null; dataBase64?: string | null; mimeType?: string | null; pairedVideoDataBase64?: string | null; pairedVideoMimeType?: string | null; thumbnailDataBase64?: string | null; thumbnailMimeType?: string | null }[];
