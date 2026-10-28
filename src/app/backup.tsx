@@ -39,6 +39,21 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+function isSleepOnlyBackup(backup: JournalBackup) {
+  const catalog = backup.metadataCatalog;
+  const hasCatalogData = Boolean(catalog && (
+    catalog.tags.length || catalog.locations.length || catalog.pinnedTags.length
+    || catalog.pinnedLocations.length || Object.keys(catalog.locationDetails).length
+  ));
+  const hasOtherData = backup.entries.length || backup.followUps.length || backup.tags.length
+    || backup.images.length || backup.followUpImages?.length || backup.timeCapsules?.length
+    || backup.timeCapsuleReplies?.length || backup.timeCapsuleImages?.length || backup.versions?.length
+    || backup.suppressedMemoryEntryIds?.length || backup.timePixelCategories?.length
+    || backup.timePixelRanges?.length || backup.mediaMetadata?.length || backup.timePixelSettings
+    || backup.journalTemplates || backup.appPreferences || hasCatalogData;
+  return !hasOtherData && Boolean(backup.sleepRecords?.length || backup.sleepRecordDeletions?.length);
+}
+
 export default function BackupScreen() {
   const db = useSQLiteContext();
   const { cloudBackupUri } = useLocalSearchParams<{ cloudBackupUri?: string }>();
@@ -276,22 +291,27 @@ export default function BackupScreen() {
 
   async function restoreBackup() {
     if (!pendingBackup || importing) return;
+    const sleepOnly = isSleepOnlyBackup(pendingBackup);
     setImporting(true);
     setOperationProgress({ label: '正在准备恢复', value: 0.03 });
     let createdImageUris: string[] = [];
     let imported = false;
     let safetySnapshot: Awaited<ReturnType<typeof storeRecoverySnapshotFile>> | null = null;
     let snapshotArchive: GeneratedArchive | null = null;
+    let restoreStage: 'snapshot' | 'media' | 'database' | 'preferences' = 'snapshot';
     try {
-      setOperationProgress({ label: '正在创建恢复前安全快照', value: 0.04 });
-      const currentData = await createJournalExport(db);
-      snapshotArchive = await createZipBackupFile(currentData, (completed, total) => {
-        setOperationProgress({ label: total ? `正在备份当前数据 ${completed}/${total}` : '正在备份当前数据', value: 0.04 + 0.28 * (total ? completed / total : 1) });
-      });
-      if (snapshotArchive.missingMedia) throw new Error('recovery-snapshot-incomplete');
-      const verifiedSnapshot = await inspectZipBackupFile(snapshotArchive.uri);
-      if (verifiedSnapshot.entries.length !== currentData.entries.length || verifiedSnapshot.followUps.length !== currentData.followUps.length) throw new Error('recovery-snapshot-verification-failed');
-      safetySnapshot = await storeRecoverySnapshotFile(snapshotArchive.uri);
+      if (!sleepOnly) {
+        setOperationProgress({ label: '正在创建恢复前安全快照', value: 0.04 });
+        const currentData = await createJournalExport(db);
+        snapshotArchive = await createZipBackupFile(currentData, (completed, total) => {
+          setOperationProgress({ label: total ? `正在备份当前数据 ${completed}/${total}` : '正在备份当前数据', value: 0.04 + 0.28 * (total ? completed / total : 1) });
+        });
+        if (snapshotArchive.missingMedia) throw new Error('recovery-snapshot-incomplete');
+        const verifiedSnapshot = await inspectZipBackupFile(snapshotArchive.uri);
+        if (verifiedSnapshot.entries.length !== currentData.entries.length || verifiedSnapshot.followUps.length !== currentData.followUps.length) throw new Error('recovery-snapshot-verification-failed');
+        safetySnapshot = await storeRecoverySnapshotFile(snapshotArchive.uri);
+      }
+      restoreStage = 'media';
       const reportProgress = (completed: number, total: number) => {
         setOperationProgress({
           label: total ? `正在恢复媒体 ${completed}/${total}` : '正在恢复数据',
@@ -302,9 +322,11 @@ export default function BackupScreen() {
         ? await materializeZipBackupFile(pendingZipUri, reportProgress)
         : await materializeBackupImages(pendingBackup, reportProgress);
       createdImageUris = materialized.createdUris;
+      restoreStage = 'database';
       setOperationProgress({ label: '正在合并记录', value: 0.88 });
       const result = await importJournalBackup(db, materialized.backup);
       imported = true;
+      restoreStage = 'preferences';
       const restoredPreferences = materialized.backup.appPreferences;
       if (restoredPreferences) {
         await updatePreferences({
@@ -332,17 +354,21 @@ export default function BackupScreen() {
       const createdSleep = result.createdSleepRecords ?? 0;
       const updatedSleep = result.updatedSleepRecords ?? 0;
       setOperationProgress({ label: '恢复已完成', value: 1 });
-      setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条${createdSleep || updatedSleep ? `；睡眠记录新增 ${createdSleep} 晚、更新 ${updatedSleep} 晚` : ''}${restoredPreferences ? '，个人资料和设置已恢复' : ''}。恢复前快照已安全保留。`);
+      setMessage(`恢复完成：新增 ${created} 条，更新 ${updated} 条${createdSleep || updatedSleep ? `；睡眠记录新增 ${createdSleep} 晚、更新 ${updatedSleep} 晚` : ''}${restoredPreferences ? '，个人资料和设置已恢复' : ''}。${sleepOnly ? '睡眠记录已合并。' : '恢复前快照已安全保留。'}`);
     } catch (error) {
-      void recordAppError('backup.restore', error);
+      void recordAppError(`backup.restore.${restoreStage}`, error);
       if (!imported) createdImageUris.forEach(deleteJournalImage);
       clearPendingBackup();
       const reason = error instanceof Error ? error.message : '';
       setMessage(reason === 'missing-backup-media'
         ? '备份文件不完整，未恢复任何数据'
-        : reason.startsWith('recovery-snapshot')
-          ? '无法生成完整的恢复前快照，已停止恢复，请检查存储空间和本地媒体'
-          : `恢复失败，原有记录没有被清空${safetySnapshot ? '，恢复前快照已保留' : ''}`);
+        : restoreStage === 'snapshot' || reason.startsWith('recovery-snapshot')
+          ? '无法生成恢复前安全快照，未导入数据。请检查手机可用空间后重试。'
+          : restoreStage === 'media'
+            ? '读取备份文件失败，原有记录没有被清空。请重新选择备份后重试。'
+            : imported
+              ? '记录已合并，但个人设置没有完整恢复。请到“关于拾时”查看诊断信息。'
+              : `合并数据失败，原有记录没有被清空${safetySnapshot ? '，恢复前快照已保留' : ''}。请到“关于拾时”查看诊断信息。`);
     } finally {
       deleteGeneratedArchive(snapshotArchive);
       setImporting(false);
@@ -444,7 +470,7 @@ export default function BackupScreen() {
               <View style={styles.previewRow}><Text style={[styles.previewLabel, { color: readingTheme.secondary }]}>显示与安全设置</Text><Text style={[styles.previewValue, { color: readingTheme.text }]}>{pendingBackup.appPreferences ? '将一并恢复' : '保留本机设置'}</Text></View>
             </View>
           </> : null}
-          <Text style={[styles.confirmHint, { color: readingTheme.secondary }]}>不会清空现有内容；同一记录将保留更新时间较新的版本。</Text>
+          <Text style={[styles.confirmHint, { color: readingTheme.secondary }]}>{pendingBackup && isSleepOnlyBackup(pendingBackup) ? '仅合并睡眠记录，不改动日记和个人设置。' : '不会清空现有内容；同一记录将保留更新时间较新的版本。'}</Text>
           <View style={styles.confirmActions}><Pressable disabled={importing} onPress={dismissPendingBackup} style={[styles.confirmButton, { backgroundColor: readingTheme.surface }]}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable disabled={importing} onPress={() => void restoreBackup()} style={[styles.confirmButton, styles.restoreButton]}>{importing ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.restoreText}>开始恢复</Text>}</Pressable></View>
         </Pressable>
       </Pressable>

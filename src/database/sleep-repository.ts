@@ -38,6 +38,13 @@ export async function getSleepRecordBounds(db: SQLiteDatabase) {
   return db.getFirstAsync<{ first_date: string | null; last_date: string | null }>('SELECT MIN(night_date) AS first_date, MAX(night_date) AS last_date FROM sleep_records');
 }
 
+export async function getSleepRecordMonthCounts(db: SQLiteDatabase) {
+  const rows = await db.getAllAsync<{ month: string; count: number }>(
+    'SELECT substr(night_date, 1, 7) AS month, COUNT(*) AS count FROM sleep_records GROUP BY substr(night_date, 1, 7) ORDER BY month DESC',
+  );
+  return Object.fromEntries(rows.map((row) => [row.month, row.count])) as Record<string, number>;
+}
+
 export async function saveSleepRecord(db: SQLiteDatabase, occurredAt: string, id?: string) {
   const date = new Date(occurredAt);
   if (Number.isNaN(date.getTime())) throw new Error('invalid-sleep-time');
@@ -53,6 +60,18 @@ export async function saveSleepRecord(db: SQLiteDatabase, occurredAt: string, id
   } else {
     await db.runAsync('INSERT INTO sleep_records (id, night_date, occurred_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', recordId, nightDate, date.toISOString(), now, now);
   }
+  return getSleepRecordForNight(db, nightDate);
+}
+
+export async function createSleepRecord(db: SQLiteDatabase, occurredAt: string) {
+  const date = new Date(occurredAt);
+  if (Number.isNaN(date.getTime())) throw new Error('invalid-sleep-time');
+  const nightDate = sleepNightDate(date);
+  const now = new Date().toISOString();
+  await db.runAsync(
+    'INSERT INTO sleep_records (id, night_date, occurred_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    createId(), nightDate, date.toISOString(), now, now,
+  );
   return getSleepRecordForNight(db, nightDate);
 }
 
