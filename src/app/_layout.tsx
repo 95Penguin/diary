@@ -187,6 +187,8 @@ function AppStack() {
             <Stack.Screen name="drafts" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="webdav-backup" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="my-content" options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="appearance" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="trash" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="backup" options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="data-health" options={{ animation: 'slide_from_right' }} />

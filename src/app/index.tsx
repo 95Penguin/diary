@@ -16,6 +16,7 @@ import { showAppDialog } from '@/components/app-dialog-host';
 import { EmptyState } from '@/components/empty-state';
 import { EntryCard } from '@/components/entry-card';
 import { EntryActionModal } from '@/components/entry-action-modal';
+import { FunctionDrawer } from '@/components/function-drawer';
 import {
   cleanupExpiredTrash,
   countEntriesForLocalDate,
@@ -57,6 +58,7 @@ export default function HomeScreen() {
   const [selectedDate, setSelectedDate] = useState(todayKey);
   const [actionEntry, setActionEntry] = useState<Entry | null>(null);
   const [draftCount, setDraftCount] = useState(0);
+  const [drawerVisible, setDrawerVisible] = useState(false);
   const [quickHintVisible, setQuickHintVisible] = useState(false);
   const cleanupStarted = useRef(false);
   const pendingDetailEntryId = useRef<string | null>(null);
@@ -129,10 +131,10 @@ export default function HomeScreen() {
       <View style={styles.header}>
         <View style={styles.headerIdentity}><Text style={[styles.brand, { color: readingTheme.text }]}>拾时</Text><Text numberOfLines={1} style={[styles.subtitle, { color: readingTheme.secondary }]}>{preferences.signature.trim() || '我的日迹'}</Text></View>
         <View style={styles.headerActions}>
+          <IconButton accessibilityLabel="打开功能菜单" onPress={() => setDrawerVisible(true)} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'line.3.horizontal', android: 'menu', web: 'menu' }} size={19} tintColor={colors.primary} /></IconButton>
           <IconButton accessibilityLabel="睡眠记录" onPress={() => router.push('/sleep-log' as Href)} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'moon.zzz', android: 'bedtime', web: 'bedtime' }} size={19} tintColor={colors.primary} /></IconButton>
-          <IconButton accessibilityLabel={`草稿箱${draftCount > 0 ? `，${draftCount} 份草稿` : ''}`} onPress={() => router.push('/drafts' as Href)} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'doc.text', android: 'draft', web: 'draft' }} size={18} tintColor={colors.primary} />{draftCount > 0 ? <View style={styles.draftDot} /> : null}</IconButton>
           <IconButton accessibilityLabel="搜索" onPress={() => router.push('/search')} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }} size={19} tintColor={colors.primary} /></IconButton>
-          <Pressable accessibilityLabel={`我的，${preferences.nickname}`} onPress={() => router.push('/settings')} style={styles.profileButton}>{preferences.avatarUri ? <Image source={preferences.avatarUri} contentFit="cover" style={styles.profileImage} /> : <Text style={styles.profileText}>{preferences.nickname.slice(0, 1)}</Text>}</Pressable>
+          <Pressable accessibilityLabel={`我的，${preferences.nickname}`} accessibilityRole="button" hitSlop={6} onPress={() => router.push('/settings')} style={styles.profileButton}>{preferences.avatarUri ? <Image source={preferences.avatarUri} contentFit="cover" style={styles.profileImage} /> : <Text style={styles.profileText}>{preferences.nickname.slice(0, 1)}</Text>}</Pressable>
         </View>
       </View>
 
@@ -150,6 +152,7 @@ export default function HomeScreen() {
         else router.push('/compose');
       }} onQuickCompose={() => router.push({ pathname: '/compose', params: { quick: '1' } })} />
       <EntryActionModal visible={Boolean(actionEntry)} onClose={() => setActionEntry(null)} onEdit={() => { if (!actionEntry) return; const entryId = actionEntry.id; setActionEntry(null); router.push({ pathname: '/compose', params: { id: entryId } }); }} onDelete={deleteSelectedEntry} />
+      <FunctionDrawer visible={drawerVisible} draftCount={draftCount} onClose={() => setDrawerVisible(false)} />
     </SafeAreaView>
   );
 }
@@ -674,7 +677,6 @@ const styles = StyleSheet.create({
   brand: { color: colors.text, fontFamily: fonts.serif, fontSize: 24, lineHeight: 29, fontWeight: '600', includeFontPadding: false },
   subtitle: { marginTop: 5, color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 11, lineHeight: 14, letterSpacing: 0.4, includeFontPadding: false },
   headerActions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  draftDot: { position: 'absolute', top: 5, right: 5, width: 6, height: 6, borderRadius: 3, backgroundColor: '#C06C58' },
   profileButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary },
   profileImage: { width: 36, height: 36, borderRadius: 18 },
   profileText: { width: 32, height: 32, color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 14, fontWeight: '600', lineHeight: 32, textAlign: 'center', includeFontPadding: false },

@@ -11,7 +11,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { getDraftCount, getJournalStats, getLastExportAt } from '@/database/journal-repository';
 import type { JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
-import { readingThemes, useAppPreferences, type AppLockDelaySeconds, type BackupReminderDays, type FontSizeMode, type ImageSaveQuality, type ReadingComfortName, type ReadingFontName, type ReadingThemeName } from '@/preferences/app-preferences';
+import { useAppPreferences, type AppLockDelaySeconds, type BackupReminderDays } from '@/preferences/app-preferences';
 import { setBackupReminder } from '@/utils/backup-reminder';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 
@@ -22,7 +22,7 @@ export default function SettingsScreen() {
   const [stats, setStats] = useState(EMPTY_STATS);
   const [draftCount, setDraftCount] = useState(0);
   const [lastExportAt, setLastExportAt] = useState<string | null>(null);
-  const { preferences, readingBodyStyle, readingFontFamily, readingTheme, fontScale, updatePreferences } = useAppPreferences();
+  const { preferences, readingTheme, updatePreferences } = useAppPreferences();
   const [profileEditor, setProfileEditor] = useState<'nickname' | 'signature' | null>(null);
   const [nickname, setNickname] = useState(preferences.nickname);
   const [signature, setSignature] = useState(preferences.signature);
@@ -115,21 +115,9 @@ export default function SettingsScreen() {
       </View>
 
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>记录与整理</Text>
-      <Pressable onPress={() => router.push('/drafts' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>草稿箱</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>继续编辑尚未保存的内容</Text></View>
+      <Pressable onPress={() => router.push('/my-content' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>我的内容</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>草稿、收藏、媒体与内容管理</Text></View>
         <View style={styles.rowRight}>{draftCount > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{draftCount}</Text></View> : null}<Text style={styles.arrow}>›</Text></View>
-      </Pressable>
-      <Pressable onPress={() => router.push('/favorites' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>收藏</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>查看标记过的重要时刻</Text></View>
-        <Text style={styles.arrow}>›</Text>
-      </Pressable>
-      <Pressable onPress={() => router.push('/media-library' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>媒体浏览</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>按年月查看记录中的图片和视频</Text></View>
-        <View style={styles.rowRight}>{stats.images > 0 ? <Text style={[styles.mediaCount, { color: readingTheme.secondary }]}>{stats.images}</Text> : null}<Text style={styles.arrow}>›</Text></View>
-      </Pressable>
-      <Pressable onPress={() => router.push('/content-management' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>内容管理</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>批量管理、标签与地点、地点隐私与体检</Text></View>
-        <Text style={styles.arrow}>›</Text>
       </Pressable>
 
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>数据与备份</Text>
@@ -177,13 +165,10 @@ export default function SettingsScreen() {
         />
       </> : null}
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>外观与阅读</Text>
-      <SettingChoice title="图片保存质量" value={preferences.imageSaveQuality} options={[["original", "原图"], ["high", "高清"], ["compact", "节省空间"]]} onChange={(value) => void updatePreferences({ imageSaveQuality: value as ImageSaveQuality })} />
-      <Text style={[styles.qualityHint, { color: readingTheme.secondary }]}>原图使用系统提供的最高质量；高清最长边 4096px；节省空间最长边 2048px。选择媒体后会显示预计占用。</Text>
-      <ThemeChoice value={preferences.readingTheme} onChange={(value) => void updatePreferences({ readingTheme: value })} />
-      <SettingChoice title="正文字体" value={preferences.readingFont} options={[["serif", "宋体"], ["sans", "黑体"], ["light", "细黑"], ["mono", "等宽"], ["system", "系统"]]} onChange={(value) => void updatePreferences({ readingFont: value as ReadingFontName })} />
-      <SettingChoice title="字体大小" value={preferences.fontSize} options={[["verySmall", "很小"], ["small", "小"], ["standard", "标准"], ["large", "大"], ["veryLarge", "很大"]]} onChange={(value) => void updatePreferences({ fontSize: value as FontSizeMode })} />
-      <SettingChoice title="阅读舒适度" value={preferences.readingComfort} options={[["compact", "紧凑"], ["comfortable", "舒适"], ["spacious", "宽松"]]} onChange={(value) => void updatePreferences({ readingComfort: value as ReadingComfortName })} />
-      <View style={[styles.preview, { backgroundColor: readingTheme.surface }]}><Text style={[styles.previewTitle, { color: readingTheme.secondary }]}>实时预览</Text><Text style={[styles.previewText, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 24 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>今天也值得被认真记录。</Text></View>
+      <Pressable onPress={() => router.push('/appearance' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>外观与阅读</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>主题、字体、排版与图片质量</Text></View>
+        <Text style={styles.arrow}>›</Text>
+      </Pressable>
 
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>关于</Text>
       <Pressable onPress={() => router.push('/about' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
@@ -198,24 +183,6 @@ export default function SettingsScreen() {
 function SettingChoice({ title, value, options, onChange }: { title: string; value: string; options: [string, string][]; onChange: (value: string) => void }) {
   const { readingTheme } = useAppPreferences();
   return <View style={[styles.choiceRow, { backgroundColor: readingTheme.surface }]}><Text style={[styles.choiceTitle, { color: readingTheme.text }]}>{title}</Text><View style={styles.choices}>{options.map(([key, label]) => <Pressable accessibilityRole="radio" accessibilityState={{ checked: value === key }} key={key} onPress={() => onChange(key)} style={[styles.choice, label.length === 1 && styles.singleCharacterChoice, value === key && styles.choiceActive]}><Text style={[styles.choiceText, { color: readingTheme.secondary }, value === key && styles.choiceTextActive]}>{label}</Text></Pressable>)}</View></View>;
-}
-
-function ThemeChoice({ value, onChange }: { value: ReadingThemeName; onChange: (value: ReadingThemeName) => void }) {
-  const { readingTheme } = useAppPreferences();
-  return <View style={[styles.themeRow, { backgroundColor: readingTheme.surface }]}>
-    <Text style={[styles.choiceTitle, { color: readingTheme.text }]}>背景主题</Text>
-    <ScrollView horizontal contentContainerStyle={styles.themeChoices} showsHorizontalScrollIndicator={false}>
-      {(Object.entries(readingThemes) as [ReadingThemeName, (typeof readingThemes)[ReadingThemeName]][]).map(([key, theme]) => {
-        const selected = value === key;
-        return <Pressable accessibilityLabel={`${theme.label}主题`} accessibilityRole="radio" accessibilityState={{ checked: selected }} key={key} onPress={() => onChange(key)} style={styles.themeChoice}>
-          <View style={[styles.themeSwatch, { backgroundColor: theme.background, borderColor: selected ? colors.primary : theme.border }, selected && styles.themeSwatchActive]}>
-            <View style={[styles.themeSwatchInner, { backgroundColor: theme.surface }]} />
-          </View>
-          <Text style={[styles.themeLabel, { color: selected ? colors.primary : readingTheme.secondary }, selected && styles.themeLabelActive]}>{theme.label}</Text>
-        </Pressable>;
-      })}
-    </ScrollView>
-  </View>;
 }
 
 function Stat({ value, label }: { value: number; label: string }) {
@@ -245,7 +212,6 @@ const styles = StyleSheet.create({
   avatarText: { color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' },
   brand: { flex: 1, color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 21, fontWeight: '600' }, slogan: { flex: 1, color: colors.textSecondary, fontSize: 12, lineHeight: 16 },
   sectionTitle: { marginTop: spacing.xxl, marginBottom: spacing.sm, color: colors.textFaint, fontSize: 11, lineHeight: 16, letterSpacing: 1 },
-  qualityHint: { marginTop: spacing.sm, paddingHorizontal: spacing.sm, fontSize: 10, lineHeight: 16 },
   statsCard: { height: 64, flexDirection: 'row', alignItems: 'center', borderRadius: radii.md, backgroundColor: colors.surfaceMuted },
   stat: { flex: 1, alignItems: 'center', justifyContent: 'center' }, statValue: { color: colors.text, fontFamily: fonts.serif, fontSize: 16, lineHeight: 21, fontWeight: '600', includeFontPadding: false }, statLabel: { marginTop: 1, color: colors.textSecondary, fontSize: 11 },
   statDivider: { width: StyleSheet.hairlineWidth, height: 24, backgroundColor: colors.border },
@@ -254,7 +220,6 @@ const styles = StyleSheet.create({
   nextRow: { marginTop: spacing.sm },
   pressed: { opacity: 0.62 }, rowTitle: { color: colors.text, fontSize: 13, fontWeight: '600' }, rowDescription: { marginTop: 2, color: colors.textFaint, fontSize: 11 },
   rowRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, badge: { minWidth: 24, height: 24, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6, borderRadius: 12, backgroundColor: colors.primarySoft }, badgeText: { color: colors.primary, fontSize: 11, fontWeight: '700' }, arrow: { color: colors.textFaint, fontSize: 22 },
-  mediaCount: { fontSize: 11 },
   healthy: { color: colors.primary, fontSize: 14, fontWeight: '700' }, warningDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.danger },
   switchTrack: { width: 42, height: 24, justifyContent: 'center', paddingHorizontal: 3, borderRadius: 12, backgroundColor: colors.border },
   switchTrackActive: { backgroundColor: colors.primary },
@@ -262,7 +227,5 @@ const styles = StyleSheet.create({
   switchThumbActive: { alignSelf: 'flex-end' },
   reminderGap: { height: spacing.sm },
   choiceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.sm, marginBottom: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, choiceTitle: { color: colors.text, fontSize: 12, lineHeight: 30, fontWeight: '600' }, choices: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.xs }, choice: { minHeight: 30, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: 15 }, singleCharacterChoice: { width: 30, paddingHorizontal: 0 }, choiceActive: { backgroundColor: colors.primary }, choiceText: { color: colors.textSecondary, fontSize: 10 }, choiceTextActive: { color: '#FFFFFF', fontWeight: '700' },
-  themeRow: { minHeight: 88, marginBottom: spacing.sm, paddingLeft: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, themeChoices: { alignItems: 'center', gap: spacing.md, paddingLeft: spacing.sm, paddingRight: spacing.md, paddingBottom: spacing.sm }, themeChoice: { minWidth: 44, minHeight: 52, alignItems: 'center', justifyContent: 'center' }, themeSwatch: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 16 }, themeSwatchActive: { borderWidth: 2 }, themeSwatchInner: { width: 12, height: 12, borderRadius: 6 }, themeLabel: { marginTop: 3, fontSize: 11 }, themeLabelActive: { fontWeight: '700' },
-  preview: { marginBottom: spacing.sm, padding: spacing.lg, borderRadius: radii.md }, previewTitle: { fontSize: 11 }, previewText: { marginTop: spacing.sm },
   overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, editorCard: { width: '100%', maxWidth: 300, padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.background }, editorTitle: { marginBottom: spacing.md, color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600', textAlign: 'center' }, nicknameInput: { height: 44, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 14 }, signatureInput: { height: 76, paddingTop: spacing.sm }, editorActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.xxl, marginTop: spacing.xl }, cancelText: { color: colors.textSecondary, fontSize: 12 }, confirmText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
 });

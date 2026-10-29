@@ -2,7 +2,7 @@
 
 拾时是一款本地优先的个人生活记录应用：记下此刻，也在未来重新拾起它。
 
-当前版本为 `1.0.11`，Android 包名为 `com.penguin95.shishi`。应用以 Android
+当前版本为 `1.0.12`，Android 包名为 `com.penguin95.shishi`。应用以 Android
 真机自用为主要场景，同时保留 iOS 与 Web 工程能力。
 
 ## 主要功能
@@ -162,8 +162,8 @@ personal 与 preview 使用相同包名和版本号，不能作为两个独立�
 建议按以下格式命名：
 
 ```text
-shishi-v1.0.10-personal-arm64.apk
-shishi-v1.0.10-preview-universal.apk
+shishi-v1.0.12-personal-arm64.apk
+shishi-v1.0.12-preview-universal.apk
 ```
 
 当前版本号位置：
@@ -181,32 +181,32 @@ shishi-v1.0.10-preview-universal.apk
 ```bash
 git status --short
 git add -A
-git commit -m "feat: release v1.0.10"
+git commit -m "feat: release v1.0.12"
 git push origin main
 ```
 
 创建并推送标签：
 
 ```bash
-git tag -a v1.0.10 -m "Release v1.0.10"
-git push origin v1.0.10
+git tag -a v1.0.12 -m "Release v1.0.12"
+git push origin v1.0.12
 ```
 
 首次创建 Release：
 
 ```bash
-gh release create v1.0.10 \
-  /Users/95penguin/Downloads/shishi-v1.0.10-personal-arm64.apk \
+gh release create v1.0.12 \
+  /Users/95penguin/Downloads/shishi-v1.0.12-personal-arm64.apk \
   --repo 95Penguin/diary \
-  --title "拾时 v1.0.10" \
+  --title "拾时 v1.0.12" \
   --generate-notes
 ```
 
 如果 Release 已存在，只替换同名附件：
 
 ```bash
-gh release upload v1.0.10 \
-  /Users/95penguin/Downloads/shishi-v1.0.10-personal-arm64.apk \
+gh release upload v1.0.12 \
+  /Users/95penguin/Downloads/shishi-v1.0.12-personal-arm64.apk \
   --repo 95Penguin/diary \
   --clobber
 ```
@@ -214,7 +214,7 @@ gh release upload v1.0.10 \
 查看 Release：
 
 ```bash
-gh release view v1.0.10 --repo 95Penguin/diary --web
+gh release view v1.0.12 --repo 95Penguin/diary --web
 ```
 
 不要默认强制覆盖已经公开的标签。若代码或安装包已经变化，优先递增版本号并发布新

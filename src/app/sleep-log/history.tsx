@@ -30,7 +30,7 @@ export default function SleepHistoryScreen() {
   const db = useSQLiteContext();
   const params = useLocalSearchParams<{ year?: string; month?: string; editId?: string }>();
   const { readingTheme } = useAppPreferences();
-  const today = new Date();
+  const [today] = useState(() => new Date());
   const [year, setYear] = useState(() => Number(params.year) || today.getFullYear());
   const [month, setMonth] = useState(() => Number(params.month) || today.getMonth() + 1);
   const [records, setRecords] = useState<SleepRecord[]>([]);

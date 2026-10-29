@@ -3,7 +3,6 @@ import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, 
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { GlassView } from 'expo-glass-effect';
 import { useSQLiteContext } from 'expo-sqlite';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -18,20 +17,11 @@ function dateLabel(value: string) {
   return new Date(year, month - 1, day).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' });
 }
 function nightLabel(value: string) { const [, month, day] = value.split('-'); return `${Number(month)}月${Number(day)}日`; }
+function isFutureTime(value: Date) { return value.getTime() > Date.now(); }
 function fullNightLabel(value: string) {
   const [year, month, day] = value.split('-');
   return `${year}年${Number(month)}月${Number(day)}日夜`;
 }
-function shadeCircle(surface: string) {
-  if (surface === '#232B26') return surface;
-  const amount = 0.1;
-  const channels = [1, 3, 5].map((offset) => Math.round(
-    parseInt(surface.slice(offset, offset + 2), 16) * (1 - amount)
-    + parseInt(colors.primary.slice(offset, offset + 2), 16) * amount,
-  ));
-  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
-}
-
 export default function SleepLogScreen() {
   const db = useSQLiteContext();
   const { readingTheme } = useAppPreferences();
@@ -163,7 +153,7 @@ export default function SleepLogScreen() {
 
   async function saveEdit() {
     if (!editing || !editValue || savingEdit) return;
-    if (editValue.getTime() > Date.now()) { await showAppDialog({ title: '时间还没到', message: '请选择已经过去的时间。' }); return; }
+    if (isFutureTime(editValue)) { await showAppDialog({ title: '时间还没到', message: '请选择已经过去的时间。' }); return; }
     setSavingEdit(true);
     try {
       const updated = await saveSleepRecord(db, editValue.toISOString(), editing.id);
@@ -196,11 +186,9 @@ export default function SleepLogScreen() {
       <View style={styles.headerRight} />
     </View>
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <Pressable accessibilityRole="button" accessibilityLabel={tonight ? `更新入睡时间，当前记录 ${timeLabel(tonight.occurredAt)}` : '记录现在的入睡时间'} onPress={() => void recordNow()} style={({ pressed }) => [styles.circle, { backgroundColor: shadeCircle(readingTheme.surface), borderColor: readingTheme.border }, pressed && styles.circlePressed]}>
-        {Platform.OS === 'ios' ? <GlassView pointerEvents="none" glassEffectStyle="regular" style={styles.glassLayer} /> : null}
-        <View pointerEvents="none" style={[styles.glassShine, { borderColor: readingTheme.background }]} />
+      <Pressable accessibilityRole="button" accessibilityLabel={tonight ? `更新入睡时间，当前记录 ${timeLabel(tonight.occurredAt)}` : '记录现在的入睡时间'} onPress={() => void recordNow()} style={({ pressed }) => [styles.circle, { backgroundColor: readingTheme.surface, borderColor: `${readingTheme.secondary}70` }, pressed && styles.circlePressed]}>
         <View style={[styles.moonMark, { backgroundColor: readingTheme.background }]}>
-          {saving ? <ActivityIndicator color={colors.primary} size="small" /> : <SymbolView name={{ ios: 'moon.stars.fill', android: 'bedtime', web: 'bedtime' }} size={23} tintColor={colors.primary} />}
+          {saving ? <ActivityIndicator color={colors.primary} size="small" /> : <SymbolView name={{ ios: 'moon.stars.fill', android: 'bedtime', web: 'bedtime' }} size={29} tintColor={colors.primary} />}
         </View>
         <Text style={[styles.circleTime, { color: readingTheme.text }]}>{saving ? '正在记录' : tonight ? timeLabel(tonight.occurredAt) : '记录入睡'}</Text>
       </Pressable>
@@ -242,7 +230,7 @@ export default function SleepLogScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 }, header: { height: 52, paddingHorizontal: spacing.xl, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth }, back: { color: colors.primary, fontSize: 13 }, headerTitle: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' }, headerRight: { width: 42 },
-  content: { alignItems: 'center', paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: 28 }, circle: { width: 176, height: 176, marginTop: spacing.md, borderRadius: 88, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', gap: spacing.md }, glassLayer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, borderRadius: 88 }, glassShine: { position: 'absolute', top: 7, left: 18, right: 18, height: 58, borderTopWidth: 2, borderRadius: 88, opacity: 0.7 }, moonMark: { width: 39, height: 39, borderRadius: 20, alignItems: 'center', justifyContent: 'center', opacity: 0.92 }, circlePressed: { transform: [{ scale: 0.98 }], opacity: 0.88 }, pressed: { opacity: 0.82, transform: [{ scale: 0.975 }] }, circleTime: { fontFamily: fonts.serif, fontSize: 22, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  content: { alignItems: 'center', paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: 28 }, circle: { width: 170, height: 170, marginTop: spacing.md, borderRadius: 85, borderWidth: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, shadowColor: colors.text, shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, moonMark: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' }, circlePressed: { transform: [{ scale: 0.98 }], opacity: 0.88 }, pressed: { opacity: 0.82, transform: [{ scale: 0.975 }] }, circleTime: { fontFamily: fonts.serif, fontSize: 23, fontWeight: '600', fontVariant: ['tabular-nums'] },
   undoBar: { width: '100%', minHeight: 40, marginTop: spacing.sm, paddingHorizontal: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, undoText: { fontSize: 11 }, undoButton: { minHeight: 40, paddingHorizontal: spacing.sm, justifyContent: 'center' }, undoButtonText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
   inlineHint: { width: '100%', marginBottom: spacing.xs, fontSize: 11, textAlign: 'center' },
   sectionHeader: { width: '100%', marginTop: spacing.xxl, marginBottom: spacing.sm, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, sectionTitle: { fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' }, sectionActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, statsLink: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: spacing.sm, paddingHorizontal: spacing.xs }, historyLink: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingVertical: spacing.sm, paddingLeft: spacing.xs }, actionText: { color: colors.primary, fontSize: 11, fontWeight: '600' }, chevron: { color: colors.primary, fontSize: 17 }, list: { width: '100%', borderRadius: radii.lg, paddingHorizontal: spacing.md }, row: { minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: spacing.sm }, rowIcon: { width: 32, height: 32, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center' }, rowText: { flex: 1 }, rowDate: { fontFamily: fonts.serif, fontSize: 13 }, rowTime: { fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] }, loader: { marginVertical: spacing.xxl }, empty: { width: '100%', borderRadius: radii.lg, alignItems: 'center', padding: spacing.lg }, emptyTitle: { fontSize: 13 },
