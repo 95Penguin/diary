@@ -88,8 +88,7 @@ export default function SleepLogScreen() {
   }, [db]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
-  async function recordNow() {
-    const tappedAt = new Date().toISOString();
+  async function recordNow(tappedAt = new Date().toISOString()) {
     if (savingRef.current) {
       latestQueuedTap.current = tappedAt;
       return;
@@ -98,19 +97,23 @@ export default function SleepLogScreen() {
     setSaving(true);
     clearUndo();
     try {
-      const previous = await getSleepRecordForNight(db, sleepNightDate(new Date(tappedAt)));
+      let previous: SleepRecord | null = null;
+      let previousNight: string | null = null;
       let timeToSave: string | null = tappedAt;
       let saved: SleepRecord | null = null;
       while (timeToSave) {
+        const night = sleepNightDate(new Date(timeToSave));
+        if (night !== previousNight) {
+          previous = await getSleepRecordForNight(db, night);
+          previousNight = night;
+        }
         saved = await saveSleepRecord(db, timeToSave);
+        await load();
         const queuedTap = latestQueuedTap.current;
         latestQueuedTap.current = null;
         timeToSave = queuedTap;
       }
       setTonight(saved);
-      savingRef.current = false;
-      setSaving(false);
-      await load();
       if (saved) {
         setUndoRecord({ saved, previous });
         undoTimer.current = setTimeout(() => { setUndoRecord(null); undoTimer.current = null; }, 6000);
@@ -133,7 +136,13 @@ export default function SleepLogScreen() {
       else await deleteSleepRecord(db, saved.id);
       await load();
     } catch { await showAppDialog({ title: '撤销失败', message: '请长按最近记录手动修改。' }); }
-    finally { savingRef.current = false; setSaving(false); }
+    finally {
+      const queuedTap = latestQueuedTap.current;
+      latestQueuedTap.current = null;
+      savingRef.current = false;
+      setSaving(false);
+      if (queuedTap) void recordNow(queuedTap);
+    }
   }
 
   function openEdit(record: SleepRecord) {

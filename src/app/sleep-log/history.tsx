@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
@@ -30,10 +30,13 @@ export default function SleepHistoryScreen() {
   const db = useSQLiteContext();
   const params = useLocalSearchParams<{ year?: string; month?: string; editId?: string }>();
   const { readingTheme } = useAppPreferences();
-  const [today] = useState(() => new Date());
+  const [today, setToday] = useState(() => new Date());
   const [year, setYear] = useState(() => Number(params.year) || today.getFullYear());
   const [month, setMonth] = useState(() => Number(params.month) || today.getMonth() + 1);
   const [records, setRecords] = useState<SleepRecord[]>([]);
+  const [loadedMonth, setLoadedMonth] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const monthReady = loadedMonth === monthKey(year, month);
   const [bounds, setBounds] = useState<{ first_date: string | null; last_date: string | null }>({ first_date: null, last_date: null });
   const [pickerVisible, setPickerVisible] = useState(false);
   const [pickerYear, setPickerYear] = useState(year);
@@ -64,6 +67,8 @@ export default function SleepHistoryScreen() {
 
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;
+    setLoadedMonth(null);
+    setLoadFailed(false);
     try {
       const [items, nextBounds, nextMonthCounts] = await Promise.all([
         listSleepRecords(db, monthStart(year, month), nextMonthStart(year, month)),
@@ -74,9 +79,17 @@ export default function SleepHistoryScreen() {
       setRecords(items);
       setBounds(nextBounds ?? { first_date: null, last_date: null });
       setMonthCounts(nextMonthCounts);
-    } catch { if (sequence === loadSequence.current) await showAppDialog({ title: '历史记录暂时无法读取', message: '请稍后重试。' }); }
+      setLoadedMonth(monthKey(year, month));
+    } catch { if (sequence === loadSequence.current) setLoadFailed(true); }
   }, [db, month, year]);
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusEffect(useCallback(() => {
+    setToday(new Date());
+    void load();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') { setToday(new Date()); void load(); }
+    });
+    return () => subscription.remove();
+  }, [load]));
 
   useEffect(() => {
     if (autoEditHandled.current || !params.editId || !records.length) return;
@@ -86,11 +99,12 @@ export default function SleepHistoryScreen() {
 
   function changeMonth(delta: number) {
     const next = new Date(year, month - 1 + delta, 1);
-    if (next.getFullYear() > today.getFullYear()) return;
+    const now = new Date();
+    if (next > new Date(now.getFullYear(), now.getMonth(), 1)) return;
     setYear(next.getFullYear()); setMonth(next.getMonth() + 1);
   }
 
-  function openMonthPicker() { setPickerYear(year); setPickerMonth(month); setPickerVisible(true); }
+  function openMonthPicker() { setToday(new Date()); setPickerYear(year); setPickerMonth(month); setPickerVisible(true); }
   function confirmMonthPicker() { setYear(pickerYear); setMonth(pickerMonth); setPickerVisible(false); }
 
   function openEdit(record: SleepRecord) {
@@ -98,9 +112,11 @@ export default function SleepHistoryScreen() {
   }
 
   function openAdd() {
+    const now = new Date();
+    setToday(now);
     const lastDay = new Date(year, month, 0).getDate();
-    const currentMonth = year === today.getFullYear() && month === today.getMonth() + 1;
-    setEditing(null); setEditValue(currentMonth ? today : new Date(year, month - 1, lastDay, 23, 0)); setPickerMode('date'); setPickerOpen(false); setEditorVisible(true);
+    const currentMonth = year === now.getFullYear() && month === now.getMonth() + 1;
+    setEditing(null); setEditValue(currentMonth ? now : new Date(year, month - 1, lastDay, 23, 0)); setPickerMode('date'); setPickerOpen(false); setEditorVisible(true);
   }
 
   function onPickerChange(event: DateTimePickerEvent, selected?: Date) {
@@ -155,9 +171,9 @@ export default function SleepHistoryScreen() {
         <Pressable accessibilityRole="button" accessibilityLabel={`选择年月，当前${monthName}`} onPress={openMonthPicker} style={styles.monthTitleButton}><Text style={[styles.monthTitle, { color: readingTheme.text }]}>{monthName}</Text></Pressable>
         <Pressable accessibilityLabel="下一个月" disabled={year === today.getFullYear() && month === today.getMonth() + 1} onPress={() => changeMonth(1)} hitSlop={10} style={[styles.arrowButton, { backgroundColor: readingTheme.surface }, year === today.getFullYear() && month === today.getMonth() + 1 && styles.disabled]}><Text style={[styles.arrowText, { color: colors.primary }]}>›</Text></Pressable>
       </View>
-      <View style={styles.monthSummary}><Text style={[styles.summaryCount, { color: readingTheme.text }]}>{records.length}</Text><Text style={[styles.summaryLabel, { color: readingTheme.secondary }]}>晚有记录</Text><Text style={[styles.summaryAside, { color: readingTheme.secondary }]}>本月</Text></View>
+      <View style={styles.monthSummary}><Text style={[styles.summaryCount, { color: readingTheme.text }]}>{monthReady ? records.length : '—'}</Text><Text style={[styles.summaryLabel, { color: readingTheme.secondary }]}>晚有记录</Text><Text style={[styles.summaryAside, { color: readingTheme.secondary }]}>本月</Text></View>
       {saveNotice ? <Text accessibilityLiveRegion="polite" style={styles.saveNotice}>{saveNotice}</Text> : null}
-      {records.length ? <View style={[styles.recordList, { backgroundColor: readingTheme.surface }]}>
+      {loadFailed ? <Pressable accessibilityRole="button" accessibilityLabel="重新加载睡眠历史" onPress={() => void load()} style={[styles.empty, { backgroundColor: readingTheme.surface }]}><Text style={[styles.emptyTitle, { color: readingTheme.secondary }]}>暂时无法读取，点击重试</Text></Pressable> : !monthReady ? <View style={styles.empty}><ActivityIndicator accessibilityLabel="正在读取睡眠历史" color={colors.primary} /></View> : records.length ? <View style={[styles.recordList, { backgroundColor: readingTheme.surface }]}>
         {records.map((record, index) => <Pressable key={record.id} accessibilityRole="button" accessibilityLabel={`${nightLabel(record.nightDate)} ${timeLabel(record.occurredAt)}，长按编辑或删除`} onLongPress={() => void manageRecord(record)} delayLongPress={350} style={({ pressed }) => [styles.recordRow, index > 0 && { borderTopColor: readingTheme.border, borderTopWidth: StyleSheet.hairlineWidth }, pressed && styles.rowPressed]}>
           <View style={styles.recordInfo}><Text style={[styles.recordDate, { color: readingTheme.text }]}>{nightLabel(record.nightDate)}</Text></View>
           <Text style={[styles.recordTime, { color: readingTheme.text }]}>{timeLabel(record.occurredAt)}</Text>

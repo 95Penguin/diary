@@ -47,11 +47,18 @@ export default function SettingsScreen() {
   }
 
   async function saveProfile() {
-    const value = nickname.trim().slice(0, 20);
-    if (!value) return;
-    if (profileEditor === 'nickname') await updatePreferences({ nickname: value });
-    else await updatePreferences({ signature: signature.trim().slice(0, 50) });
-    setProfileEditor(null);
+    try {
+      if (profileEditor === 'nickname') {
+        const value = nickname.trim().slice(0, 20);
+        if (!value) return;
+        await updatePreferences({ nickname: value });
+      } else if (profileEditor === 'signature') {
+        await updatePreferences({ signature: signature.trim().slice(0, 50) });
+      }
+      setProfileEditor(null);
+    } catch {
+      await showAppDialog({ title: '资料没有保存', message: '请稍后重试。' });
+    }
   }
 
   async function toggleAppLock() {
