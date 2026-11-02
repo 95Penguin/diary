@@ -15,16 +15,18 @@ export default function AppearanceScreen() {
       <View style={styles.headerSpace} />
     </View>
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <SettingChoice title="图片保存质量" value={preferences.imageSaveQuality} options={[["original", "原图"], ["high", "高清"], ["compact", "节省空间"]]} onChange={(value) => void updatePreferences({ imageSaveQuality: value as ImageSaveQuality })} />
-      <Text style={[styles.qualityHint, { color: readingTheme.secondary }]}>原图使用系统提供的最高质量；高清最长边 4096px；节省空间最长边 2048px。选择媒体后会显示预计占用。</Text>
       <ThemeChoice value={preferences.readingTheme} onChange={(value) => void updatePreferences({ readingTheme: value })} />
-      <SettingChoice title="正文字体" value={preferences.readingFont} options={[["serif", "宋体"], ["sans", "黑体"], ["light", "细黑"], ["mono", "等宽"], ["system", "系统"]]} onChange={(value) => void updatePreferences({ readingFont: value as ReadingFontName })} />
-      <SettingChoice title="字体大小" value={preferences.fontSize} options={[["verySmall", "很小"], ["small", "小"], ["standard", "标准"], ["large", "大"], ["veryLarge", "很大"]]} onChange={(value) => void updatePreferences({ fontSize: value as FontSizeMode })} />
-      <SettingChoice title="阅读舒适度" value={preferences.readingComfort} options={[["compact", "紧凑"], ["comfortable", "舒适"], ["spacious", "宽松"]]} onChange={(value) => void updatePreferences({ readingComfort: value as ReadingComfortName })} />
       <View style={[styles.preview, { backgroundColor: readingTheme.surface }]}>
         <Text style={[styles.previewTitle, { color: readingTheme.secondary }]}>实时预览</Text>
         <Text style={[styles.previewText, { color: readingBodyStyle.color, fontFamily: readingFontFamily, fontSize: 15 * fontScale, lineHeight: 24 * fontScale * readingBodyStyle.lineHeightMultiplier, letterSpacing: readingBodyStyle.letterSpacing }]}>今天也值得被认真记录。</Text>
       </View>
+      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>文字与排版</Text>
+      <SettingChoice title="正文字体" value={preferences.readingFont} options={[["serif", "宋体"], ["sans", "黑体"], ["light", "细黑"], ["mono", "等宽"], ["system", "系统"]]} onChange={(value) => void updatePreferences({ readingFont: value as ReadingFontName })} />
+      <SettingChoice title="字体大小" value={preferences.fontSize} options={[["verySmall", "很小"], ["small", "小"], ["standard", "标准"], ["large", "大"], ["veryLarge", "很大"]]} onChange={(value) => void updatePreferences({ fontSize: value as FontSizeMode })} />
+      <SettingChoice title="阅读舒适度" value={preferences.readingComfort} options={[["compact", "紧凑"], ["comfortable", "舒适"], ["spacious", "宽松"]]} onChange={(value) => void updatePreferences({ readingComfort: value as ReadingComfortName })} />
+      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>图片</Text>
+      <SettingChoice title="保存质量" value={preferences.imageSaveQuality} options={[["original", "原图"], ["high", "高清"], ["compact", "节省空间"]]} onChange={(value) => void updatePreferences({ imageSaveQuality: value as ImageSaveQuality })} />
+      <Text style={[styles.qualityHint, { color: readingTheme.secondary }]}>原图使用系统提供的最高质量；高清最长边 4096px；节省空间最长边 2048px。选择媒体后会显示预计占用。</Text>
     </ScrollView>
   </SafeAreaView>;
 }
@@ -60,6 +62,7 @@ const styles = StyleSheet.create({
   title: { fontFamily: fonts.serif, fontSize: 17, fontWeight: '600' },
   headerSpace: { width: 42 },
   content: { paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: spacing.xxxl },
+  sectionTitle: { marginTop: spacing.md, marginBottom: spacing.sm, fontSize: 11, fontWeight: '600' },
   qualityHint: { marginTop: spacing.sm, marginBottom: spacing.md, paddingHorizontal: spacing.sm, fontSize: 10, lineHeight: 16 },
   choiceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.sm, marginBottom: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radii.md },
   choiceTitle: { fontSize: 12, lineHeight: 30, fontWeight: '600' },

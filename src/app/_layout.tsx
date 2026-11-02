@@ -19,7 +19,9 @@ import { backfillVideoThumbnails } from '@/utils/video-thumbnail-cache';
 import { backfillImageThumbnails } from '@/utils/image-thumbnail-cache';
 import { AUTOMATIC_BACKUP_INTERVAL_MS, runAutomaticBackup } from '@/utils/automatic-backup';
 import { runAutomaticWebDavBackup } from '@/utils/automatic-webdav-backup';
+import { latestBackupAt, syncBackupReminder } from '@/utils/backup-reminder';
 import { recordAppError } from '@/utils/app-error-log';
+import { getLastExportAt } from '@/database/journal-repository';
 import { finishStartupMetric, startupTimer } from '@/utils/startup-performance';
 import { syncTimeCapsuleNotifications } from '@/utils/time-capsule-notifications';
 
@@ -50,8 +52,42 @@ function RecoveringDatabaseProvider() {
     setGeneration((value) => value + 1);
   }), []);
   return <SQLiteProvider key={generation} databaseName="shishi.db" onInit={initializeDatabase} useSuspense>
-    <AppPreferencesProvider><AutomaticBackupGate /><AutomaticWebDavBackupGate /><AppLockGate><AppStack /></AppLockGate><AppDialogHost /></AppPreferencesProvider>
+    <AppPreferencesProvider><AutomaticBackupGate /><AutomaticWebDavBackupGate /><BackupReminderGate /><AppLockGate><AppStack /></AppLockGate><AppDialogHost /></AppPreferencesProvider>
   </SQLiteProvider>;
+}
+
+function BackupReminderGate() {
+  const db = useSQLiteContext();
+  const { preferences, ready } = useAppPreferences();
+  const current = useRef({ days: preferences.backupReminderDays, automatic: preferences.lastAutomaticBackupAt, webDav: preferences.lastWebDavBackupAt });
+  const running = useRef(false);
+  const pending = useRef(false);
+
+  useEffect(() => {
+    current.current = { days: preferences.backupReminderDays, automatic: preferences.lastAutomaticBackupAt, webDav: preferences.lastWebDavBackupAt };
+  }, [preferences.backupReminderDays, preferences.lastAutomaticBackupAt, preferences.lastWebDavBackupAt]);
+
+  useEffect(() => {
+    async function check() {
+      if (!ready) return;
+      if (running.current) { pending.current = true; return; }
+      running.current = true;
+      try {
+        const exportedAt = await getLastExportAt(db);
+        const latest = current.current;
+        await syncBackupReminder(latest.days, latestBackupAt(exportedAt, latest.automatic, latest.webDav));
+      } catch (error) {
+        void recordAppError('backup.reminder-sync', error);
+      } finally {
+        running.current = false;
+        if (pending.current) { pending.current = false; void check(); }
+      }
+    }
+    void check();
+    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') void check(); });
+    return () => subscription.remove();
+  }, [db, ready, preferences.backupReminderDays, preferences.lastAutomaticBackupAt, preferences.lastWebDavBackupAt]);
+  return null;
 }
 
 function AutomaticBackupGate() {

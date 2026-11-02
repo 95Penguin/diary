@@ -11,8 +11,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { getDraftCount, getJournalStats, getLastExportAt } from '@/database/journal-repository';
 import type { JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
-import { useAppPreferences, type AppLockDelaySeconds, type BackupReminderDays } from '@/preferences/app-preferences';
-import { setBackupReminder } from '@/utils/backup-reminder';
+import { useAppPreferences, type AppLockDelaySeconds } from '@/preferences/app-preferences';
 import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 
 const EMPTY_STATS: JournalStats = { entries: 0, followUps: 0, images: 0, deleted: 0 };
@@ -87,17 +86,6 @@ export default function SettingsScreen() {
     if (result.success) await updatePreferences({ appLockEnabled: true });
   }
 
-  async function changeBackupReminder(value: string) {
-    const days = Number(value) as BackupReminderDays;
-    const lastExportAt = await getLastExportAt(db);
-    const enabled = await setBackupReminder(days, lastExportAt);
-    if (!enabled) {
-      await showAppDialog({ title: '没有通知权限', message: '请在手机设置中允许拾时发送通知，才能定期提醒备份。' });
-      return;
-    }
-    await updatePreferences({ backupReminderDays: days });
-  }
-
   return <SafeAreaView style={[styles.safe, { backgroundColor: readingTheme.background }]}>
     <View style={[styles.header, { borderBottomColor: readingTheme.border }]}>
       <Pressable accessibilityLabel="返回" hitSlop={12} onPress={() => router.back()}><Text style={styles.back}>‹ 返回</Text></Pressable>
@@ -127,28 +115,22 @@ export default function SettingsScreen() {
         <View style={styles.rowRight}>{draftCount > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{draftCount}</Text></View> : null}<Text style={styles.arrow}>›</Text></View>
       </Pressable>
 
-      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>数据与备份</Text>
-      <Pressable onPress={() => router.push('/data-health' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>数据与备份体检</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>检查数据库、媒体文件与最近备份</Text></View>
-        <Text style={styles.arrow}>›</Text>
+      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>备份与数据</Text>
+      <Pressable accessibilityLabel={`备份与导出，${backupStatusLabel(lastExportAt, preferences.lastAutomaticBackupAt, preferences.lastBackupHealth, stats.entries)}`} onPress={() => router.push('/backup')} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>备份与导出</Text><Text style={[styles.rowDescription, { color: preferences.lastBackupHealth === 'failed' || (!lastExportAt && !preferences.lastAutomaticBackupAt && stats.entries >= 20) ? colors.danger : readingTheme.secondary }]}>{backupStatusLabel(lastExportAt, preferences.lastAutomaticBackupAt, preferences.lastBackupHealth, stats.entries)}</Text></View>
+        <View style={styles.rowRight}>{preferences.lastBackupHealth === 'healthy' ? <Text style={styles.healthy}>✓</Text> : preferences.lastBackupHealth === 'failed' || (!lastExportAt && !preferences.lastAutomaticBackupAt && stats.entries >= 20) ? <View style={styles.warningDot} /> : null}<Text style={styles.arrow}>›</Text></View>
       </Pressable>
+      <Pressable onPress={() => router.push('/storage' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>存储空间</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>查看原始媒体与缩略图占用，安全清理缓存</Text></View><Text style={styles.arrow}>›</Text></Pressable>
       <Pressable onPress={() => router.push('/trash')} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
         <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>回收站</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>移入回收站的记录保留 30 天</Text></View>
         <View style={styles.rowRight}>{stats.deleted > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{stats.deleted}</Text></View> : null}<Text style={styles.arrow}>›</Text></View>
       </Pressable>
 
-      <Pressable accessibilityLabel={`备份与导出，${backupStatusLabel(lastExportAt, preferences.lastAutomaticBackupAt, preferences.lastBackupHealth, stats.entries)}`} onPress={() => router.push('/backup')} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>备份与导出</Text><Text style={[styles.rowDescription, { color: preferences.lastBackupHealth === 'failed' || (!lastExportAt && !preferences.lastAutomaticBackupAt && stats.entries >= 20) ? colors.danger : readingTheme.secondary }]}>{backupStatusLabel(lastExportAt, preferences.lastAutomaticBackupAt, preferences.lastBackupHealth, stats.entries)}</Text></View>
-        <View style={styles.rowRight}>{preferences.lastBackupHealth === 'healthy' ? <Text style={styles.healthy}>✓</Text> : preferences.lastBackupHealth === 'failed' || (!lastExportAt && !preferences.lastAutomaticBackupAt && stats.entries >= 20) ? <View style={styles.warningDot} /> : null}<Text style={styles.arrow}>›</Text></View>
+      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>外观与阅读</Text>
+      <Pressable onPress={() => router.push('/appearance' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
+        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>外观与阅读</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>主题、字体、排版与图片质量</Text></View>
+        <Text style={styles.arrow}>›</Text>
       </Pressable>
-      <Pressable onPress={() => router.push('/storage' as Href)} style={({ pressed }) => [styles.row, styles.nextRow, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>存储空间</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>查看原始媒体与缩略图占用，安全清理缓存</Text></View><Text style={styles.arrow}>›</Text></Pressable>
-      <View style={styles.reminderGap} />
-      <SettingChoice
-        title="备份提醒"
-        value={String(preferences.backupReminderDays)}
-        options={[['0', '关闭'], ['7', '7天'], ['14', '14天'], ['30', '30天']]}
-        onChange={(value) => void changeBackupReminder(value)}
-      />
 
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>隐私与安全</Text>
       <Pressable
@@ -171,12 +153,6 @@ export default function SettingsScreen() {
           onChange={(value) => void updatePreferences({ appLockDelaySeconds: Number(value) as AppLockDelaySeconds })}
         />
       </> : null}
-      <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>外观与阅读</Text>
-      <Pressable onPress={() => router.push('/appearance' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
-        <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>外观与阅读</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>主题、字体、排版与图片质量</Text></View>
-        <Text style={styles.arrow}>›</Text>
-      </Pressable>
-
       <Text style={[styles.sectionTitle, { color: readingTheme.secondary }]}>关于</Text>
       <Pressable onPress={() => router.push('/about' as Href)} style={({ pressed }) => [styles.row, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}>
         <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: readingTheme.text }]}>关于拾时</Text><Text style={[styles.rowDescription, { color: readingTheme.secondary }]}>版本、数据库状态与故障诊断</Text></View>

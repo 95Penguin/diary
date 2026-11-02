@@ -59,6 +59,9 @@ export default function HomeScreen() {
   const [actionEntry, setActionEntry] = useState<Entry | null>(null);
   const [draftCount, setDraftCount] = useState(0);
   const [drawerVisible, setDrawerVisible] = useState(false);
+  const [drawerRoute, setDrawerRoute] = useState<{ id: number; route: Href } | null>(null);
+  const drawerRouteId = useRef(0);
+  const handledDrawerRouteId = useRef(0);
   const [quickHintVisible, setQuickHintVisible] = useState(false);
   const cleanupStarted = useRef(false);
   const pendingDetailEntryId = useRef<string | null>(null);
@@ -90,7 +93,19 @@ export default function HomeScreen() {
     }
   }, [db]);
 
-  useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
+  useFocusEffect(useCallback(() => {
+    setDrawerVisible(false);
+    void refresh();
+  }, [refresh]));
+  useEffect(() => {
+    if (drawerVisible || !drawerRoute || drawerRoute.id <= handledDrawerRouteId.current) return;
+    const frame = requestAnimationFrame(() => {
+      handledDrawerRouteId.current = drawerRoute.id;
+      setDrawerRoute(null);
+      router.push(drawerRoute.route);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [drawerRoute, drawerVisible]);
   useEffect(() => {
     if (!draftRevision) return;
     void getDraftCount(db).then(setDraftCount);
@@ -129,13 +144,13 @@ export default function HomeScreen() {
   return (
     <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
       <View style={styles.header}>
-        <View style={styles.headerIdentity}><Text style={[styles.brand, { color: readingTheme.text }]}>拾时</Text><Text numberOfLines={1} style={[styles.subtitle, { color: readingTheme.secondary }]}>{preferences.signature.trim() || '我的日迹'}</Text></View>
         <View style={styles.headerActions}>
           <IconButton accessibilityLabel="打开功能菜单" onPress={() => setDrawerVisible(true)} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'line.3.horizontal', android: 'menu', web: 'menu' }} size={19} tintColor={colors.primary} /></IconButton>
+          <Pressable accessibilityLabel={`我的，${preferences.nickname}`} accessibilityRole="button" hitSlop={6} onPress={() => router.push('/settings')} style={styles.profileButton}>{preferences.avatarUri ? <Image source={preferences.avatarUri} contentFit="cover" style={styles.profileImage} /> : <Text style={styles.profileText}>{preferences.nickname.slice(0, 1)}</Text>}</Pressable>
           <IconButton accessibilityLabel="睡眠记录" onPress={() => router.push('/sleep-log' as Href)} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'moon.zzz', android: 'bedtime', web: 'bedtime' }} size={19} tintColor={colors.primary} /></IconButton>
           <IconButton accessibilityLabel="搜索" onPress={() => router.push('/search')} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }} size={19} tintColor={colors.primary} /></IconButton>
-          <Pressable accessibilityLabel={`我的，${preferences.nickname}`} accessibilityRole="button" hitSlop={6} onPress={() => router.push('/settings')} style={styles.profileButton}>{preferences.avatarUri ? <Image source={preferences.avatarUri} contentFit="cover" style={styles.profileImage} /> : <Text style={styles.profileText}>{preferences.nickname.slice(0, 1)}</Text>}</Pressable>
         </View>
+        <View style={styles.headerIdentity}><Text style={[styles.brand, { color: readingTheme.text }]}>拾时</Text><Text numberOfLines={1} style={[styles.subtitle, { color: readingTheme.secondary }]}>{preferences.signature.trim() || '我的日迹'}</Text></View>
       </View>
 
       <View style={styles.content}>
@@ -152,7 +167,7 @@ export default function HomeScreen() {
         else router.push('/compose');
       }} onQuickCompose={() => router.push({ pathname: '/compose', params: { quick: '1' } })} />
       <EntryActionModal visible={Boolean(actionEntry)} onClose={() => setActionEntry(null)} onEdit={() => { if (!actionEntry) return; const entryId = actionEntry.id; setActionEntry(null); router.push({ pathname: '/compose', params: { id: entryId } }); }} onDelete={deleteSelectedEntry} />
-      <FunctionDrawer visible={drawerVisible} draftCount={draftCount} onClose={() => setDrawerVisible(false)} />
+      <FunctionDrawer visible={drawerVisible} draftCount={draftCount} onClose={() => setDrawerVisible(false)} onNavigate={(route) => { setDrawerVisible(false); setDrawerRoute({ id: ++drawerRouteId.current, route }); }} />
     </SafeAreaView>
   );
 }
@@ -673,12 +688,12 @@ const CalendarView = memo(CalendarViewComponent);
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, paddingTop: spacing.xs, paddingBottom: spacing.xs },
-  headerIdentity: { flex: 1, minWidth: 0, marginRight: spacing.md, paddingBottom: 2 },
+  headerIdentity: { flex: 1, minWidth: 0, alignItems: 'flex-end', marginLeft: spacing.md, paddingBottom: 2 },
   brand: { color: colors.text, fontFamily: fonts.serif, fontSize: 24, lineHeight: 29, fontWeight: '600', includeFontPadding: false },
-  subtitle: { marginTop: 5, color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 11, lineHeight: 14, letterSpacing: 0.4, includeFontPadding: false },
+  subtitle: { marginTop: 5, color: colors.textSecondary, fontFamily: fonts.sans, fontSize: 11, lineHeight: 14, letterSpacing: 0.4, textAlign: 'right', includeFontPadding: false },
   headerActions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   profileButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill, backgroundColor: colors.primary },
-  profileImage: { width: 36, height: 36, borderRadius: 18 },
+  profileImage: { width: 32, height: 32, borderRadius: 16 },
   profileText: { width: 32, height: 32, color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 14, fontWeight: '600', lineHeight: 32, textAlign: 'center', includeFontPadding: false },
   content: { flex: 1 }, viewPane: { ...StyleSheet.absoluteFill }, hiddenPane: { opacity: 0 }, loader: { marginTop: 80 }, pageLoader: { marginVertical: spacing.lg },
   loadFailure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxxl }, loadFailureTitle: { fontFamily: fonts.serif, fontSize: 18 }, loadFailureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { marginTop: spacing.xl, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, retryButtonText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, refreshFailure: { alignItems: 'center', paddingVertical: spacing.xs, backgroundColor: colors.primarySoft }, refreshFailureText: { color: colors.primary, fontSize: 10 },

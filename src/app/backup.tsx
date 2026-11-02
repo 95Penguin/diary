@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -7,6 +7,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, Paths } from 'expo-file-system';
 
 import { createJournalExport, getJournalStats, getLastExportAt, importJournalBackup, saveLastExportAt } from '@/database/journal-repository';
+import { showAppDialog } from '@/components/app-dialog-host';
 import type { JournalBackup, JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { exportBackupUri } from '@/utils/backup-export';
@@ -14,9 +15,9 @@ import { materializeBackupImages } from '@/utils/backup-images';
 import { parseJournalBackup } from '@/utils/backup-import';
 import { createZipBackupFile, inspectZipBackupFile, materializeZipBackupFile, storeRecoverySnapshotFile } from '@/utils/backup-zip';
 import { formatShortDateTime } from '@/utils/date';
-import { deleteJournalImage, getJournalMediaStorageUsage } from '@/utils/image-storage';
-import { useAppPreferences } from '@/preferences/app-preferences';
-import { setBackupReminder } from '@/utils/backup-reminder';
+import { deleteJournalImage } from '@/utils/image-storage';
+import { useAppPreferences, type BackupReminderDays } from '@/preferences/app-preferences';
+import { latestBackupAt, setBackupReminder, syncBackupReminder } from '@/utils/backup-reminder';
 import { chooseBackupDirectory, saveBackupFileToDirectory } from '@/utils/backup-directory';
 import { AUTOMATIC_BACKUP_RETENTION } from '@/utils/automatic-backup';
 import { recordAppError } from '@/utils/app-error-log';
@@ -81,12 +82,12 @@ export default function BackupScreen() {
   const { preferences, readingTheme, updatePreferences } = useAppPreferences();
   const [stats, setStats] = useState(EMPTY_STATS);
   const [lastExportAt, setLastExportAt] = useState<string | null>(null);
+  const [reminderStatus, setReminderStatus] = useState<{ permitted: boolean; nextAt: string | null } | null>(null);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [pendingBackup, setPendingBackup] = useState<JournalBackup | null>(null);
   const [pendingZipUri, setPendingZipUri] = useState<string | null>(null);
   const [message, setMessage] = useState('');
-  const [mediaBytes, setMediaBytes] = useState(0);
   const [operationProgress, setOperationProgress] = useState<OperationProgress>(null);
   const [advancedVisible, setAdvancedVisible] = useState(false);
   const handledCloudBackupUri = useRef<string | null>(null);
@@ -109,12 +110,21 @@ export default function BackupScreen() {
   }, [clearPendingBackup, importing]);
 
   const load = useCallback(async () => {
-    const [nextStats, exportedAt, storage] = await Promise.all([getJournalStats(db), getLastExportAt(db), getJournalMediaStorageUsage()]);
+    const [nextStats, exportedAt] = await Promise.all([getJournalStats(db), getLastExportAt(db)]);
     setStats(nextStats);
     setLastExportAt(exportedAt);
-    setMediaBytes(storage.bytes);
-  }, [db]);
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+    try {
+      setReminderStatus(await syncBackupReminder(preferences.backupReminderDays, latestBackupAt(exportedAt, preferences.lastAutomaticBackupAt, preferences.lastWebDavBackupAt)));
+    } catch (error) {
+      void recordAppError('backup.reminder-status', error);
+      setReminderStatus({ permitted: false, nextAt: null });
+    }
+  }, [db, preferences.backupReminderDays, preferences.lastAutomaticBackupAt, preferences.lastWebDavBackupAt]);
+  useFocusEffect(useCallback(() => {
+    void load();
+    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') void load(); });
+    return () => subscription.remove();
+  }, [load]));
 
   useEffect(() => {
     if (!cloudBackupUri || handledCloudBackupUri.current === cloudBackupUri) return;
@@ -160,7 +170,7 @@ export default function BackupScreen() {
     const health = missingMedia ? 'warning' : 'healthy';
     await updatePreferences({ lastBackupCheckAt: now, lastBackupHealth: health });
     if (!missingMedia && preferences.backupReminderDays) {
-      await setBackupReminder(preferences.backupReminderDays, now);
+      await setBackupReminder(preferences.backupReminderDays, now).catch((error) => { void recordAppError('backup.reminder-after-export', error); });
     }
   }
 
@@ -229,6 +239,23 @@ export default function BackupScreen() {
     } catch (error) {
       void recordAppError('backup.enable-automatic', error);
       setMessage('无法授权这个目录，请换一个目录再试');
+    }
+  }
+
+  async function changeBackupReminder(days: BackupReminderDays) {
+    try {
+      const exportedAt = await getLastExportAt(db);
+      const latest = latestBackupAt(exportedAt, preferences.lastAutomaticBackupAt, preferences.lastWebDavBackupAt);
+      const enabled = await setBackupReminder(days, latest);
+      if (!enabled) {
+        await showAppDialog({ title: '没有通知权限', message: '请在手机设置中允许拾时发送通知，才能定期提醒备份。' });
+        return;
+      }
+      await updatePreferences({ backupReminderDays: days });
+      setReminderStatus(await syncBackupReminder(days, latest));
+    } catch (error) {
+      void recordAppError('backup.reminder-setting', error);
+      await showAppDialog({ title: '设置失败', message: '暂时无法安排备份提醒，请稍后重试。' });
     }
   }
 
@@ -410,9 +437,8 @@ export default function BackupScreen() {
     </View>
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={[styles.summary, { backgroundColor: readingTheme.surface }]}>
-        <Text style={styles.summaryTitle}>我的日迹</Text>
+        <Text style={styles.summaryTitle}>备份状态</Text>
         <Text style={[styles.summaryCount, { color: readingTheme.text }]}>{stats.entries} 条记录 · {stats.followUps} 条后续 · {stats.images} 个媒体</Text>
-        <Text style={[styles.lastExport, { color: readingTheme.secondary }]}>本地媒体占用：{formatBytes(mediaBytes)}</Text>
         {lastExportAt ? <Text style={[styles.lastExport, { color: readingTheme.secondary }]}>上次导出：{formatShortDateTime(lastExportAt)}</Text> : <Text style={[styles.lastExport, { color: readingTheme.secondary }]}>还没有导出过备份</Text>}
         <View style={styles.healthRow}>
           <View style={[styles.healthDot, preferences.lastBackupHealth === 'healthy' ? styles.healthGood : preferences.lastBackupHealth === 'warning' ? styles.healthWarning : preferences.lastBackupHealth === 'failed' ? styles.healthBad : styles.healthUnknown]} />
@@ -429,18 +455,30 @@ export default function BackupScreen() {
         </View>
       </View>
 
-      <Text style={[styles.pageSectionTitle, { color: readingTheme.secondary }]}>备份</Text>
-      <Pressable onPress={() => router.push('/webdav-backup' as Href)} style={({ pressed }) => [styles.cloudBackupCard, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><View style={styles.directoryCopy}><Text style={[styles.explanationTitle, { color: readingTheme.text }]}>WebDAV 云备份</Text><Text style={[styles.explanationText, { color: readingTheme.secondary }]}>{preferences.lastWebDavBackupAt ? `最近成功：${formatShortDateTime(preferences.lastWebDavBackupAt)}` : preferences.webDavServerUrl ? '账号已设置，可以手动上传完整备份' : '连接坚果云、群晖或其他 WebDAV 云盘'}</Text></View><Text style={styles.readableArrow}>›</Text></Pressable>
-
+      <Text style={[styles.pageSectionTitle, { color: readingTheme.secondary }]}>手动备份</Text>
       <Pressable disabled={exporting} onPress={() => void exportZip()} style={({ pressed }) => [styles.exportButton, (pressed || exporting) && styles.pressed]}>
         {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportText}>导出完整 ZIP</Text>}
       </Pressable>
 
-      <Text style={[styles.pageSectionTitle, { color: readingTheme.secondary }]}>恢复与检查</Text>
-      <Pressable disabled={importing} onPress={() => void chooseBackup()} style={({ pressed }) => [styles.importButton, pressed && styles.pressed]}><Text style={styles.importText}>从 ZIP 或 JSON 恢复</Text></Pressable>
-      <Pressable onPress={() => router.push('/data-health' as Href)} style={({ pressed }) => [styles.healthCheckLink, { borderColor: readingTheme.border }, pressed && styles.pressed]}><View><Text style={[styles.healthCheckTitle, { color: readingTheme.text }]}>检查手机里的当前数据</Text><Text style={[styles.healthCheckText, { color: readingTheme.secondary }]}>数据库、媒体文件、回收站与备份状态</Text></View><Text style={styles.readableArrow}>›</Text></Pressable>
+      <Text style={[styles.pageSectionTitle, { color: readingTheme.secondary }]}>自动备份</Text>
+      <Pressable accessibilityRole="switch" accessibilityState={{ checked: preferences.automaticBackupEnabled }} onPress={() => void toggleAutomaticBackup()} style={[styles.autoBackupRow, { backgroundColor: readingTheme.surface }]}>
+        <View style={styles.directoryCopy}>
+          <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>每日自动备份</Text>
+          <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>
+            {preferences.lastAutomaticBackupAt ? `最近自动备份：${formatShortDateTime(preferences.lastAutomaticBackupAt)}` : '打开应用时检查，并自动保留最近 5 份'}
+          </Text>
+        </View>
+        <View style={[styles.switchTrack, preferences.automaticBackupEnabled && styles.switchTrackActive]}><View style={[styles.switchThumb, preferences.automaticBackupEnabled && styles.switchThumbActive]} /></View>
+      </Pressable>
+      <View style={[styles.reminderRow, { backgroundColor: readingTheme.surface }]}>
+        <Text style={[styles.reminderTitle, { color: readingTheme.text }]}>备份提醒</Text>
+        <View style={styles.reminderChoices}>{([0, 7, 14, 30] as const).map((days) => <Pressable key={days} accessibilityRole="radio" accessibilityState={{ checked: preferences.backupReminderDays === days }} onPress={() => void changeBackupReminder(days)} style={[styles.reminderChoice, preferences.backupReminderDays === days && styles.reminderChoiceActive]}><Text style={[styles.reminderChoiceText, { color: readingTheme.secondary }, preferences.backupReminderDays === days && styles.reminderChoiceTextActive]}>{days ? `${days}天` : '关闭'}</Text></Pressable>)}</View>
+      </View>
+      {preferences.backupReminderDays && reminderStatus ? <Text style={[styles.reminderStatus, { color: readingTheme.secondary }]}>{reminderStatus.permitted && reminderStatus.nextAt ? `下次提醒：${formatShortDateTime(reminderStatus.nextAt)}` : '通知未获允许，请在系统设置中开启拾时通知'}</Text> : null}
+      <Pressable onPress={() => router.push('/webdav-backup' as Href)} style={({ pressed }) => [styles.cloudBackupCard, { backgroundColor: readingTheme.surface }, pressed && styles.pressed]}><View style={styles.directoryCopy}><Text style={[styles.explanationTitle, { color: readingTheme.text }]}>WebDAV 云备份</Text><Text style={[styles.explanationText, { color: readingTheme.secondary }]}>{preferences.lastWebDavBackupAt ? `最近成功：${formatShortDateTime(preferences.lastWebDavBackupAt)}` : preferences.webDavServerUrl ? '账号已设置，可以手动上传完整备份' : '连接坚果云、群晖或其他 WebDAV 云盘'}</Text></View><Text style={styles.readableArrow}>›</Text></Pressable>
+
       <Pressable accessibilityState={{ expanded: advancedVisible }} onPress={() => setAdvancedVisible((value) => !value)} style={[styles.advancedToggle, { borderColor: readingTheme.border }]}>
-        <Text style={[styles.advancedToggleText, { color: readingTheme.secondary }]}>自动备份与其他导出</Text>
+        <Text style={[styles.advancedToggleText, { color: readingTheme.secondary }]}>更多备份选项</Text>
         <View style={[styles.advancedChevron, advancedVisible && styles.advancedChevronOpen]} />
       </Pressable>
       {advancedVisible ? <View style={styles.advancedArea}>
@@ -462,21 +500,16 @@ export default function BackupScreen() {
             <Text style={styles.directorySelectText}>{preferences.backupDirectoryUri ? '更换' : '选择'}</Text>
           </Pressable>
         </View>
-        <Pressable accessibilityRole="switch" accessibilityState={{ checked: preferences.automaticBackupEnabled }} onPress={() => void toggleAutomaticBackup()} style={[styles.autoBackupRow, { backgroundColor: readingTheme.surface }]}>
-          <View style={styles.directoryCopy}>
-            <Text style={[styles.explanationTitle, { color: readingTheme.text }]}>每日自动备份</Text>
-            <Text style={[styles.explanationText, { color: readingTheme.secondary }]}>
-              {preferences.lastAutomaticBackupAt ? `最近自动备份：${formatShortDateTime(preferences.lastAutomaticBackupAt)}` : '打开应用时检查，并自动保留最近 5 份'}
-            </Text>
-          </View>
-          <View style={[styles.switchTrack, preferences.automaticBackupEnabled && styles.switchTrackActive]}><View style={[styles.switchThumb, preferences.automaticBackupEnabled && styles.switchThumbActive]} /></View>
-        </Pressable>
         <Pressable disabled={exporting} onPress={() => void saveToSelectedDirectory()} style={({ pressed }) => [styles.directoryBackupButton, (pressed || exporting) && styles.pressed]}>
           <Text style={styles.directoryBackupText}>{preferences.backupDirectoryUri ? '备份到固定目录' : '选择目录并备份'}</Text>
         </Pressable>
-        <Pressable disabled={exporting || importing} onPress={() => void checkBackupHealth()} style={({ pressed }) => [styles.checkButton, { borderColor: readingTheme.border }, pressed && styles.pressed]}><Text style={[styles.checkText, { color: readingTheme.secondary }]}>检查一个 ZIP 备份</Text></Pressable>
-        <Text style={styles.hint}>固定目录备份仅在 Android 可用；网盘未出现在目录选择器中时，请使用上方“立即备份 ZIP”。</Text>
+        <Text style={styles.hint}>固定目录备份仅在 Android 可用；网盘未出现在目录选择器中时，请使用上方“导出完整 ZIP”。</Text>
       </View> : null}
+
+      <Text style={[styles.pageSectionTitle, { color: readingTheme.secondary }]}>检查与恢复</Text>
+      <Pressable onPress={() => router.push('/data-health' as Href)} style={({ pressed }) => [styles.healthCheckLink, { borderColor: readingTheme.border }, pressed && styles.pressed]}><View><Text style={[styles.healthCheckTitle, { color: readingTheme.text }]}>检查手机里的当前数据</Text><Text style={[styles.healthCheckText, { color: readingTheme.secondary }]}>数据库、媒体文件、回收站与备份状态</Text></View><Text style={styles.readableArrow}>›</Text></Pressable>
+      <Pressable disabled={exporting || importing} onPress={() => void checkBackupHealth()} style={({ pressed }) => [styles.checkButton, { borderColor: readingTheme.border }, pressed && styles.pressed]}><Text style={[styles.checkText, { color: readingTheme.secondary }]}>检查一个 ZIP 备份</Text></Pressable>
+      <Pressable disabled={importing} onPress={() => void chooseBackup()} style={({ pressed }) => [styles.importButton, pressed && styles.pressed]}><Text style={styles.importText}>从 ZIP 或 JSON 恢复</Text></Pressable>
       {operationProgress ? <View style={styles.progressArea}>
         <View style={[styles.progressTrack, { backgroundColor: readingTheme.surface }]}><View style={[styles.progressFill, { width: `${Math.round(operationProgress.value * 100)}%` }]} /></View>
         <Text style={[styles.progressLabel, { color: readingTheme.secondary }]}>{operationProgress.label}</Text>
@@ -536,11 +569,19 @@ const styles = StyleSheet.create({
   directorySelect: { minWidth: 58, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.pill },
   directorySelectText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
   autoBackupRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm, padding: spacing.md, borderRadius: radii.lg },
+  reminderRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, marginTop: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radii.md },
+  reminderTitle: { fontSize: 12, fontWeight: '600' },
+  reminderChoices: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: spacing.xs },
+  reminderChoice: { minHeight: 30, minWidth: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: radii.pill },
+  reminderChoiceActive: { backgroundColor: colors.primary },
+  reminderChoiceText: { fontSize: 10 },
+  reminderChoiceTextActive: { color: '#FFFFFF', fontWeight: '700' },
+  reminderStatus: { marginTop: spacing.xs, marginHorizontal: spacing.xs, fontSize: 11 },
   switchTrack: { width: 44, height: 26, justifyContent: 'center', paddingHorizontal: 3, borderRadius: 13, backgroundColor: colors.border },
   switchTrackActive: { backgroundColor: colors.primary },
   switchThumb: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#FFFFFF' },
   switchThumbActive: { alignSelf: 'flex-end' },
-  exportButton: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: spacing.xl, borderRadius: radii.pill, backgroundColor: colors.primary }, pressed: { opacity: 0.62 }, exportText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  exportButton: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, pressed: { opacity: 0.62 }, exportText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   importButton: { height: 42, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, importText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
   directoryBackupButton: { height: 40, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primarySoft }, directoryBackupText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
   checkButton: { height: 38, alignItems: 'center', justifyContent: 'center', marginTop: spacing.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radii.pill },
