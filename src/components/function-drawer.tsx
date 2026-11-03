@@ -6,6 +6,7 @@ import { type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppPreferences } from '@/preferences/app-preferences';
+import { useProfileEditor } from '@/components/profile-editor';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 
 type DrawerItem = {
@@ -44,6 +45,7 @@ const groups: { title: string; items: DrawerItem[] }[] = [
 
 export function FunctionDrawer({ visible, draftCount, onClose, onNavigate }: { visible: boolean; draftCount: number; onClose: () => void; onNavigate: (route: Href) => void }) {
   const { preferences, readingTheme } = useAppPreferences();
+  const { editProfile, closeProfileEditor, profileEditorOpen, profileEditorModal } = useProfileEditor({ embedded: true });
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const drawerWidth = Math.min(width * 0.8, 340);
@@ -83,21 +85,23 @@ export function FunctionDrawer({ visible, draftCount, onClose, onNavigate }: { v
     transparent
     animationType="none"
     statusBarTranslucent={Platform.OS === 'android'}
-    onRequestClose={() => close()}
+    onRequestClose={() => { if (profileEditorOpen) closeProfileEditor(); else close(); }}
   >
     <View style={styles.overlay}>
       <Animated.View pointerEvents="none" style={[styles.backdrop, { opacity: backdropOpacity }]} />
       <Pressable accessibilityLabel="关闭功能侧栏" accessibilityRole="button" onPress={() => close()} style={StyleSheet.absoluteFill} />
       <Animated.View accessibilityViewIsModal style={[styles.drawer, { width: drawerWidth, backgroundColor: readingTheme.background, paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, spacing.sm), transform: [{ translateX }] }]}>
-        <Pressable accessibilityRole="button" accessibilityLabel={`编辑个人资料，${preferences.nickname}`} onPress={() => close('/settings' as Href)} style={[styles.profile, { borderBottomColor: readingTheme.border }]}>
-          {preferences.avatarUri
-            ? <Image source={preferences.avatarUri} contentFit="cover" style={styles.avatar} />
-            : <View style={styles.avatar}><Text style={styles.avatarText}>{preferences.nickname.slice(0, 1)}</Text></View>}
+        <View style={[styles.profile, { borderBottomColor: readingTheme.border }]}>
+          <Pressable accessibilityRole="button" accessibilityLabel="修改头像" onPress={() => editProfile('avatar')}>
+            {preferences.avatarUri
+              ? <Image source={preferences.avatarUri} contentFit="cover" style={styles.avatar} />
+              : <View style={styles.avatar}><Text style={styles.avatarText}>{preferences.nickname.slice(0, 1)}</Text></View>}
+          </Pressable>
           <View style={styles.profileCopy}>
-            <Text numberOfLines={1} style={[styles.nickname, { color: readingTheme.text }]}>{preferences.nickname}</Text>
-            <Text numberOfLines={1} style={[styles.signature, { color: readingTheme.secondary }]}>{preferences.signature || '把日子慢慢收好。'}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="编辑昵称" onPress={() => editProfile('nickname')}><Text numberOfLines={1} style={[styles.nickname, { color: readingTheme.text }]}>{preferences.nickname}</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="编辑个性签名" onPress={() => editProfile('signature')}><Text numberOfLines={1} style={[styles.signature, { color: readingTheme.secondary }]}>{preferences.signature || '把日子慢慢收好。'}</Text></Pressable>
           </View>
-        </Pressable>
+        </View>
 
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {groups.map((group) => <View key={group.title} style={styles.group}>
@@ -123,6 +127,7 @@ export function FunctionDrawer({ visible, draftCount, onClose, onNavigate }: { v
           </Pressable>
         </View>
       </Animated.View>
+      {profileEditorModal}
     </View>
   </Modal>;
 }

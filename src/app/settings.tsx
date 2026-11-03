@@ -1,10 +1,10 @@
 import { useCallback, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { showAppDialog } from '@/components/app-dialog-host';
+import { useProfileEditor } from '@/components/profile-editor';
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
@@ -12,7 +12,6 @@ import { getDraftCount, getJournalStats, getLastExportAt } from '@/database/jour
 import type { JournalStats } from '@/domain/journal';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { useAppPreferences, type AppLockDelaySeconds } from '@/preferences/app-preferences';
-import { deleteJournalImage, persistJournalImage } from '@/utils/image-storage';
 
 const EMPTY_STATS: JournalStats = { entries: 0, followUps: 0, images: 0, deleted: 0 };
 
@@ -22,9 +21,7 @@ export default function SettingsScreen() {
   const [draftCount, setDraftCount] = useState(0);
   const [lastExportAt, setLastExportAt] = useState<string | null>(null);
   const { preferences, readingTheme, updatePreferences } = useAppPreferences();
-  const [profileEditor, setProfileEditor] = useState<'nickname' | 'signature' | null>(null);
-  const [nickname, setNickname] = useState(preferences.nickname);
-  const [signature, setSignature] = useState(preferences.signature);
+  const { editProfile, profileEditorModal } = useProfileEditor();
 
   useFocusEffect(useCallback(() => {
     void Promise.all([getJournalStats(db), getDraftCount(db), getLastExportAt(db)]).then(([nextStats, nextDraftCount, nextExportAt]) => {
@@ -33,32 +30,6 @@ export default function SettingsScreen() {
       setLastExportAt(nextExportAt);
     });
   }, [db]));
-
-  async function chooseAvatar() {
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 });
-    if (result.canceled) return;
-    try {
-      const previous = preferences.avatarUri;
-      const uri = await persistJournalImage(result.assets[0].uri, result.assets[0].fileName);
-      await updatePreferences({ avatarUri: uri });
-      if (previous) deleteJournalImage(previous);
-    } catch { await showAppDialog({ title: '头像保存失败', message: '请稍后再试。' }); }
-  }
-
-  async function saveProfile() {
-    try {
-      if (profileEditor === 'nickname') {
-        const value = nickname.trim().slice(0, 20);
-        if (!value) return;
-        await updatePreferences({ nickname: value });
-      } else if (profileEditor === 'signature') {
-        await updatePreferences({ signature: signature.trim().slice(0, 50) });
-      }
-      setProfileEditor(null);
-    } catch {
-      await showAppDialog({ title: '资料没有保存', message: '请稍后重试。' });
-    }
-  }
 
   async function toggleAppLock() {
     if (preferences.appLockEnabled) {
@@ -93,10 +64,10 @@ export default function SettingsScreen() {
       <View style={styles.headerSpace} />
     </View>
     <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-      <View style={styles.profile}><Pressable accessibilityLabel="修改头像" onPress={() => void chooseAvatar()}>{preferences.avatarUri ? <Image source={preferences.avatarUri} contentFit="cover" style={[styles.avatar, styles.avatarImage]} /> : <View style={styles.avatar}><Text style={styles.avatarText}>{preferences.nickname.slice(0, 1)}</Text></View>}</Pressable>
+      <View style={styles.profile}><Pressable accessibilityLabel="修改头像" onPress={() => editProfile('avatar')}>{preferences.avatarUri ? <Image source={preferences.avatarUri} contentFit="cover" style={[styles.avatar, styles.avatarImage]} /> : <View style={styles.avatar}><Text style={styles.avatarText}>{preferences.nickname.slice(0, 1)}</Text></View>}</Pressable>
         <View style={styles.profileInfo}>
-          <Pressable accessibilityLabel="编辑昵称" style={styles.profileField} onPress={() => { setNickname(preferences.nickname); setProfileEditor('nickname'); }}><Text numberOfLines={1} style={[styles.brand, { color: readingTheme.text }]}>{preferences.nickname}</Text></Pressable>
-          <Pressable accessibilityLabel="编辑个性签名" style={styles.profileField} onPress={() => { setSignature(preferences.signature); setProfileEditor('signature'); }}><Text numberOfLines={1} style={[styles.slogan, { color: readingTheme.secondary }]}>{preferences.signature || '把日子慢慢收好。'}</Text></Pressable>
+          <Pressable accessibilityLabel="编辑昵称" style={styles.profileField} onPress={() => editProfile('nickname')}><Text numberOfLines={1} style={[styles.brand, { color: readingTheme.text }]}>{preferences.nickname}</Text></Pressable>
+          <Pressable accessibilityLabel="编辑个性签名" style={styles.profileField} onPress={() => editProfile('signature')}><Text numberOfLines={1} style={[styles.slogan, { color: readingTheme.secondary }]}>{preferences.signature || '把日子慢慢收好。'}</Text></Pressable>
         </View>
       </View>
 
@@ -159,7 +130,7 @@ export default function SettingsScreen() {
         <Text style={styles.arrow}>›</Text>
       </Pressable>
     </ScrollView>
-    <Modal visible={profileEditor !== null} transparent animationType="fade" onRequestClose={() => setProfileEditor(null)}><Pressable onPress={() => setProfileEditor(null)} style={styles.overlay}><Pressable onPress={(event) => event.stopPropagation()} style={[styles.editorCard, { backgroundColor: readingTheme.background }]}><Text style={[styles.editorTitle, { color: readingTheme.text }]}>{profileEditor === 'nickname' ? '编辑昵称' : '编辑个性签名'}</Text>{profileEditor === 'nickname' ? <TextInput autoFocus maxLength={20} value={nickname} onChangeText={setNickname} placeholder="输入昵称" placeholderTextColor={readingTheme.secondary} style={[styles.nicknameInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} /> : <TextInput autoFocus multiline textAlignVertical="top" maxLength={50} value={signature} onChangeText={setSignature} placeholder="写一句属于你的话" placeholderTextColor={readingTheme.secondary} style={[styles.nicknameInput, styles.signatureInput, { backgroundColor: readingTheme.surface, color: readingTheme.text }]} />}<View style={styles.editorActions}><Pressable onPress={() => setProfileEditor(null)}><Text style={[styles.cancelText, { color: readingTheme.secondary }]}>取消</Text></Pressable><Pressable onPress={() => void saveProfile()}><Text style={styles.confirmText}>保存</Text></Pressable></View></Pressable></Pressable></Modal>
+    {profileEditorModal}
   </SafeAreaView>;
 }
 
@@ -210,5 +181,4 @@ const styles = StyleSheet.create({
   switchThumbActive: { alignSelf: 'flex-end' },
   reminderGap: { height: spacing.sm },
   choiceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.sm, marginBottom: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radii.md, backgroundColor: colors.surfaceMuted }, choiceTitle: { color: colors.text, fontSize: 12, lineHeight: 30, fontWeight: '600' }, choices: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.xs }, choice: { minHeight: 30, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, borderRadius: 15 }, singleCharacterChoice: { width: 30, paddingHorizontal: 0 }, choiceActive: { backgroundColor: colors.primary }, choiceText: { color: colors.textSecondary, fontSize: 10 }, choiceTextActive: { color: '#FFFFFF', fontWeight: '700' },
-  overlay: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl, backgroundColor: colors.overlay }, editorCard: { width: '100%', maxWidth: 300, padding: spacing.xl, borderRadius: radii.lg, backgroundColor: colors.background }, editorTitle: { marginBottom: spacing.md, color: colors.text, fontFamily: fonts.serif, fontSize: 17, fontWeight: '600', textAlign: 'center' }, nicknameInput: { height: 44, paddingHorizontal: spacing.md, borderRadius: radii.md, backgroundColor: colors.surfaceMuted, color: colors.text, fontSize: 14 }, signatureInput: { height: 76, paddingTop: spacing.sm }, editorActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.xxl, marginTop: spacing.xl }, cancelText: { color: colors.textSecondary, fontSize: 12 }, confirmText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
 });
