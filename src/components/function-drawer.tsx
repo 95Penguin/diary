@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ComponentProps } from 'react';
-import { Animated, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react';
+import { Animated, BackHandler, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
-import { type Href } from 'expo-router';
+import { useFocusEffect, type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAppPreferences } from '@/preferences/app-preferences';
@@ -43,7 +43,7 @@ const groups: { title: string; items: DrawerItem[] }[] = [
   },
 ];
 
-export function FunctionDrawer({ visible, instantOpen = false, draftCount, onClose, onNavigate }: { visible: boolean; instantOpen?: boolean; draftCount: number; onClose: () => void; onNavigate: (route: Href) => void }) {
+export function FunctionDrawer({ visible, draftCount, onClose, onNavigate }: { visible: boolean; draftCount: number; onClose: () => void; onNavigate: (route: Href) => void }) {
   const { preferences, readingTheme } = useAppPreferences();
   const { editProfile, closeProfileEditor, profileEditorOpen, profileEditorModal } = useProfileEditor({ embedded: true });
   const { width } = useWindowDimensions();
@@ -60,19 +60,15 @@ export function FunctionDrawer({ visible, instantOpen = false, draftCount, onClo
       return;
     }
     closing.current = false;
-    if (instantOpen) {
-      translateX.setValue(0);
-      backdropOpacity.setValue(1);
-      return;
-    }
     Animated.parallel([
       Animated.timing(translateX, { toValue: 0, duration: 190, useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 1, duration: 190, useNativeDriver: true }),
     ]).start();
     return () => { translateX.stopAnimation(); backdropOpacity.stopAnimation(); };
-  }, [backdropOpacity, drawerWidth, instantOpen, translateX, visible]);
+  }, [backdropOpacity, drawerWidth, translateX, visible]);
 
-  function close(route?: Href) {
+  const close = useCallback((route?: Href) => {
+    if (route) { onNavigate(route); return; }
     if (closing.current) return;
     closing.current = true;
     Animated.parallel([
@@ -80,18 +76,22 @@ export function FunctionDrawer({ visible, instantOpen = false, draftCount, onClo
       Animated.timing(backdropOpacity, { toValue: 0, duration: 170, useNativeDriver: true }),
     ]).start(({ finished }) => {
       if (!finished) return;
-      if (route) onNavigate(route);
-      else onClose();
+      onClose();
     });
-  }
+  }, [backdropOpacity, drawerWidth, onClose, onNavigate, translateX]);
 
-  return <Modal
-    visible={visible}
-    transparent
-    animationType="none"
-    statusBarTranslucent={Platform.OS === 'android'}
-    onRequestClose={() => { if (profileEditorOpen) closeProfileEditor(); else close(); }}
-  >
+  useFocusEffect(useCallback(() => {
+    if (!visible) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (profileEditorOpen) closeProfileEditor();
+      else close();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [visible, profileEditorOpen, closeProfileEditor, close]));
+
+  if (!visible) return null;
+  return (
     <View style={styles.overlay}>
       <Animated.View pointerEvents="none" style={[styles.backdrop, { opacity: backdropOpacity }]} />
       <Pressable accessibilityLabel="关闭功能侧栏" accessibilityRole="button" onPress={() => close()} style={StyleSheet.absoluteFill} />
@@ -134,11 +134,11 @@ export function FunctionDrawer({ visible, instantOpen = false, draftCount, onClo
       </Animated.View>
       {profileEditorModal}
     </View>
-  </Modal>;
+  );
 }
 
 const styles = StyleSheet.create({
-  overlay: { flex: 1 },
+  overlay: { ...StyleSheet.absoluteFill, zIndex: 50, elevation: 50 },
   backdrop: { ...StyleSheet.absoluteFill, backgroundColor: colors.overlay },
   drawer: { height: '100%', maxWidth: 340, shadowColor: '#000000', shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 5, height: 0 }, elevation: 12 },
   profile: { minHeight: 80, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth },

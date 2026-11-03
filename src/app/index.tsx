@@ -3,7 +3,7 @@ import { ActivityIndicator, Animated, FlatList, InteractionManager, Modal, PanRe
 import { SymbolView } from 'expo-symbols';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useFocusEffect, useNavigation, type Href } from 'expo-router';
+import { router, useFocusEffect, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
 import { BottomNavigation, type HomeView } from '@/components/bottom-navigation';
@@ -49,7 +49,6 @@ import { appendOlderWindow, prependNewerWindow } from '@/utils/timeline-window';
 
 export default function HomeScreen() {
   const db = useSQLiteContext();
-  const navigation = useNavigation();
   const { preferences, readingTheme } = useAppPreferences();
   const todayKey = dateKey(new Date().toISOString());
   const [refreshKey, setRefreshKey] = useState(0);
@@ -59,11 +58,6 @@ export default function HomeScreen() {
   const [actionEntry, setActionEntry] = useState<Entry | null>(null);
   const [draftCount, setDraftCount] = useState(0);
   const [drawerVisible, setDrawerVisible] = useState(false);
-  const [drawerInstantOpen, setDrawerInstantOpen] = useState(false);
-  const [drawerRoute, setDrawerRoute] = useState<{ id: number; route: Href } | null>(null);
-  const drawerRouteId = useRef(0);
-  const handledDrawerRouteId = useRef(0);
-  const reopenDrawerOnReturn = useRef(false);
   const [quickHintVisible, setQuickHintVisible] = useState(false);
   const cleanupStarted = useRef(false);
   const pendingDetailEntryId = useRef<string | null>(null);
@@ -96,37 +90,8 @@ export default function HomeScreen() {
   }, [db]);
 
   useFocusEffect(useCallback(() => {
-    const shouldReopen = reopenDrawerOnReturn.current;
-    reopenDrawerOnReturn.current = false;
-    if (shouldReopen) {
-      let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-      let restored = false;
-      const restore = () => {
-        if (restored) return;
-        restored = true;
-        setDrawerInstantOpen(true);
-        setDrawerVisible(true);
-        refreshTimer = setTimeout(() => { void refresh(); }, 100);
-      };
-      const stackNavigation = navigation as unknown as { addListener: (event: 'transitionEnd', listener: (event: { data: { closing: boolean } }) => void) => () => void };
-      const removeTransitionListener = stackNavigation.addListener('transitionEnd', (event) => {
-        if (!event.data.closing) restore();
-      });
-      const fallback = setTimeout(restore, 420);
-      return () => { removeTransitionListener(); clearTimeout(fallback); if (refreshTimer) clearTimeout(refreshTimer); };
-    }
     void refresh();
-  }, [navigation, refresh]));
-  useEffect(() => {
-    if (drawerVisible || !drawerRoute || drawerRoute.id <= handledDrawerRouteId.current) return;
-    const frame = requestAnimationFrame(() => {
-      handledDrawerRouteId.current = drawerRoute.id;
-      setDrawerRoute(null);
-      reopenDrawerOnReturn.current = true;
-      router.push(drawerRoute.route);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [drawerRoute, drawerVisible]);
+  }, [refresh]));
   useEffect(() => {
     if (!draftRevision) return;
     void getDraftCount(db).then(setDraftCount);
@@ -166,7 +131,7 @@ export default function HomeScreen() {
     <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <IconButton accessibilityLabel="打开功能菜单" onPress={() => { setDrawerInstantOpen(false); setDrawerVisible(true); }} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'line.3.horizontal', android: 'menu', web: 'menu' }} size={19} tintColor={colors.primary} /></IconButton>
+          <IconButton accessibilityLabel="打开功能菜单" onPress={() => setDrawerVisible(true)} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'line.3.horizontal', android: 'menu', web: 'menu' }} size={19} tintColor={colors.primary} /></IconButton>
           <Text numberOfLines={1} style={[styles.headerSignature, { color: readingTheme.text }]}>{preferences.signature.trim() || '我的日迹'}</Text>
         </View>
         <View style={styles.headerActions}>
@@ -189,7 +154,7 @@ export default function HomeScreen() {
         else router.push('/compose');
       }} onQuickCompose={() => router.push({ pathname: '/compose', params: { quick: '1' } })} />
       <EntryActionModal visible={Boolean(actionEntry)} onClose={() => setActionEntry(null)} onEdit={() => { if (!actionEntry) return; const entryId = actionEntry.id; setActionEntry(null); router.push({ pathname: '/compose', params: { id: entryId } }); }} onDelete={deleteSelectedEntry} />
-      <FunctionDrawer visible={drawerVisible} instantOpen={drawerInstantOpen} draftCount={draftCount} onClose={() => { setDrawerVisible(false); setDrawerInstantOpen(false); }} onNavigate={(route) => { setDrawerVisible(false); setDrawerInstantOpen(false); setDrawerRoute({ id: ++drawerRouteId.current, route }); }} />
+      <FunctionDrawer visible={drawerVisible} draftCount={draftCount} onClose={() => setDrawerVisible(false)} onNavigate={(route) => router.push(route)} />
     </SafeAreaView>
   );
 }
