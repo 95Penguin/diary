@@ -43,7 +43,7 @@ const groups: { title: string; items: DrawerItem[] }[] = [
   },
 ];
 
-export function FunctionDrawer({ visible, draftCount, onClose, onNavigate }: { visible: boolean; draftCount: number; onClose: () => void; onNavigate: (route: Href) => void }) {
+export function FunctionDrawer({ visible, instantOpen = false, draftCount, onClose, onNavigate }: { visible: boolean; instantOpen?: boolean; draftCount: number; onClose: () => void; onNavigate: (route: Href) => void }) {
   const { preferences, readingTheme } = useAppPreferences();
   const { editProfile, closeProfileEditor, profileEditorOpen, profileEditorModal } = useProfileEditor({ embedded: true });
   const { width } = useWindowDimensions();
@@ -60,12 +60,17 @@ export function FunctionDrawer({ visible, draftCount, onClose, onNavigate }: { v
       return;
     }
     closing.current = false;
+    if (instantOpen) {
+      translateX.setValue(0);
+      backdropOpacity.setValue(1);
+      return;
+    }
     Animated.parallel([
       Animated.timing(translateX, { toValue: 0, duration: 190, useNativeDriver: true }),
       Animated.timing(backdropOpacity, { toValue: 1, duration: 190, useNativeDriver: true }),
     ]).start();
     return () => { translateX.stopAnimation(); backdropOpacity.stopAnimation(); };
-  }, [backdropOpacity, drawerWidth, translateX, visible]);
+  }, [backdropOpacity, drawerWidth, instantOpen, translateX, visible]);
 
   function close(route?: Href) {
     if (closing.current) return;
@@ -98,8 +103,8 @@ export function FunctionDrawer({ visible, draftCount, onClose, onNavigate }: { v
               : <View style={styles.avatar}><Text style={styles.avatarText}>{preferences.nickname.slice(0, 1)}</Text></View>}
           </Pressable>
           <View style={styles.profileCopy}>
-            <Pressable accessibilityRole="button" accessibilityLabel="编辑昵称" onPress={() => editProfile('nickname')}><Text numberOfLines={1} style={[styles.nickname, { color: readingTheme.text }]}>{preferences.nickname}</Text></Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="编辑个性签名" onPress={() => editProfile('signature')}><Text numberOfLines={1} style={[styles.signature, { color: readingTheme.secondary }]}>{preferences.signature || '把日子慢慢收好。'}</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="编辑昵称" onPress={() => editProfile('nickname')} style={({ pressed }) => [styles.profileField, pressed && { backgroundColor: readingTheme.surface }]}><Text numberOfLines={1} style={[styles.nickname, { color: readingTheme.text }]}>{preferences.nickname}</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="编辑个性签名" onPress={() => editProfile('signature')} style={({ pressed }) => [styles.profileField, styles.signatureField, pressed && { backgroundColor: readingTheme.surface }]}><Text numberOfLines={2} style={[styles.signature, { color: readingTheme.secondary }]}>{preferences.signature || '把日子慢慢收好。'}</Text></Pressable>
           </View>
         </View>
 
@@ -136,12 +141,14 @@ const styles = StyleSheet.create({
   overlay: { flex: 1 },
   backdrop: { ...StyleSheet.absoluteFill, backgroundColor: colors.overlay },
   drawer: { height: '100%', maxWidth: 340, shadowColor: '#000000', shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 5, height: 0 }, elevation: 12 },
-  profile: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth },
+  profile: { minHeight: 80, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   avatar: { width: 48, height: 48, borderRadius: radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary },
   avatarText: { color: '#FFFFFF', fontFamily: fonts.serif, fontSize: 18, fontWeight: '600' },
   profileCopy: { flex: 1, minWidth: 0 },
+  profileField: { minHeight: 32, justifyContent: 'center', paddingHorizontal: spacing.xs, borderRadius: radii.md },
+  signatureField: { minHeight: 40 },
   nickname: { fontFamily: fonts.serif, fontSize: 16, lineHeight: 22, fontWeight: '600', includeFontPadding: false },
-  signature: { marginTop: 2, fontSize: 11, lineHeight: 16, includeFontPadding: false },
+  signature: { fontSize: 11, lineHeight: 15, includeFontPadding: false },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.md },
   group: { marginBottom: spacing.sm },

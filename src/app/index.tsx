@@ -3,7 +3,7 @@ import { ActivityIndicator, Animated, FlatList, InteractionManager, Modal, PanRe
 import { SymbolView } from 'expo-symbols';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useFocusEffect, type Href } from 'expo-router';
+import { router, useFocusEffect, useNavigation, type Href } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 
 import { BottomNavigation, type HomeView } from '@/components/bottom-navigation';
@@ -49,6 +49,7 @@ import { appendOlderWindow, prependNewerWindow } from '@/utils/timeline-window';
 
 export default function HomeScreen() {
   const db = useSQLiteContext();
+  const navigation = useNavigation();
   const { preferences, readingTheme } = useAppPreferences();
   const todayKey = dateKey(new Date().toISOString());
   const [refreshKey, setRefreshKey] = useState(0);
@@ -58,6 +59,7 @@ export default function HomeScreen() {
   const [actionEntry, setActionEntry] = useState<Entry | null>(null);
   const [draftCount, setDraftCount] = useState(0);
   const [drawerVisible, setDrawerVisible] = useState(false);
+  const [drawerInstantOpen, setDrawerInstantOpen] = useState(false);
   const [drawerRoute, setDrawerRoute] = useState<{ id: number; route: Href } | null>(null);
   const drawerRouteId = useRef(0);
   const handledDrawerRouteId = useRef(0);
@@ -94,10 +96,27 @@ export default function HomeScreen() {
   }, [db]);
 
   useFocusEffect(useCallback(() => {
-    setDrawerVisible(reopenDrawerOnReturn.current);
+    const shouldReopen = reopenDrawerOnReturn.current;
     reopenDrawerOnReturn.current = false;
+    if (shouldReopen) {
+      let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+      let restored = false;
+      const restore = () => {
+        if (restored) return;
+        restored = true;
+        setDrawerInstantOpen(true);
+        setDrawerVisible(true);
+        refreshTimer = setTimeout(() => { void refresh(); }, 100);
+      };
+      const stackNavigation = navigation as unknown as { addListener: (event: 'transitionEnd', listener: (event: { data: { closing: boolean } }) => void) => () => void };
+      const removeTransitionListener = stackNavigation.addListener('transitionEnd', (event) => {
+        if (!event.data.closing) restore();
+      });
+      const fallback = setTimeout(restore, 420);
+      return () => { removeTransitionListener(); clearTimeout(fallback); if (refreshTimer) clearTimeout(refreshTimer); };
+    }
     void refresh();
-  }, [refresh]));
+  }, [navigation, refresh]));
   useEffect(() => {
     if (drawerVisible || !drawerRoute || drawerRoute.id <= handledDrawerRouteId.current) return;
     const frame = requestAnimationFrame(() => {
@@ -147,8 +166,8 @@ export default function HomeScreen() {
     <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: readingTheme.background }]}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <IconButton accessibilityLabel="打开功能菜单" onPress={() => setDrawerVisible(true)} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'line.3.horizontal', android: 'menu', web: 'menu' }} size={19} tintColor={colors.primary} /></IconButton>
-          <Text numberOfLines={1} style={[styles.headerSignature, { color: readingTheme.secondary }]}>{preferences.signature.trim() || '我的日迹'}</Text>
+          <IconButton accessibilityLabel="打开功能菜单" onPress={() => { setDrawerInstantOpen(false); setDrawerVisible(true); }} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'line.3.horizontal', android: 'menu', web: 'menu' }} size={19} tintColor={colors.primary} /></IconButton>
+          <Text numberOfLines={1} style={[styles.headerSignature, { color: readingTheme.text }]}>{preferences.signature.trim() || '我的日迹'}</Text>
         </View>
         <View style={styles.headerActions}>
           <IconButton accessibilityLabel="睡眠记录" onPress={() => router.push('/sleep-log' as Href)} style={{ backgroundColor: readingTheme.surface }}><SymbolView name={{ ios: 'moon.zzz', android: 'bedtime', web: 'bedtime' }} size={19} tintColor={colors.primary} /></IconButton>
@@ -170,7 +189,7 @@ export default function HomeScreen() {
         else router.push('/compose');
       }} onQuickCompose={() => router.push({ pathname: '/compose', params: { quick: '1' } })} />
       <EntryActionModal visible={Boolean(actionEntry)} onClose={() => setActionEntry(null)} onEdit={() => { if (!actionEntry) return; const entryId = actionEntry.id; setActionEntry(null); router.push({ pathname: '/compose', params: { id: entryId } }); }} onDelete={deleteSelectedEntry} />
-      <FunctionDrawer visible={drawerVisible} draftCount={draftCount} onClose={() => setDrawerVisible(false)} onNavigate={(route) => { setDrawerVisible(false); setDrawerRoute({ id: ++drawerRouteId.current, route }); }} />
+      <FunctionDrawer visible={drawerVisible} instantOpen={drawerInstantOpen} draftCount={draftCount} onClose={() => { setDrawerVisible(false); setDrawerInstantOpen(false); }} onNavigate={(route) => { setDrawerVisible(false); setDrawerInstantOpen(false); setDrawerRoute({ id: ++drawerRouteId.current, route }); }} />
     </SafeAreaView>
   );
 }
@@ -692,7 +711,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xl, paddingTop: spacing.xs, paddingBottom: spacing.xs },
   headerLeft: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  headerSignature: { flex: 1, minWidth: 0, fontFamily: fonts.sans, fontSize: 11, lineHeight: 16, includeFontPadding: false },
+  headerSignature: { flex: 1, minWidth: 0, fontFamily: fonts.sans, fontSize: 12, lineHeight: 18, opacity: 0.72, includeFontPadding: false },
   headerActions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   content: { flex: 1 }, viewPane: { ...StyleSheet.absoluteFill }, hiddenPane: { opacity: 0 }, loader: { marginTop: 80 }, pageLoader: { marginVertical: spacing.lg },
   loadFailure: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxxl }, loadFailureTitle: { fontFamily: fonts.serif, fontSize: 18 }, loadFailureText: { marginTop: spacing.sm, fontSize: 12, textAlign: 'center' }, retryButton: { marginTop: spacing.xl, paddingHorizontal: spacing.xl, paddingVertical: spacing.sm, borderRadius: radii.pill, backgroundColor: colors.primary }, retryButtonText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, refreshFailure: { alignItems: 'center', paddingVertical: spacing.xs, backgroundColor: colors.primarySoft }, refreshFailureText: { color: colors.primary, fontSize: 10 },
